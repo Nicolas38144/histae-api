@@ -4,7 +4,7 @@ Mise à jour : 16 août 2026.
 
 ## 1. Vision du projet
 
-Histae API est le backend d’une application mobile de rencontres. Le projet est une réécriture TypeScript de l’ancienne API Go v2, avec l’objectif de conserver les contrats utiles tout en renforçant l’architecture, la sécurité, la traçabilité et la conformité RGPD.
+Histae API est le backend TypeScript d’une application mobile de rencontres. Il centralise les contrats HTTP et les règles métier tout en mettant l’accent sur l’architecture, la sécurité, la traçabilité et la conformité RGPD.
 
 La version actuelle fournit :
 

@@ -1,6 +1,6 @@
 # Histae API
 
-Réécriture de `histae-api-v2` avec **NestJS 11**, **TypeScript** et l’adaptateur **Fastify**. Elle conserve PostgreSQL, le préfixe `/api`, les formats JSON, les codes d’erreur stables, les JWT HS256 et les règles métier de V2.
+Backend de l’application mobile Histae construit avec **NestJS 11**, **TypeScript** et l’adaptateur **Fastify**. Il utilise PostgreSQL, ScyllaDB et Redis, avec le préfixe HTTP `/api`, des formats JSON et des codes d’erreur stables.
 
 ## Démarrage
 

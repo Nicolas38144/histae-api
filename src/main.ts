@@ -13,7 +13,7 @@ import { applicationConfig } from './config/config.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 
 async function bootstrap(): Promise<void> {
-  // Build config before Fastify so trust-proxy and the 1 MiB V2 body cap apply to every route.
+  // Build config before Fastify so trust-proxy and the 1 MiB body cap apply to every route.
   const config = applicationConfig();
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({
     trustProxy: config.trustProxy,

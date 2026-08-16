@@ -1,4 +1,4 @@
--- Histae API uses the same PostgreSQL contract as API v2.
+-- Canonical PostgreSQL contract for Histae API.
 -- This bootstrap is idempotent and never drops application data.
 -- Unlike schema_postgres.sql, this file is the migration executed by db:migrate.
 

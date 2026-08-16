@@ -2,7 +2,7 @@
   "name": "histae-api",
   "version": "3.0.0",
   "private": true,
-  "description": "Histae API — NestJS running on Fastify, compatible with the v2 HTTP contract.",
+  "description": "Histae API — NestJS and Fastify backend for the Histae mobile application.",
   "scripts": {
     "build": "nest build",
     "start:dev": "nest start --watch",
