@@ -5,17 +5,15 @@ const validTarget = {
   enabled: true,
   keyspace: 'histae_discovery',
   contactPoints: ['127.0.0.1'],
-  confirmation: 'RESET_SCYLLA_DATA',
 };
 
 describe('ScyllaDB reset safety', () => {
-  it('allows only the confirmed local development keyspace', () => {
+  it('allows only the local development keyspace', () => {
     expect(() => assertResetAllowed(validTarget)).not.toThrow();
   });
 
   it('rejects every unsafe target before connecting', () => {
     const unsafeTargets = [
-      { ...validTarget, confirmation: undefined },
       { ...validTarget, environment: 'production' },
       { ...validTarget, enabled: false },
       { ...validTarget, keyspace: 'production_discovery' },

@@ -67,12 +67,10 @@ retry. Un verrou PostgreSQL par téléphone et un index unique garantissent qu�
 
 Pour reconstruire entièrement la base locale de développement, utilisez `pnpm run db:reset`. La commande
 exécute ces trois scripts dans une transaction et recrée l'état des migrations. Elle exige simultanément
-`ENV=development`, `POSTGRES_DB=histae-dev`, un hôte PostgreSQL local et une confirmation explicite :
+`ENV=development`, `POSTGRES_DB=histae-dev` et un hôte PostgreSQL local :
 
 ```powershell
-$env:CONFIRM_DB_RESET = 'RESET'
 pnpm run db:reset
-Remove-Item Env:CONFIRM_DB_RESET
 ```
 
 Lorsque la cible est exactement `histae-dev` avec `ENV=development`, le reset ajoute aussi 400 faux utilisateurs
@@ -92,9 +90,7 @@ des migrations, utilisez la commande protégée suivante. Elle refuse tout envir
 tout keyspace autre que `histae_discovery` et tout contact point non local :
 
 ```powershell
-$env:CONFIRM_SCYLLA_RESET = 'RESET_SCYLLA_DATA'
 pnpm run db:reset-scylla
-Remove-Item Env:CONFIRM_SCYLLA_RESET
 ```
 
 Pour contrôler ou relancer l’infrastructure depuis WSL :
@@ -132,9 +128,7 @@ Exécutez d'abord `pnpm run db:reset` sur `histae-dev` pour créer les 400 profi
 après le démarrage de l'API :
 
 ```powershell
-$env:SEED_SWIPE_CONFIRM = 'CREATE_FAKE_SWIPES'
 pnpm run seed:swipes
-Remove-Item Env:SEED_SWIPE_CONFIRM
 ```
 
 Options : `SEED_CONCURRENCY` (25) et `SEED_API_URL` (localhost:8080). Le script refuse tout environnement autre

@@ -1,28 +1,23 @@
-import * as dotenv from 'dotenv';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
 import { loadMigration, migrations } from './migration-catalog';
 
-const RESET_CONFIRMATION = 'RESET';
 const DEVELOPMENT_DATABASE = 'histae-dev';
 
 type ResetSafetyInput = {
   environment: string;
   database: string;
   host: string;
-  confirmation?: string;
 };
 
 async function reset(): Promise<void> {
-  dotenv.config();
   const config = new ConfigService();
   assertResetAllowed({
     environment: config.env,
     database: config.postgres.database,
     host: config.postgres.host,
-    confirmation: process.env.CONFIRM_DB_RESET,
   });
 
   const pool = new Pool(config.postgres);
@@ -71,9 +66,6 @@ async function readSql(filename: string): Promise<string> {
 }
 
 export function assertResetAllowed(input: ResetSafetyInput): void {
-  if (input.confirmation !== RESET_CONFIRMATION) {
-    throw new Error(`Database reset requires CONFIRM_DB_RESET=${RESET_CONFIRMATION}.`);
-  }
   if (input.environment !== 'development') {
     throw new Error('Database reset is restricted to ENV=development.');
   }

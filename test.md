@@ -164,15 +164,15 @@ que chaque paire contient exactement un like et un pass, ce qui interdit la cré
 
 Suite `ScyllaDB reset safety` :
 
-1. autorise uniquement la combinaison confirmée `development`, `histae_discovery` et contact point local ;
-2. refuse avant connexion l'absence de confirmation, la production, Scylla désactivé, un autre keyspace, un hôte distant ou une liste d'hôtes vide.
+1. autorise uniquement la combinaison `development`, `histae_discovery` et contact point local ;
+2. refuse avant connexion la production, Scylla désactivé, un autre keyspace, un hôte distant ou une liste d'hôtes vide.
 
 ### `test/unit/scripts/reset-postgres.spec.ts` — 2 tests
 
 Suite `PostgreSQL reset safety` :
 
-1. autorise uniquement la combinaison confirmée `development`, `histae-dev` et hôte local ;
-2. refuse avant connexion l’absence de confirmation, `test`, la production, une autre base ou un hôte distant.
+1. autorise uniquement la combinaison `development`, `histae-dev` et hôte local ;
+2. refuse avant connexion `test`, la production, une autre base ou un hôte distant.
 
 ### `test/unit/discovery/discovery.store.spec.ts` — 3 tests
 

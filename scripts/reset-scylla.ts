@@ -1,7 +1,6 @@
 import { ConfigService } from '../src/config/config.service';
 import { createScyllaClient } from '../src/scylla/scylla.client';
 
-const CONFIRMATION = 'RESET_SCYLLA_DATA';
 const DEVELOPMENT_KEYSPACE = 'histae_discovery';
 const APPLICATION_TABLES = ['swipes_by_actor_bucket', 'swipes_by_target_bucket'] as const;
 
@@ -10,7 +9,6 @@ type ResetSafetyInput = {
   enabled: boolean;
   keyspace: string;
   contactPoints: string[];
-  confirmation?: string;
 };
 
 async function resetScylla(): Promise<void> {
@@ -20,7 +18,6 @@ async function resetScylla(): Promise<void> {
     enabled: config.scylla.enabled,
     keyspace: config.scylla.keyspace,
     contactPoints: config.scylla.contactPoints,
-    confirmation: process.env.CONFIRM_SCYLLA_RESET,
   });
 
   const client = createScyllaClient(config.scylla);
@@ -45,9 +42,6 @@ async function resetScylla(): Promise<void> {
 }
 
 export function assertResetAllowed(input: ResetSafetyInput): void {
-  if (input.confirmation !== CONFIRMATION) {
-    throw new Error(`ScyllaDB reset requires CONFIRM_SCYLLA_RESET=${CONFIRMATION}.`);
-  }
   if (input.environment !== 'development') {
     throw new Error('ScyllaDB reset is restricted to ENV=development.');
   }

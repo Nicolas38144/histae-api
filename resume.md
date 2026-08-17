@@ -145,7 +145,7 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - ScyllaDB activée en production, avec TLS, authentification et facteur de réplication explicite ;
 - `SMS_PROVIDER`, `SWEEGO_API_KEY`, `SWEEGO_API_URL`, `SWEEGO_SMS_SENDER_ID`, `SWEEGO_SMS_REGION`, `SWEEGO_TIMEOUT` et `OTP_TTL` pour la livraison des OTP.
 
-`.env.example` est désormais versionné tandis que `.env` reste ignoré. Un inventaire statique compare les variables lues par `src`, `scripts` et `test` aux affectations de l’exemple : **92 variables utilisées, 92 documentées, aucune manquante**. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides. Les trois confirmations destructives y sont également présentes mais vides ; elles doivent être définies temporairement dans le terminal au moment de l’opération concernée.
+`.env.example` inventorie les variables prises en charge tandis que `.env` reste ignoré. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides.
 
 ### Pool PostgreSQL
 
@@ -730,7 +730,7 @@ Le moteur de migration :
 - refuse un checksum modifié pour une migration déjà appliquée ;
 - permet des exécutions répétées sans réappliquer les migrations.
 
-`pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev`, un hôte PostgreSQL local et `CONFIRM_DB_RESET=RESET`.
+`pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev` et un hôte PostgreSQL local.
 
 Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les dix migrations conduisent au même ensemble d’index.
 
@@ -740,8 +740,7 @@ modification silencieuse d’un fichier déjà appliqué. `docker-compose.scylla
 développement ; le facteur de réplication vaut 1 localement et 3 par défaut en production.
 
 `pnpm run db:reset-scylla` vide uniquement les deux vues applicatives de swipes par `TRUNCATE`. La commande
-conserve le keyspace, les tables, leurs TTL/TWCS et `scylla_schema_migrations`. Elle exige
-`CONFIRM_SCYLLA_RESET=RESET_SCYLLA_DATA` et refuse tout environnement autre que `development`, tout keyspace
+conserve le keyspace, les tables, leurs TTL/TWCS et `scylla_schema_migrations`. Elle refuse tout environnement autre que `development`, tout keyspace
 autre que `histae_discovery`, Scylla désactivé et tout contact point non local.
 
 ## 21. Maintenance
@@ -972,9 +971,7 @@ $env:SCYLLA_ENABLED = 'true'
 pnpm run scylla:migrate
 
 # Effacement des seules données Scylla de développement
-$env:CONFIRM_SCYLLA_RESET = 'RESET_SCYLLA_DATA'
 pnpm run db:reset-scylla
-Remove-Item Env:CONFIRM_SCYLLA_RESET
 
 # Développement
 pnpm run start:dev
@@ -993,8 +990,7 @@ pnpm run test:integration
 $env:MAINTENANCE_MODE = 'worker'
 pnpm run maintenance:run
 
-# Reset destructif, uniquement développement/test
-$env:CONFIRM_DB_RESET = 'RESET'
+# Reset destructif, uniquement en développement local
 pnpm run db:reset
 ```
 

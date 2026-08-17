@@ -1,5 +1,4 @@
 import { JwtService } from '@nestjs/jwt';
-import * as dotenv from 'dotenv';
 import { performance } from 'node:perf_hooks';
 import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
@@ -35,7 +34,6 @@ type SwipePlan = {
 
 type RequestOptions = { token?: string; headers?: Record<string, string> };
 
-const SEED_CONFIRMATION = 'CREATE_FAKE_SWIPES';
 const EXPECTED_USER_COUNT = 400;
 const USERS_PER_CITY = 50;
 const SWIPES_PER_USER = 20;
@@ -94,7 +92,6 @@ class ApiClient {
 }
 
 async function seed(): Promise<void> {
-  dotenv.config();
   const config = loadConfig();
   const metrics = new RequestMetrics();
   const client = new ApiClient(config.apiUrl, metrics);
@@ -150,9 +147,6 @@ async function seed(): Promise<void> {
 }
 
 function loadConfig(): SeedConfig {
-  if (process.env.SEED_SWIPE_CONFIRM !== SEED_CONFIRMATION) {
-    throw new Error(`Set SEED_SWIPE_CONFIRM=${SEED_CONFIRMATION} before running the development swipe seed.`);
-  }
   const app = new ConfigService();
   if (app.env !== 'development' || app.postgres.database !== 'histae-dev') {
     throw new Error('The fake swipe seed is restricted to ENV=development and POSTGRES_DB=histae-dev.');
