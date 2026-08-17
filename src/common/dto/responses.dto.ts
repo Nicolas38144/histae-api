@@ -13,11 +13,6 @@ export class TokenPairResponseDto {
   refresh_token!: string;
 }
 
-export class RegistrationResponseDto extends TokenPairResponseDto {
-  @ApiProperty({ format: 'uuid' })
-  user_id!: string;
-}
-
 export class HealthResponseDto {
   @ApiProperty({ enum: ['ok', 'ready'] })
   status!: 'ok' | 'ready';

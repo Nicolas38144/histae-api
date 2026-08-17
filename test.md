@@ -15,17 +15,17 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **27 fichiers de test, 27 suites Jest et 154 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **26 fichiers de test, 26 suites Jest et 149 cas** lorsque toutes les intégrations sont activées :
 
-- 115 tests unitaires ;
-- 11 tests e2e ;
+- 112 tests unitaires ;
+- 9 tests e2e ;
 - 16 tests d’intégration PostgreSQL/OpenAPI ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 22 suites unitaires, 2 suites e2e et 3 suites d’intégration. Chaque intégration réelle est ignorée sauf si son flag `REQUIRE_*_TESTS` vaut `true`. Avec uniquement `REQUIRE_POSTGRES_TESTS=true`, 142 cas doivent être exécutés et 12 ignorés ; sans aucun flag d’intégration, 126 cas doivent être exécutés et 28 ignorés. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 37 classes injectées Nest.
+Jest affiche 21 suites unitaires, 2 suites e2e et 3 suites d’intégration. Chaque intégration réelle est ignorée sauf si son flag `REQUIRE_*_TESTS` vaut `true`. Avec uniquement `REQUIRE_POSTGRES_TESTS=true`, 137 cas doivent être exécutés et 12 ignorés ; sans aucun flag d’intégration, 121 cas doivent être exécutés et 28 ignorés. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 36 classes injectées Nest.
 
-Le 17 août 2026, TypeScript, ESLint, le build et l’inventaire complet ont réussi : 27 suites et 154 cas validés, sans test ignoré, avec PostgreSQL, ScyllaDB et Redis réels.
+Le 17 août 2026, TypeScript, ESLint et le build ont réussi. Sans infrastructure externe active, Jest a confirmé l’inventaire de 149 cas : 121 réussis et 28 ignorés dans les 3 suites d’intégration conditionnelles.
 
 ## Commandes
 
@@ -78,13 +78,6 @@ Suite `JwtActiveGuard legal onboarding enforcement` :
 3. Vérifie que la gestion des choix juridiques, la déconnexion et la suppression de compte restent utilisables pendant l’onboarding.
 4. Inspecte les métadonnées du décorateur et garantit que seules les routes strictement nécessaires sont exemptées ; la mise à jour du profil ne l’est pas.
 
-### `test/unit/auth/auth.service.spec.ts` — 2 tests
-
-Suite `AuthService development registration` :
-
-1. Vérifie que l’inscription de développement crée toujours un rôle `user`, normalise le téléphone et ne permet pas à l’appelant de choisir un rôle privilégié.
-2. Vérifie le secret du bootstrap superadmin et garantit qu’une tentative avec un mauvais secret n’appelle pas la création privilégiée.
-
 ### `test/unit/auth/otp.service.spec.ts` — 9 tests
 
 Suite `OtpService` :
@@ -119,9 +112,9 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 37 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 36 tests paramétrés
 
-Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 37 classes injectées principales, y compris le nouveau service Redis partagé.
+Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 36 classes injectées principales, y compris le service Redis partagé.
 
 Chaque cas vérifie que `emitDecoratorMetadata` contient des tokens de constructeur réels et jamais `Function`, `Object` ou `undefined`. Ce test empêche la régression où un import `type` TypeScript supprimerait au runtime le token dont Nest a besoin pour l’injection de dépendances.
 
@@ -232,18 +225,14 @@ Suite `UsersService consent enforcement` :
 
 ## Tests e2e
 
-### `test/e2e/auth.contract.spec.ts` — 6 tests
+### `test/e2e/auth.contract.spec.ts` — 4 tests
 
 Cette suite démarre une vraie application Fastify de test avec `AuthController`, le filtre d’erreur global et des services maîtrisés :
 
 1. Vérifie que `POST /api/auth/otp/send` accepte l’en-tête d’idempotence UUID v4, répond `202` et transmet la clé au service.
 2. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
 3. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
-4. Vérifie par HTTP qu’un rôle `superadmin` injecté dans l’inscription est refusé avant d’atteindre le service.
-5. Vérifie le format stable `404 route_not_found` pour une route inconnue.
-6. Vérifie l’existence, le statut `201`, l’en-tête secret et le payload de la route de bootstrap superadmin réservée au développement.
-
-Le test métier d’inscription et le test HTTP ne sont pas des doublons obsolètes : le premier contrôle les arguments réellement envoyés au repository, le second contrôle la validation du contrat réseau.
+4. Vérifie le format stable `404 route_not_found` pour une route inconnue.
 
 ### `test/e2e/discovery.contract.spec.ts` — 5 tests
 
@@ -311,9 +300,9 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
 5. activer explicitement `REQUIRE_POSTGRES_TESTS`, `REQUIRE_SCYLLA_TESTS` et `REQUIRE_REDIS_TESTS` ;
-6. exécuter `pnpm test` et vérifier que les 154 cas passent sans suite ignorée.
+6. exécuter `pnpm test` et vérifier que les 149 cas passent sans suite ignorée.
 
-Cette procédure a été exécutée avec succès le 17 août 2026 : **27 suites réussies, 154 cas réussis, aucun cas ignoré**.
+La validation de cette mise à jour, exécutée le 17 août 2026 sans infrastructure externe active, a réussi : **23 suites et 121 cas réussis, 3 suites et 28 cas d’intégration ignorés**. Une exécution avec PostgreSQL, ScyllaDB et Redis actifs reste nécessaire avant livraison pour valider les 149 cas sans exception.
 Un smoke test manuel complémentaire a validé la santé de l’API, l’envoi OTP Sweego réel, le retry idempotent sans
 second SMS, la consommation du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token
 et le logout `204`.

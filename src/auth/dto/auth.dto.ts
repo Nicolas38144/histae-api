@@ -22,15 +22,3 @@ export class RefreshTokenDto {
   @IsString()
   refresh_token!: string;
 }
-
-export class RegisterDto {
-  @ApiProperty({ example: '+33612345678' })
-  @IsString()
-  phone_number!: string;
-}
-
-export class BootstrapSuperadminDto {
-  @ApiProperty({ example: '+33612345678' })
-  @IsString()
-  phone_number!: string;
-}

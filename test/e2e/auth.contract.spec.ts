@@ -3,7 +3,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { JwtService } from '@nestjs/jwt';
 import { AuthController } from '../../src/auth/auth.controller';
-import { DevelopmentOnlyGuard, JwtActiveGuard } from '../../src/auth/auth.guard';
+import { JwtActiveGuard } from '../../src/auth/auth.guard';
 import { AuthService } from '../../src/auth/auth.service';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { ConfigService } from '../../src/config/config.service';
@@ -16,7 +16,6 @@ describe('Auth HTTP contract', () => {
   const auth = {
     sendOtp: jest.fn().mockResolvedValue({ message: 'Verification code request accepted.' }),
     refresh: jest.fn().mockResolvedValue({ access_token: 'next-access', refresh_token: 'next-refresh' }),
-    bootstrapSuperadmin: jest.fn().mockResolvedValue({ user_id: 'c88624dd-3bd1-43d8-9991-7e6211b3f0e5', access_token: 'admin-access', refresh_token: 'admin-refresh' }),
   };
 
   beforeAll(async () => {
@@ -28,7 +27,6 @@ describe('Auth HTTP contract', () => {
         { provide: ConfigService, useValue: { env: 'development', rateLimit: { otp: { max: 5, windowMs: 3_600_000 }, refresh: { max: 30, windowMs: 900_000 } } } },
         { provide: OtpService, useValue: { rateLimitKey: jest.fn().mockReturnValue('phone-key') } },
         { provide: JwtActiveGuard, useValue: { canActivate: () => true } },
-        { provide: DevelopmentOnlyGuard, useValue: { canActivate: () => true } },
         { provide: JwtService, useValue: {} },
         { provide: DatabaseService, useValue: {} },
       ],
@@ -75,17 +73,6 @@ describe('Auth HTTP contract', () => {
     expect(response.json()).toEqual({ error: { code: 'invalid_request_body', message: 'The request body is invalid.' } });
   });
 
-  it('rejects caller-controlled roles during development registration', async () => {
-    const response = await app.getHttpAdapter().getInstance().inject({
-      method: 'POST',
-      url: '/api/auth/register',
-      payload: { phone_number: '+33612345678', role: 'superadmin' },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: { code: 'invalid_request_body', message: 'The request body is invalid.' } });
-  });
-
   it('keeps unknown routes in the stable 404 error format', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'GET',
@@ -94,18 +81,5 @@ describe('Auth HTTP contract', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: { code: 'route_not_found', message: 'This route is not available.' } });
-  });
-
-  it('exposes the development-only bootstrap through an HTTP endpoint', async () => {
-    const response = await app.getHttpAdapter().getInstance().inject({
-      method: 'POST',
-      url: '/api/auth/dev/bootstrap-superadmin',
-      headers: { 'x-dev-bootstrap-secret': 'development-secret' },
-      payload: { phone_number: '+33612345678' },
-    });
-
-    expect(response.statusCode).toBe(201);
-    expect(response.json()).toEqual({ user_id: 'c88624dd-3bd1-43d8-9991-7e6211b3f0e5', access_token: 'admin-access', refresh_token: 'admin-refresh' });
-    expect(auth.bootstrapSuperadmin).toHaveBeenCalledWith('+33612345678', 'development-secret');
   });
 });

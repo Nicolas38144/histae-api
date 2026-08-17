@@ -1,14 +1,14 @@
 import { Controller, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { ApiAcceptedResponse, ApiCreatedResponse, ApiExcludeEndpoint, ApiHeader, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiAcceptedResponse, ApiHeader, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ValidatedBody } from '../common/http/validated-request.decorator';
-import { MessageResponseDto, RegistrationResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
+import { MessageResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
-import { DevelopmentOnlyGuard, JwtActiveGuard, userId } from './auth.guard';
+import { JwtActiveGuard, userId } from './auth.guard';
 import type { AuthenticatedRequest } from './auth.types';
 import { AuthService } from './auth.service';
-import { BootstrapSuperadminDto, RefreshTokenDto, RegisterDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
+import { RefreshTokenDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
 import { AllowIncompleteOnboarding } from './onboarding.decorator';
 import { OtpService } from './otp.service';
 
@@ -68,29 +68,5 @@ export class AuthController {
   @ApiNoContentResponse()
   async logout(@ValidatedBody() body: RefreshTokenDto, @Req() request: AuthenticatedRequest): Promise<void> {
     await this.auth.logout(userId(request), body.refresh_token);
-  }
-
-  @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiCreatedResponse({ type: RegistrationResponseDto })
-  async register(
-    @ValidatedBody() body: RegisterDto,
-    @Req() request: FastifyRequest,
-  ): Promise<{ user_id: string; access_token: string; refresh_token: string }> {
-    const phoneKey = this.otp.rateLimitKey(body.phone_number, 'invalid_registration_request', 'The account creation request is invalid.');
-    await this.limits.enforce('registration-ip', request.ip, this.config.rateLimit.registration, 'registration_rate_limit_exceeded');
-    await this.limits.enforce('registration-phone', phoneKey, this.config.rateLimit.registration, 'registration_rate_limit_exceeded');
-    return this.auth.register(body.phone_number);
-  }
-
-  @Post('dev/bootstrap-superadmin')
-  @UseGuards(DevelopmentOnlyGuard)
-  @HttpCode(HttpStatus.CREATED)
-  @ApiExcludeEndpoint()
-  async bootstrapSuperadmin(
-    @ValidatedBody({ code: 'invalid_bootstrap_request', message: 'The bootstrap request is invalid.' }) body: BootstrapSuperadminDto,
-    @Headers('x-dev-bootstrap-secret') secret: string | undefined,
-  ): Promise<{ user_id: string; access_token: string; refresh_token: string }> {
-    return this.auth.bootstrapSuperadmin(body.phone_number, secret);
   }
 }

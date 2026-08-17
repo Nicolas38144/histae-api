@@ -92,16 +92,6 @@ export class AdminGuard implements CanActivate {
   }
 }
 
-@Injectable()
-export class DevelopmentOnlyGuard implements CanActivate {
-  constructor(private readonly config: ConfigService) {}
-
-  canActivate(): boolean {
-    if (this.config.env !== 'development') throw apiError(404, 'route_not_found', 'This route is not available.');
-    return true;
-  }
-}
-
 export function userId(request: AuthenticatedRequest): string {
   if (!request.auth) throw apiError(401, 'authentication_required', 'A valid access token is required.');
   return request.auth.userId;

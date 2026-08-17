@@ -35,7 +35,7 @@ pnpm run start:dev
 
 Les migrations sont versionnées, transactionnelles, protégées par verrou PostgreSQL et vérifiées par SHA-256. Redis est utilisé localement et en production pour partager les rate limits entre toutes les instances de l’API.
 
-`ENV` est obligatoire (`development`, `test` ou `production`). Les comptes créés par `/api/auth/register` en développement sont toujours des comptes `user` : l’API ne permet jamais de choisir un rôle privilégié.
+`ENV` est obligatoire (`development`, `test` ou `production`). La vérification OTP crée un compte `user` lorsque le téléphone n’est pas encore connu ; l’API ne permet jamais au client de choisir un rôle privilégié.
 
 ## Livraison des OTP par SMS
 
@@ -188,7 +188,7 @@ La documentation OpenAPI est disponible sur `/docs` et `/docs-json` quand `OPENA
 
 ## Contrat HTTP préservé
 
-- Authentification : `POST /api/auth/otp/send`, `/otp/verify`, `/refresh`, `/logout`, `/register` (développement seulement).
+- Authentification : `POST /api/auth/otp/send`, `/otp/verify`, `/refresh`, `/logout`.
 - Compte : `GET /api/users/me`, `PATCH /api/users/me/profile`, `/preferences`, `/presence`, `DELETE /api/users/me`.
 - Vie privée : choix juridiques, demandes d'exercice des droits, export portable, blocages et journaux d'accès administrateur.
 - Catalogue et traits : `GET /api/plans`, `GET /api/traits`, `POST|DELETE /api/users/me/traits`, `POST|PATCH|DELETE /api/admin/traits`.
@@ -214,7 +214,7 @@ Les réponses d’erreur ont toujours cette forme :
 ## Tests
 
 Tous les tests sont regroupés hors du code applicatif dans `test/unit`, `test/e2e` et `test/integration`.
-L’inventaire détaillé des 154 cas, leurs objectifs et leurs prérequis se trouve dans [`test.md`](test.md).
+L’inventaire détaillé des 149 cas, leurs objectifs et leurs prérequis se trouve dans [`test.md`](test.md).
 
 ```powershell
 pnpm run test:unit
@@ -249,7 +249,6 @@ pnpm run test:integration:redis
 Toutes les vérifications sont lancées localement. Les suites PostgreSQL et Scylla refusent une cible différente
 de `ENV=development`, `POSTGRES_DB=histae-dev` et du keyspace `histae_discovery`.
 
-Validation du 17 août 2026 : le lint, le typecheck et le build réussissent ; les 27 suites Jest et leurs 154 cas
-passent sans test ignoré avec PostgreSQL, ScyllaDB et Redis réels. Un smoke test manuel a également validé
-`/health/live`, `/health/ready`, l’envoi OTP Sweego vers un numéro français, le retry idempotent sans second SMS,
-la vérification du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token et le logout.
+Validation du 17 août 2026 : le lint, le typecheck et le build réussissent. Sans infrastructure externe active,
+23 suites et 121 cas passent ; les 3 suites et 28 cas PostgreSQL, ScyllaDB et Redis sont ignorés. L’inventaire
+complet reste de 26 suites et 149 cas.

@@ -76,12 +76,10 @@ export class ConfigService {
   readonly trustProxy: boolean;
   readonly openApiEnabled: boolean;
   readonly maintenanceMode: MaintenanceMode;
-  readonly devBootstrapSecret: string;
   readonly rateLimit: {
     store: 'memory' | 'redis';
     global: LimitPolicy;
     otp: LimitPolicy;
-    registration: LimitPolicy;
     refresh: LimitPolicy;
     feed: LimitPolicy;
     message: LimitPolicy;
@@ -195,8 +193,6 @@ export class ConfigService {
     this.trustProxy = boolean(envOr('TRUST_PROXY', 'false'), 'TRUST_PROXY');
     this.openApiEnabled = optionalBoolean('OPENAPI_ENABLED', this.env !== 'production');
     this.maintenanceMode = maintenanceMode(envOr('MAINTENANCE_MODE', this.env === 'production' ? 'disabled' : 'api'));
-    this.devBootstrapSecret = process.env.DEV_BOOTSTRAP_SECRET?.trim() ?? '';
-
     const store = envOr('RATE_LIMIT_STORE', 'memory').toLowerCase();
     if (store !== 'memory' && store !== 'redis') throw new Error('config: RATE_LIMIT_STORE must be memory or redis');
     if (this.env === 'production' && store !== 'redis') throw new Error('config: production requires RATE_LIMIT_STORE=redis');
@@ -222,7 +218,6 @@ export class ConfigService {
       store,
       global: limit('RATE_LIMIT_GLOBAL', 100, '1m'),
       otp: limit('RATE_LIMIT_OTP', 5, '1h'),
-      registration: limit('RATE_LIMIT_REGISTRATION', 5, '1h'),
       refresh: limit('RATE_LIMIT_REFRESH', 30, '15m'),
       feed: limit('RATE_LIMIT_FEED', 60, '1m'),
       message: limit('RATE_LIMIT_MESSAGE', 60, '1m'),

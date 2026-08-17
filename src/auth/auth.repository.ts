@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import type { Account, NewRefreshToken, StoredRefreshToken } from './auth.models';
 
-type CreateAccountInput = { userId: string; role: 'user' | 'superadmin'; phoneHash: string; encryptedPhone: Buffer };
+type CreateAccountInput = { userId: string; phoneHash: string; encryptedPhone: Buffer };
 type BeginOtpDeliveryInput = {
   id: string;
   phoneHash: string;
@@ -14,8 +14,6 @@ type BeginOtpDeliveryInput = {
 export type OtpDeliveryStart =
   | { state: 'created' | 'pending' | 'sent' | 'failed'; id: string }
   | { state: 'conflict' };
-
-const SUPERADMIN_BOOTSTRAP_LOCK = 91_104_202;
 
 @Injectable()
 export class AuthRepository {
@@ -136,22 +134,9 @@ export class AuthRepository {
       if (tombstone.rows[0]?.blocked) throw new AccountTombstoneError();
       await client.query(`
         INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
-        VALUES ($1, $2, $3, $4)
-      `, [account.userId, account.role, account.phoneHash, account.encryptedPhone]);
-      return { user_id: account.userId, role: account.role, is_banned: false };
-    });
-  }
-
-  async createDevelopmentSuperadmin(account: Omit<CreateAccountInput, 'role'>): Promise<Account | undefined> {
-    return this.database.transaction(async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock($1)', [SUPERADMIN_BOOTSTRAP_LOCK]);
-      const existing = await client.query<{ user_id: string }>(`SELECT user_id FROM user_account WHERE role = 'superadmin' AND deleted_at IS NULL LIMIT 1`);
-      if (existing.rows[0]) return undefined;
-      await client.query(`
-        INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
-        VALUES ($1, 'superadmin', $2, $3)
+        VALUES ($1, 'user', $2, $3)
       `, [account.userId, account.phoneHash, account.encryptedPhone]);
-      return { user_id: account.userId, role: 'superadmin', is_banned: false };
+      return { user_id: account.userId, role: 'user', is_banned: false };
     });
   }
 

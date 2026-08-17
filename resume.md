@@ -78,7 +78,7 @@ Les principaux modules sont :
 
 | Module | Responsabilités |
 | --- | --- |
-| `auth` | OTP, comptes, JWT, refresh tokens, guards, rôles et bootstrap de développement |
+| `auth` | OTP, comptes, JWT, refresh tokens, guards et rôles |
 | `users` | profil, préférences, localisation et choix juridiques |
 | `privacy` | demandes RGPD, export, blocages, journaux d’accès et rétention |
 | `matches` | création, liste, révélation, continuation, quota, messages et maintenance |
@@ -207,14 +207,12 @@ L’idempotence est garantie au niveau applicatif : rejouer la même clé pour l
 - Déconnexion idempotente pour un token appartenant à l’utilisateur.
 - Durée par défaut : 4 320 heures, soit 180 jours.
 
-### Rôles et développement
+### Rôles
 
 Les rôles fermés sont `user`, `admin` et `superadmin`.
 
-- L’inscription de développement crée toujours `user`.
-- Le client ne peut pas fournir son rôle.
-- Le premier superadmin de développement passe par une route distincte, un secret dédié et une transaction empêchant la création concurrente de plusieurs premiers superadmins.
-- Les routes de développement sont masquées par `DevelopmentOnlyGuard` hors environnement `development`.
+- La vérification d’un OTP crée un compte `user` lorsque le téléphone n’est pas encore connu.
+- Le client ne peut pas fournir son rôle et l’API n’expose aucune route de création de compte privilégié.
 
 ### Tombstone de sécurité
 
@@ -789,7 +787,6 @@ Limites par défaut :
 | --- | --- |
 | Global par IP | 100 requêtes par minute |
 | Envoi/vérification OTP | 5 par heure, à la fois par IP et numéro pseudonymisé |
-| Inscription | 5 par heure, à la fois par IP et numéro pseudonymisé |
 | Rotation de refresh token | 30 par 15 minutes et IP |
 | Feed | 60 par minute et utilisateur |
 | Envoi de message | 60 par minute et utilisateur |
@@ -845,12 +842,12 @@ test/
 
 Inventaire actuel :
 
-- 22 fichiers/suites unitaires, 115 cas ;
-- 2 suites e2e, 11 cas ;
+- 21 fichiers/suites unitaires, 112 cas ;
+- 2 suites e2e, 9 cas ;
 - 3 suites d’intégration, 28 cas dont 10 conditionnés par Scylla et 2 par Redis ;
-- total complet : 27 fichiers/suites Jest et 154 cas.
+- total complet : 26 fichiers/suites Jest et 149 cas.
 
-Le 17 août 2026, TypeScript, ESLint, le build et les 154 cas Jest ont été validés localement. Les 27 suites passent sans test ignoré avec PostgreSQL, ScyllaDB et Redis réels. Elles couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
+Le 17 août 2026, TypeScript, ESLint et le build ont été validés localement. Sans infrastructure externe active, Jest a confirmé l’inventaire de 149 cas : 121 réussis et 28 ignorés dans les 3 suites d’intégration conditionnelles. Les tests exécutés couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
 
@@ -871,7 +868,7 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 7. `pnpm test` avec les trois intégrations obligatoires ;
 8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
 
-Cette séquence a été exécutée avec succès le 17 août 2026 : build réussi, 154 cas Jest réussis sur 154 et aucun cas ignoré. Le smoke test a confirmé `/health/live`, `/health/ready`, l’envoi Sweego réel, l’absence de second SMS lors du retry d’une même clé, la vérification OTP, l’accès Bearer, la rotation du refresh token, le refus de l’ancien token et le logout `204`.
+Pour cette mise à jour, le lint, le typecheck, le build et les 121 cas indépendants de l’infrastructure ont réussi le 17 août 2026 ; les 28 cas PostgreSQL, ScyllaDB et Redis ont été ignorés faute de services actifs. Une exécution des 149 cas avec ces trois dépendances reste requise avant livraison.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { AuthController } from '../../../src/auth/auth.controller';
-import { DevelopmentOnlyGuard, JwtActiveGuard } from '../../../src/auth/auth.guard';
+import { JwtActiveGuard } from '../../../src/auth/auth.guard';
 import { AuthRepository } from '../../../src/auth/auth.repository';
 import { AuthService } from '../../../src/auth/auth.service';
 import { OtpService } from '../../../src/auth/otp.service';
@@ -37,7 +37,7 @@ import { UsersRepository } from '../../../src/users/users.repository';
 import { UsersService } from '../../../src/users/users.service';
 
 const injectedClasses = [
-  AuthController, JwtActiveGuard, DevelopmentOnlyGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
+  AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, HealthController, RateLimitService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
