@@ -5,10 +5,25 @@ import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
 import { loadMigration, migrations } from './migration-catalog';
 
+const RESET_CONFIRMATION = 'RESET';
+const DEVELOPMENT_DATABASE = 'histae-dev';
+
+type ResetSafetyInput = {
+  environment: string;
+  database: string;
+  host: string;
+  confirmation?: string;
+};
+
 async function reset(): Promise<void> {
   dotenv.config();
   const config = new ConfigService();
-  assertResetIsAllowed(config.env);
+  assertResetAllowed({
+    environment: config.env,
+    database: config.postgres.database,
+    host: config.postgres.host,
+    confirmation: process.env.CONFIRM_DB_RESET,
+  });
 
   const pool = new Pool(config.postgres);
   try {
@@ -55,16 +70,25 @@ async function readSql(filename: string): Promise<string> {
   return readFile(join(process.cwd(), 'db', filename), 'utf8');
 }
 
-function assertResetIsAllowed(environment: string): void {
-  if (environment === 'production') {
-    throw new Error('Database reset is forbidden when ENV=production.');
+export function assertResetAllowed(input: ResetSafetyInput): void {
+  if (input.confirmation !== RESET_CONFIRMATION) {
+    throw new Error(`Database reset requires CONFIRM_DB_RESET=${RESET_CONFIRMATION}.`);
   }
-  if (process.env.CONFIRM_DB_RESET !== 'RESET') {
-    throw new Error('Database reset requires CONFIRM_DB_RESET=RESET.');
+  if (input.environment !== 'development') {
+    throw new Error('Database reset is restricted to ENV=development.');
+  }
+  if (input.database !== DEVELOPMENT_DATABASE) {
+    throw new Error(`Database reset only allows the ${DEVELOPMENT_DATABASE} database.`);
+  }
+  const localHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+  if (!localHosts.has(input.host)) {
+    throw new Error('Database reset only allows a local PostgreSQL host.');
   }
 }
 
-void reset().catch((error: unknown) => {
-  console.error('PostgreSQL reset failed:', error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  void reset().catch((error: unknown) => {
+    console.error('PostgreSQL reset failed:', error);
+    process.exitCode = 1;
+  });
+}

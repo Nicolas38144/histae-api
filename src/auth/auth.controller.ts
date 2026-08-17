@@ -1,6 +1,6 @@
 import { Controller, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { ApiAcceptedResponse, ApiCreatedResponse, ApiExcludeEndpoint, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiAcceptedResponse, ApiCreatedResponse, ApiExcludeEndpoint, ApiHeader, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ValidatedBody } from '../common/http/validated-request.decorator';
 import { MessageResponseDto, RegistrationResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
 import { ConfigService } from '../config/config.service';
@@ -24,15 +24,17 @@ export class AuthController {
 
   @Post('otp/send')
   @HttpCode(HttpStatus.ACCEPTED)
+  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'A new UUID v4 for the logical send request.' })
   @ApiAcceptedResponse({ type: MessageResponseDto })
   async sendOtp(
     @ValidatedBody() body: SendOtpDto,
     @Req() request: FastifyRequest,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
   ): Promise<{ message: string }> {
-    const phoneKey = this.otp.rateLimitKey(body.phone_number, 'invalid_phone_number', 'The phone number must use the international E.164 format.');
+    const phoneKey = this.otp.rateLimitKey(body.phone_number, 'invalid_phone_number', 'The phone number must be a French number in E.164 format (+33).');
     await this.limits.enforce('otp-send-ip', request.ip, this.config.rateLimit.otp, 'otp_rate_limit_exceeded');
     await this.limits.enforce('otp-send-phone', phoneKey, this.config.rateLimit.otp, 'otp_rate_limit_exceeded');
-    return this.auth.sendOtp(body.phone_number);
+    return this.auth.sendOtp(body.phone_number, idempotencyKey);
   }
 
   @Post('otp/verify')

@@ -7,6 +7,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../../src/app.module';
+import { AuthRepository } from '../../src/auth/auth.repository';
 import { DiscoveryRepository } from '../../src/discovery/discovery.repository';
 import { MatchesRepository } from '../../src/matches/matches.repository';
 import type { MatchRow } from '../../src/matches/matches.models';
@@ -53,7 +54,7 @@ describePostgres('PostgreSQL schema contract', () => {
     expect(result.rows.map((row) => row.name)).not.toContain(null);
   });
 
-  it('contains the useful indexes and excludes the nine redundant or obsolete indexes', async () => {
+  it('contains the useful indexes and excludes the ten redundant or obsolete indexes', async () => {
     const result = await pool.query<{ name: string | null }>(`
       SELECT to_regclass('public.' || name) AS name
       FROM unnest($1::text[]) AS name
@@ -62,7 +63,7 @@ describePostgres('PostgreSQL schema contract', () => {
       'idx_consent_event_sequence',
       'idx_user_presence_location', 'idx_match_state_user', 'idx_refresh_tokens_expires',
       'idx_user_block_blocked', 'idx_user_report_reported', 'idx_device_token_user',
-      'idx_notification_expire',
+      'idx_notification_expire', 'idx_otp_idempotency', 'idx_otp_one_usable_per_phone',
       'idx_dsr_one_open_per_type', 'idx_match_init_activity', 'idx_message_match_created_desc',
       'idx_user_report_created_desc', 'idx_user_report_status_created_desc',
     ]]);
@@ -75,8 +76,9 @@ describePostgres('PostgreSQL schema contract', () => {
       'idx_user_account_phone_hash', 'idx_refresh_tokens_jti', 'idx_message_match_created',
       'idx_user_report_status', 'idx_consent_user', 'idx_match_init_last_message',
       'idx_user_account_active', 'idx_user_account_to_anon', 'idx_refresh_tokens_active',
+      'idx_otp_phone_usable',
     ]]);
-    expect(removed.rows.map((row) => row.name)).toEqual(Array(9).fill(null));
+    expect(removed.rows.map((row) => row.name)).toEqual(Array(10).fill(null));
 
     const activeConsentIndex = await pool.query<{ is_unique: boolean }>(`
       SELECT index_definition.indisunique AS is_unique
@@ -84,6 +86,124 @@ describePostgres('PostgreSQL schema contract', () => {
       WHERE index_definition.indexrelid = 'idx_consent_active'::regclass
     `);
     expect(activeConsentIndex.rows[0]?.is_unique).toBe(true);
+    const usableOtpIndex = await pool.query<{ is_unique: boolean }>(`
+      SELECT index_definition.indisunique AS is_unique
+      FROM pg_index AS index_definition
+      WHERE index_definition.indexrelid = 'idx_otp_one_usable_per_phone'::regclass
+    `);
+    expect(usableOtpIndex.rows[0]?.is_unique).toBe(true);
+  });
+
+  it('activates only provider-accepted OTPs and preserves an older code after delivery failure', async () => {
+    const repository = new AuthRepository(databaseFor(pool) as never);
+    const phoneHash = 'otp-test-' + randomUUID();
+    const firstId = randomUUID();
+    const firstKey = randomUUID();
+    const failedId = randomUUID();
+    try {
+      await expect(repository.beginOtpDelivery({
+        id: firstId,
+        phoneHash,
+        otpHash: 'first-hash',
+        idempotencyKey: firstKey,
+        expiresAt: new Date(Date.now() + 600_000),
+        staleBefore: new Date(Date.now() - 15_000),
+      })).resolves.toEqual({ state: 'created', id: firstId });
+      await expect(repository.beginOtpDelivery({
+        id: randomUUID(),
+        phoneHash,
+        otpHash: 'different-hash',
+        idempotencyKey: firstKey,
+        expiresAt: new Date(Date.now() + 600_000),
+        staleBefore: new Date(Date.now() - 15_000),
+      })).resolves.toEqual({ state: 'pending', id: firstId });
+      await expect(repository.markOtpSent(firstId, phoneHash, 'transaction-1', 'message-1')).resolves.toBe(true);
+
+      await expect(repository.beginOtpDelivery({
+        id: failedId,
+        phoneHash,
+        otpHash: 'failed-hash',
+        idempotencyKey: randomUUID(),
+        expiresAt: new Date(Date.now() + 600_000),
+        staleBefore: new Date(Date.now() - 15_000),
+      })).resolves.toEqual({ state: 'created', id: failedId });
+      await repository.markOtpFailed(failedId, 'provider_http_503');
+
+      await expect(repository.consumeOtp(phoneHash, 'failed-hash')).resolves.toBe(false);
+      await expect(repository.consumeOtp(phoneHash, 'first-hash')).resolves.toBe(true);
+      const failed = await pool.query<{ delivery_status: string; delivery_error_code: string }>(
+        'SELECT delivery_status, delivery_error_code FROM otp_verification WHERE id = $1',
+        [failedId],
+      );
+      expect(failed.rows[0]).toEqual({ delivery_status: 'failed', delivery_error_code: 'provider_http_503' });
+    } finally {
+      await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);
+    }
+  });
+
+  it('marks an abandoned pending OTP as a failed delivery on replay', async () => {
+    const repository = new AuthRepository(databaseFor(pool) as never);
+    const phoneHash = 'otp-stale-' + randomUUID();
+    const id = randomUUID();
+    const idempotencyKey = randomUUID();
+    try {
+      await expect(repository.beginOtpDelivery({
+        id,
+        phoneHash,
+        otpHash: 'stale-hash',
+        idempotencyKey,
+        expiresAt: new Date(Date.now() + 600_000),
+        staleBefore: new Date(Date.now() - 15_000),
+      })).resolves.toEqual({ state: 'created', id });
+      await pool.query("UPDATE otp_verification SET created_at = clock_timestamp() - INTERVAL '1 minute' WHERE id = $1", [id]);
+
+      await expect(repository.beginOtpDelivery({
+        id: randomUUID(),
+        phoneHash,
+        otpHash: 'replacement-hash',
+        idempotencyKey,
+        expiresAt: new Date(Date.now() + 600_000),
+        staleBefore: new Date(),
+      })).resolves.toEqual({ state: 'failed', id });
+      const delivery = await pool.query<{ delivery_status: string; delivery_error_code: string }>(
+        'SELECT delivery_status, delivery_error_code FROM otp_verification WHERE id = $1',
+        [id],
+      );
+      expect(delivery.rows[0]).toEqual({ delivery_status: 'failed', delivery_error_code: 'delivery_unknown' });
+    } finally {
+      await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);
+    }
+  });
+
+  it('keeps exactly one usable OTP when two provider acceptances complete concurrently', async () => {
+    const repository = new AuthRepository(databaseFor(pool) as never);
+    const phoneHash = 'otp-concurrent-' + randomUUID();
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    try {
+      for (const [id, otpHash] of [[firstId, 'first-hash'], [secondId, 'second-hash']] as const) {
+        await expect(repository.beginOtpDelivery({
+          id,
+          phoneHash,
+          otpHash,
+          idempotencyKey: randomUUID(),
+          expiresAt: new Date(Date.now() + 600_000),
+          staleBefore: new Date(Date.now() - 15_000),
+        })).resolves.toEqual({ state: 'created', id });
+      }
+
+      await expect(Promise.all([
+        repository.markOtpSent(firstId, phoneHash, 'transaction-1', 'message-1'),
+        repository.markOtpSent(secondId, phoneHash, 'transaction-2', 'message-2'),
+      ])).resolves.toEqual([true, true]);
+      const deliveries = await pool.query<{ delivery_status: string; used: boolean }>(`
+        SELECT delivery_status, used FROM otp_verification WHERE phone_number_hash = $1
+      `, [phoneHash]);
+      expect(deliveries.rows.filter((row) => row.delivery_status === 'sent' && !row.used)).toHaveLength(1);
+      expect(deliveries.rows.filter((row) => row.used)).toHaveLength(1);
+    } finally {
+      await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);
+    }
   });
 
   it('executes every retention query against PostgreSQL', async () => {
@@ -127,6 +247,9 @@ describePostgres('PostgreSQL schema contract', () => {
       }));
       expect(document.paths['/api/feed']?.get?.responses?.['200']).toBeDefined();
       expect(document.paths['/api/swipes']?.post?.requestBody).toBeDefined();
+      expect(document.paths['/api/auth/otp/send']?.post?.parameters).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
+      ]));
       expect(document.paths['/api/fake-match']).toBeUndefined();
       expect(document.components?.schemas).toEqual(expect.objectContaining({
         ConsentStateResponseDto: expect.any(Object),

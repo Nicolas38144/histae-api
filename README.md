@@ -8,9 +8,14 @@ Dans PowerShell :
 
 ```powershell
 Copy-Item .env.example .env
+# Renseignez dans .env les valeurs laissées vides, notamment les trois clés cryptographiques.
 pnpm install
 pnpm run db:migrate
 ```
+
+`.env.example` inventorie toutes les variables prises en charge sans contenir de secret réel. Après la copie,
+renseignez au minimum `POSTGRES_PASSWORD`, `JWT_SECRET`, `PHONE_ENCRYPTION_KEY` et `PHONE_HASH_KEY` dans `.env` ;
+les deux clés de téléphone doivent contenir exactement 32 octets (ou 64 caractères hexadécimaux).
 
 Dans le terminal WSL où Docker est disponible :
 
@@ -32,11 +37,37 @@ Les migrations sont versionnées, transactionnelles, protégées par verrou Post
 
 `ENV` est obligatoire (`development`, `test` ou `production`). Les comptes créés par `/api/auth/register` en développement sont toujours des comptes `user` : l’API ne permet jamais de choisir un rôle privilégié.
 
+## Livraison des OTP par SMS
+
+La livraison réelle utilise l’API transactionnelle Sweego. En développement et en test, `SMS_PROVIDER` vaut
+`disabled` par défaut ; en production, `SMS_PROVIDER=sweego` et les identifiants Sweego sont obligatoires.
+Configurez les valeurs suivantes dans votre `.env` local, sans y placer de secret dans le dépôt :
+
+```dotenv
+SMS_PROVIDER=sweego
+SWEEGO_API_KEY=
+SWEEGO_API_URL=https://api.sweego.io/send
+SWEEGO_SMS_SENDER_ID=Histae
+SWEEGO_SMS_REGION=FR
+SWEEGO_TIMEOUT=10s
+OTP_TTL=10m
+```
+
+La livraison OTP est actuellement limitée aux numéros français au format `+33`; la région Sweego doit donc
+rester `FR`. `POST /api/auth/otp/send` exige l’en-tête
+`Idempotency-Key` contenant un UUID v4 neuf pour chaque demande logique. Un retry avec la même clé ne renvoie
+pas un second SMS. Le code hashé devient utilisable uniquement après une réponse Sweego `200` valide ; une
+livraison refusée ou ambiguë renvoie `503 otp_delivery_unavailable` et laisse le code inutilisable. Une demande
+restée `pending` au-delà du timeout fournisseur et de cinq secondes de grâce devient `failed` lors de son prochain
+retry. Un verrou PostgreSQL par téléphone et un index unique garantissent qu’un seul OTP envoyé reste utilisable.
+
 ## Stockage et dépendances
 
-`pnpm run db:migrate` applique dans l’ordre les migrations `001` à `008` et refuse qu’un fichier déjà appliqué ait changé de checksum. Les scripts manuels sont aussi disponibles : `db/schema_postgres.sql` crée le schéma complet, `db/insert_postgres.sql` ajoute les catalogues initiaux et `db/drop_postgres.sql` réinitialise la base.
+`pnpm run db:migrate` applique dans l’ordre les migrations `001` à `010` et refuse qu’un fichier déjà appliqué ait changé de checksum. Les scripts manuels sont aussi disponibles : `db/schema_postgres.sql` crée le schéma complet, `db/insert_postgres.sql` ajoute les catalogues initiaux et `db/drop_postgres.sql` réinitialise la base.
 
-Pour reconstruire entièrement une base de développement ou de test, utilisez `pnpm run db:reset`. La commande exécute ces trois scripts dans une transaction, recrée l'état des migrations et refuse toujours `ENV=production`. Elle exige une confirmation explicite :
+Pour reconstruire entièrement la base locale de développement, utilisez `pnpm run db:reset`. La commande
+exécute ces trois scripts dans une transaction et recrée l'état des migrations. Elle exige simultanément
+`ENV=development`, `POSTGRES_DB=histae-dev`, un hôte PostgreSQL local et une confirmation explicite :
 
 ```powershell
 $env:CONFIRM_DB_RESET = 'RESET'
@@ -183,7 +214,7 @@ Les réponses d’erreur ont toujours cette forme :
 ## Tests
 
 Tous les tests sont regroupés hors du code applicatif dans `test/unit`, `test/e2e` et `test/integration`.
-L’inventaire détaillé des 125 cas, leurs objectifs et leurs prérequis se trouve dans [`test.md`](test.md).
+L’inventaire détaillé des 154 cas, leurs objectifs et leurs prérequis se trouve dans [`test.md`](test.md).
 
 ```powershell
 pnpm run test:unit
@@ -217,3 +248,8 @@ pnpm run test:integration:redis
 
 Toutes les vérifications sont lancées localement. Les suites PostgreSQL et Scylla refusent une cible différente
 de `ENV=development`, `POSTGRES_DB=histae-dev` et du keyspace `histae_discovery`.
+
+Validation du 17 août 2026 : le lint, le typecheck et le build réussissent ; les 27 suites Jest et leurs 154 cas
+passent sans test ignoré avec PostgreSQL, ScyllaDB et Redis réels. Un smoke test manuel a également validé
+`/health/live`, `/health/ready`, l’envoi OTP Sweego vers un numéro français, le retry idempotent sans second SMS,
+la vérification du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token et le logout.

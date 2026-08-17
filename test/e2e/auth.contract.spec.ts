@@ -14,6 +14,7 @@ import { OtpService } from '../../src/auth/otp.service';
 describe('Auth HTTP contract', () => {
   let app: NestFastifyApplication;
   const auth = {
+    sendOtp: jest.fn().mockResolvedValue({ message: 'Verification code request accepted.' }),
     refresh: jest.fn().mockResolvedValue({ access_token: 'next-access', refresh_token: 'next-refresh' }),
     bootstrapSuperadmin: jest.fn().mockResolvedValue({ user_id: 'c88624dd-3bd1-43d8-9991-7e6211b3f0e5', access_token: 'admin-access', refresh_token: 'admin-refresh' }),
   };
@@ -24,7 +25,7 @@ describe('Auth HTTP contract', () => {
       providers: [
         { provide: AuthService, useValue: auth },
         { provide: RateLimitService, useValue: { enforce: jest.fn() } },
-        { provide: ConfigService, useValue: { env: 'development', rateLimit: { refresh: { max: 30, windowMs: 900_000 } } } },
+        { provide: ConfigService, useValue: { env: 'development', rateLimit: { otp: { max: 5, windowMs: 3_600_000 }, refresh: { max: 30, windowMs: 900_000 } } } },
         { provide: OtpService, useValue: { rateLimitKey: jest.fn().mockReturnValue('phone-key') } },
         { provide: JwtActiveGuard, useValue: { canActivate: () => true } },
         { provide: DevelopmentOnlyGuard, useValue: { canActivate: () => true } },
@@ -39,6 +40,19 @@ describe('Auth HTTP contract', () => {
 
   afterAll(async () => app?.close());
 
+  it('accepts an idempotent OTP send request and forwards its UUID', async () => {
+    const idempotencyKey = 'f5c3c744-a75f-46e7-8b59-6b94671cb029';
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'POST',
+      url: '/api/auth/otp/send',
+      headers: { 'idempotency-key': idempotencyKey },
+      payload: { phone_number: '+33612345678' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ message: 'Verification code request accepted.' });
+    expect(auth.sendOtp).toHaveBeenCalledWith('+33612345678', idempotencyKey);
+  });
   it('keeps refresh successful response at HTTP 200', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'POST',

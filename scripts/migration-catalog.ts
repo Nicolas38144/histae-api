@@ -11,6 +11,8 @@ export const migrations = [
   { version: '006_privacy_workflows.sql', filename: '006_privacy_workflows.sql' },
   { version: '007_keyset_pagination_indexes.sql', filename: '007_keyset_pagination_indexes.sql' },
   { version: '008_index_cleanup.sql', filename: '008_index_cleanup.sql' },
+  { version: '009_otp_sms_delivery.sql', filename: '009_otp_sms_delivery.sql' },
+  { version: '010_single_usable_otp.sql', filename: '010_single_usable_otp.sql' },
 ] as const;
 
 export async function loadMigration(migration: typeof migrations[number]): Promise<{ sql: string; checksum: string }> {

@@ -1,6 +1,6 @@
 # Histae API — routes existantes
 
-Mise à jour : 16 août 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
+Mise à jour : 17 août 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
 
 ## Documentation OpenAPI
 
@@ -20,16 +20,20 @@ Lorsque `OPENAPI_ENABLED=true` (par défaut en développement et en test), l’i
 
 ## Authentification
 
-| Méthode | Route | Accès | Corps | Résultat |
+| Méthode | Route | Accès | Entrée | Résultat |
 | --- | --- | --- | --- | --- |
-| POST | `/auth/otp/send` | Public | `{ "phone_number": "+336…" }` | Valide le numéro E.164. **État actuel : `503 otp_delivery_unavailable`**, car aucun transport SMS n’est configuré. Limite OTP : 5/h par IP et par numéro pseudonymisé. |
-| POST | `/auth/otp/verify` | Public | `{ "phone_number": "+336…", "otp": "123456" }` | `200` avec `{ "access_token", "refresh_token" }`. Le code OTP est consommé une seule fois. Limite : 5/h par IP et numéro pseudonymisé. |
+| POST | `/auth/otp/send` | Public | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "phone_number": "+336…" }`. Seuls les numéros français `+33` sont acceptés. | `202 { "message": "Verification code request accepted." }` après acceptation de la demande. Une clé absente ou mal formée renvoie `400 invalid_idempotency_key`; sa réutilisation pour un autre numéro renvoie `409 idempotency_key_conflict`. Une erreur ou une réponse Sweego invalide renvoie `503 otp_delivery_unavailable`. Limite : 5/h par IP et par numéro pseudonymisé. |
+| POST | `/auth/otp/verify` | Public | `{ "phone_number": "+336…", "otp": "123456" }`, numéro français `+33` uniquement | `200` avec `{ "access_token", "refresh_token" }`. Le code OTP est consommé une seule fois. Limite : 5/h par IP et numéro pseudonymisé. |
 | POST | `/auth/refresh` | Public | `{ "refresh_token": "jti:secret" }` | `200` avec une nouvelle paire de tokens. Le token utilisé est révoqué dans la même transaction. Limite : 30/15 min/IP. |
 | POST | `/auth/logout` | Authentifiée | `{ "refresh_token": "jti:secret" }` | `204`, révoque le refresh token s’il appartient à l’utilisateur courant. |
-| POST | `/auth/register` | Développement | `{ "phone_number": "+336…" }` | `201` avec `{ "user_id", "access_token", "refresh_token" }`. Le rôle est toujours `user`; il ne peut pas être fourni par le client. Hors développement : `404 route_not_found`. Limite : 5/h par IP et numéro pseudonymisé. |
-| POST | `/auth/dev/bootstrap-superadmin` | Développement + `X-Dev-Bootstrap-Secret` | `{ "phone_number": "+336…" }` | `201` avec une paire de tokens superadmin. Crée uniquement le premier superadmin actif ; hors développement : `404 route_not_found`. Endpoint masqué de Swagger et réservé au provisionnement administratif local. |
+| POST | `/auth/register` | Développement | `{ "phone_number": "+336…" }`, numéro français `+33` uniquement | `201` avec `{ "user_id", "access_token", "refresh_token" }`. Le rôle est toujours `user`; il ne peut pas être fourni par le client. Hors développement : `404 route_not_found`. Limite : 5/h par IP et numéro pseudonymisé. |
+| POST | `/auth/dev/bootstrap-superadmin` | Développement + `X-Dev-Bootstrap-Secret` | `{ "phone_number": "+336…" }`, numéro français `+33` uniquement | `201` avec une paire de tokens superadmin. Crée uniquement le premier superadmin actif ; hors développement : `404 route_not_found`. Endpoint masqué de Swagger et réservé au provisionnement administratif local. |
 
-Les access tokens utilisent HS256 et expirent selon `JWT_ACCESS_TTL`; les refresh tokens suivent `JWT_REFRESH_TTL`. Les erreurs d’authentification les plus courantes sont `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `otp_rate_limit_exceeded`, `registration_rate_limit_exceeded` et `refresh_rate_limit_exceeded`.
+Pour l’envoi OTP, l’API persiste d’abord un hash avec l’état `pending`, appelle l’endpoint transactionnel Sweego, puis passe le code à `sent` uniquement après une réponse HTTP `200` contenant un `transaction_id` et un identifiant `swg_uids` valides. Rejouer rapidement la même clé lorsque la demande est `pending`, ou rejouer une demande déjà `sent`, renvoie le même `202` sans second appel fournisseur. Un `pending` plus ancien que le timeout Sweego augmenté de cinq secondes est marqué `failed` lors du retry et renvoie `503`, comme toute autre demande échouée. L’activation est sérialisée par téléphone et la base garantit qu’un seul OTP envoyé reste utilisable. La durée de validité est définie par `OTP_TTL`.
+
+Le 17 août 2026, ce contrat a été validé manuellement avec Sweego réel : envoi vers un numéro français, retry de la même clé sans second SMS, vérification du code, accès Bearer, rotation du refresh token avec refus de l’ancien et logout `204`.
+
+Les access tokens utilisent HS256 et expirent selon `JWT_ACCESS_TTL`; les refresh tokens suivent `JWT_REFRESH_TTL`. Les erreurs d’authentification les plus courantes sont `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`, `otp_delivery_unavailable`, `otp_rate_limit_exceeded`, `registration_rate_limit_exceeded` et `refresh_rate_limit_exceeded`.
 
 ## Plans
 

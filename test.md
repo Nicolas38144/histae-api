@@ -1,6 +1,6 @@
 # Tests de Histae API
 
-Mise à jour : 16 août 2026.
+Mise à jour : 17 août 2026.
 
 ## Organisation et règles
 
@@ -15,15 +15,17 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-État actuel : **24 fichiers de test, 24 suites Jest et 125 cas** lorsque Scylla et Redis sont activés :
+Inventaire statique actuel : **27 fichiers de test, 27 suites Jest et 154 cas** lorsque toutes les intégrations sont activées :
 
-- 90 tests unitaires ;
-- 10 tests e2e ;
-- 13 tests d’intégration PostgreSQL/OpenAPI ;
+- 115 tests unitaires ;
+- 11 tests e2e ;
+- 16 tests d’intégration PostgreSQL/OpenAPI ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 19 suites unitaires, 2 suites e2e et 3 suites d’intégration. Chaque intégration réelle est ignorée sauf si son flag `REQUIRE_*_TESTS` vaut `true`. Avec uniquement `REQUIRE_POSTGRES_TESTS=true`, 113 cas sont exécutés et 12 ignorés ; sans aucun flag d’intégration, 100 cas sont exécutés et 25 ignorés. Les tests paramétrés couvrent notamment les environnements, les dates invalides et les 36 classes injectées Nest.
+Jest affiche 22 suites unitaires, 2 suites e2e et 3 suites d’intégration. Chaque intégration réelle est ignorée sauf si son flag `REQUIRE_*_TESTS` vaut `true`. Avec uniquement `REQUIRE_POSTGRES_TESTS=true`, 142 cas doivent être exécutés et 12 ignorés ; sans aucun flag d’intégration, 126 cas doivent être exécutés et 28 ignorés. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 37 classes injectées Nest.
+
+Le 17 août 2026, TypeScript, ESLint, le build et l’inventaire complet ont réussi : 27 suites et 154 cas validés, sans test ignoré, avec PostgreSQL, ScyllaDB et Redis réels.
 
 ## Commandes
 
@@ -83,6 +85,26 @@ Suite `AuthService development registration` :
 1. Vérifie que l’inscription de développement crée toujours un rôle `user`, normalise le téléphone et ne permet pas à l’appelant de choisir un rôle privilégié.
 2. Vérifie le secret du bootstrap superadmin et garantit qu’une tentative avec un mauvais secret n’appelle pas la création privilégiée.
 
+### `test/unit/auth/otp.service.spec.ts` — 9 tests
+
+Suite `OtpService` :
+
+1. Vérifie la normalisation du numéro, la génération cryptographique d’un code à six chiffres, sa persistance uniquement sous forme de HMAC, l’appel du transport SMS puis l’activation avec les identifiants fournisseur.
+2. et 3. Rejouent séparément une clé déjà `sent` ou `pending` et garantissent qu’aucun second SMS n’est envoyé.
+4. Rend une livraison fournisseur échouée inutilisable et la transforme en erreur stable `503 otp_delivery_unavailable`.
+5. Transforme une livraison `pending` abandonnée et déjà classée `failed` en `503`, sans nouvel appel fournisseur.
+6. Refuse un en-tête absent, une clé qui n’est pas un UUID v4 et une clé déjà liée à un autre numéro.
+7. Vérifie la consommation du hash utilisable correspondant au numéro et au code.
+8. et 9. Refusent un numéro étranger et un numéro français conservant le zéro national après `+33`.
+
+### `test/unit/auth/sweego-sms.service.spec.ts` — 3 tests
+
+Suite `SweegoSmsService` :
+
+1. Vérifie le contrat transactionnel Sweego, l’en-tête `Api-Key`, le Sender ID, le destinataire, l’identifiant de campagne et l’absence de la clé secrète dans le corps.
+2. Transforme les statuts non `200` et les réponses mal formées en erreurs fournisseur non sensibles, annule le corps HTTP en erreur et refuse notamment un tableau à la place de l’objet `swg_uids`.
+3. Échoue fermement sans appel réseau lorsque le transport SMS est désactivé.
+
 ### `test/unit/auth/token.service.spec.ts` — 2 tests
 
 Suite `TokenService` :
@@ -97,9 +119,9 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 36 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 37 tests paramétrés
 
-Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 36 classes injectées principales, y compris le nouveau service Redis partagé.
+Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 37 classes injectées principales, y compris le nouveau service Redis partagé.
 
 Chaque cas vérifie que `emitDecoratorMetadata` contient des tokens de constructeur réels et jamais `Function`, `Object` ou `undefined`. Ce test empêche la régression où un import `type` TypeScript supprimerait au runtime le token dont Nest a besoin pour l’injection de dépendances.
 
@@ -114,14 +136,14 @@ Suite `cursor pagination` :
 
 Suite `test layout` : parcourt le dépôt et garantit que tous les fichiers correspondant aux conventions `.spec.*` et `.test.*` se trouvent sous `test`.
 
-### `test/unit/config/config.service.spec.ts` — 7 tests paramétrés
+### `test/unit/config/config.service.spec.ts` — 17 tests
 
 Suite `parseEnvironment` :
 
 - accepte séparément `development`, `test` et `production` ;
 - refuse séparément `undefined`, la chaîne vide, `staging` et une valeur ambiguë telle que `developmentish`.
 
-Cette suite vérifie que la configuration échoue fermement au lieu de choisir implicitement le mode développement.
+La section `ConfigService SMS configuration` ajoute dix cas : configuration Sweego française valide, fournisseur obligatoire en production, identifiants obligatoires, deux Sender ID invalides, URL non HTTPS, timeout supérieur à trente secondes, deux durées OTP hors limites et région autre que `FR`. La configuration échoue ainsi fermement au lieu de choisir implicitement un mode ou une valeur dangereuse.
 
 ### `test/unit/crypto/phone-crypto.spec.ts` — 2 tests
 
@@ -151,6 +173,13 @@ Suite `ScyllaDB reset safety` :
 
 1. autorise uniquement la combinaison confirmée `development`, `histae_discovery` et contact point local ;
 2. refuse avant connexion l'absence de confirmation, la production, Scylla désactivé, un autre keyspace, un hôte distant ou une liste d'hôtes vide.
+
+### `test/unit/scripts/reset-postgres.spec.ts` — 2 tests
+
+Suite `PostgreSQL reset safety` :
+
+1. autorise uniquement la combinaison confirmée `development`, `histae-dev` et hôte local ;
+2. refuse avant connexion l’absence de confirmation, `test`, la production, une autre base ou un hôte distant.
 
 ### `test/unit/discovery/discovery.store.spec.ts` — 3 tests
 
@@ -203,15 +232,16 @@ Suite `UsersService consent enforcement` :
 
 ## Tests e2e
 
-### `test/e2e/auth.contract.spec.ts` — 5 tests
+### `test/e2e/auth.contract.spec.ts` — 6 tests
 
 Cette suite démarre une vraie application Fastify de test avec `AuthController`, le filtre d’erreur global et des services maîtrisés :
 
-1. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
-2. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
-3. Vérifie par HTTP qu’un rôle `superadmin` injecté dans l’inscription est refusé avant d’atteindre le service.
-4. Vérifie le format stable `404 route_not_found` pour une route inconnue.
-5. Vérifie l’existence, le statut `201`, l’en-tête secret et le payload de la route de bootstrap superadmin réservée au développement.
+1. Vérifie que `POST /api/auth/otp/send` accepte l’en-tête d’idempotence UUID v4, répond `202` et transmet la clé au service.
+2. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
+3. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
+4. Vérifie par HTTP qu’un rôle `superadmin` injecté dans l’inscription est refusé avant d’atteindre le service.
+5. Vérifie le format stable `404 route_not_found` pour une route inconnue.
+6. Vérifie l’existence, le statut `201`, l’en-tête secret et le payload de la route de bootstrap superadmin réservée au développement.
 
 Le test métier d’inscription et le test HTTP ne sont pas des doublons obsolètes : le premier contrôle les arguments réellement envoyés au repository, le second contrôle la validation du contrat réseau.
 
@@ -227,23 +257,26 @@ Cette suite démarre Fastify avec le contrôleur de découverte et des dépendan
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 13 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 16 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
 1. **Tables requises** — vérifie l’existence des tables du contrat HTTP, des consentements, droits RGPD, blocages, notifications et tombstones.
-2. **Index requis et nettoyage** — vérifie les index de recherche, purge et pagination, l’unicité d’un consentement actif, l’index de purge des refresh tokens par expiration et l’absence des neuf index redondants ou obsolètes supprimés par la migration `008`.
-3. **Requêtes de rétention réelles** — exécute les dix requêtes contre PostgreSQL afin de détecter les erreurs SQL ou de typage que les mocks unitaires ne voient pas.
-4. **Démarrage Nest et OpenAPI** — démarre le graphe applicatif complet, génère le document Swagger, vérifie les schémas de consentement, découverte, matchs, exports et signalements, ainsi que l’absence de `/fake-match`.
-5. **Choix juridiques autorisés** — accepte exactement les quatre types supportés et confirme que `marketing` est rejeté par la base.
-6. **Concurrence des consentements** — lance deux écritures concurrentes, vérifie leur ordre exact, une seule ligne active et la cohérence de `currentConsents`.
-7. **Expiration arrivée à échéance** — confirme qu’un match en attente dont la fenêtre est dépassée devient `expired` avec purge à trente jours.
-8. **Fenêtre encore ouverte** — confirme qu’un match futur reste `awaiting_continuation` et sans date de purge.
-9. **Message après expiration** — confirme atomiquement le refus `expired`, la transition du match et l’absence totale d’insertion du message.
-10. **Curseur à la microseconde** — insère trois messages dans la même milliseconde avec des microsecondes différentes et vérifie trois pages successives sans saut ni doublon.
-11. **Éligibilité du feed** — exécute la requête PostgreSQL réelle, conserve le candidat compatible, exclut le blocage bilatéral, puis exclut un match existant.
-12. **Blocage** — confirme qu’un blocage clôt le match existant, programme sa purge et empêche la création d’un nouveau match pour la paire.
-13. **Effacement RGPD** — traite une demande d’effacement de `pending` à `in_progress`, puis `completed`; vérifie l’anonymisation du compte, la suppression du profil/préférences/position/blocages/état, le retrait des consentements, le masquage du message, la clôture du match et les journaux d’audit.
+2. **Index requis et nettoyage** — vérifie les index de recherche, purge et pagination, les index OTP dont la contrainte unique d’un code utilisable, l’unicité d’un consentement actif, l’index de purge des refresh tokens par expiration et l’absence des dix index redondants ou obsolètes supprimés par les migrations `008` et `010`.
+3. **Livraison OTP réelle** — confirme qu’un code devient utilisable seulement après acceptation fournisseur, qu’un retry de la clé n’insère rien et qu’un nouvel envoi échoué ne désactive pas le code précédent.
+4. **Livraison abandonnée** — vieillit une ligne `pending`, rejoue sa clé et vérifie son passage à `failed` avec `delivery_unknown`.
+5. **Concurrence OTP** — termine deux acceptations fournisseur simultanément et vérifie qu’un seul code reste `sent` et non utilisé.
+6. **Requêtes de rétention réelles** — exécute les dix requêtes contre PostgreSQL afin de détecter les erreurs SQL ou de typage que les mocks unitaires ne voient pas.
+7. **Démarrage Nest et OpenAPI** — démarre le graphe applicatif complet, génère le document Swagger, vérifie l’en-tête d’idempotence OTP, les schémas de consentement, découverte, matchs, exports et signalements, ainsi que l’absence de `/fake-match`.
+8. **Choix juridiques autorisés** — accepte exactement les quatre types supportés et confirme que `marketing` est rejeté par la base.
+9. **Concurrence des consentements** — lance deux écritures concurrentes, vérifie leur ordre exact, une seule ligne active et la cohérence de `currentConsents`.
+10. **Expiration arrivée à échéance** — confirme qu’un match en attente dont la fenêtre est dépassée devient `expired` avec purge à trente jours.
+11. **Fenêtre encore ouverte** — confirme qu’un match futur reste `awaiting_continuation` et sans date de purge.
+12. **Message après expiration** — confirme atomiquement le refus `expired`, la transition du match et l’absence totale d’insertion du message.
+13. **Curseur à la microseconde** — insère trois messages dans la même milliseconde avec des microsecondes différentes et vérifie trois pages successives sans saut ni doublon.
+14. **Éligibilité du feed** — exécute la requête PostgreSQL réelle, conserve le candidat compatible, exclut le blocage bilatéral, puis exclut un match existant.
+15. **Blocage** — confirme qu’un blocage clôt le match existant, programme sa purge et empêche la création d’un nouveau match pour la paire.
+16. **Effacement RGPD** — traite une demande d’effacement de `pending` à `in_progress`, puis `completed`; vérifie l’anonymisation du compte, la suppression du profil/préférences/position/blocages/état, le retrait des consentements, le masquage du message, la clôture du match et les journaux d’audit.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -278,11 +311,16 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
 5. activer explicitement `REQUIRE_POSTGRES_TESTS`, `REQUIRE_SCYLLA_TESTS` et `REQUIRE_REDIS_TESTS` ;
-6. exécuter `pnpm test` et vérifier que les 125 cas passent sans suite ignorée.
+6. exécuter `pnpm test` et vérifier que les 154 cas passent sans suite ignorée.
+
+Cette procédure a été exécutée avec succès le 17 août 2026 : **27 suites réussies, 154 cas réussis, aucun cas ignoré**.
+Un smoke test manuel complémentaire a validé la santé de l’API, l’envoi OTP Sweego réel, le retry idempotent sans
+second SMS, la consommation du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token
+et le logout `204`.
 
 ## Audit des tests obsolètes
 
-L’audit du 16 août 2026 n’a identifié aucun test obsolète à supprimer :
+L’audit du 17 août 2026 n’a identifié aucun test obsolète à supprimer :
 
 - aucune suite ne cible les anciens noms de consentement ou un consentement marketing ;
 - aucune suite n’attend l’ancien format libre de date de naissance ;
@@ -306,4 +344,4 @@ La suite actuelle est robuste sur les zones récemment refactorées, mais elle n
 - tests du worker sur des lignes réellement expirées, pas seulement sur une base vide ;
 - test d’une coupure réseau Redis réelle dans un environnement jetable, en complément de l’échec simulé déjà couvert ;
 - test d’un arrêt réseau Scylla réel dans un environnement local jetable, sans interrompre le keyspace partagé ;
-- tests du fournisseur SMS et des webhooks de paiement lorsqu’ils seront implémentés.
+- tests d’un webhook de suivi de livraison Sweego, d’une perte de réponse fournisseur et des webhooks de paiement lorsqu’ils seront implémentés.

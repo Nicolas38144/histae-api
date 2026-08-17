@@ -18,10 +18,8 @@ export class AuthService {
     private readonly tokens: TokenService,
   ) {}
 
-  async sendOtp(phoneInput: string): Promise<{ message: string }> {
-    this.otp.validatePhoneForDelivery(phoneInput);
-    // Intentionally unavailable until a real delivery provider persists and sends OTPs atomically.
-    throw apiError(503, 'otp_delivery_unavailable', 'SMS code delivery is not configured.');
+  async sendOtp(phoneInput: string, idempotencyKey: string | undefined): Promise<{ message: string }> {
+    return this.otp.send(phoneInput, idempotencyKey);
   }
 
   async verifyOtp(phoneInput: string, otp: string): Promise<TokenPair> {

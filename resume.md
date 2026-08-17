@@ -1,6 +1,6 @@
 # Histae API — résumé technique et fonctionnel détaillé
 
-Mise à jour : 16 août 2026.
+Mise à jour : 17 août 2026.
 
 ## 1. Vision du projet
 
@@ -22,10 +22,9 @@ La version actuelle fournit :
 - les migrations, la maintenance, la documentation OpenAPI et les sondes d’exploitation.
 - le feed de découverte, les décisions de swipe et la création de matchs par likes réciproques avec ScyllaDB.
 
-Deux ensembles fonctionnels restent volontairement incomplets :
+Un ensemble fonctionnel reste volontairement incomplet :
 
-1. la livraison réelle des OTP par SMS ;
-2. les paiements et webhooks d’abonnement.
+1. les paiements et webhooks d’abonnement.
 
 ## 2. État global
 
@@ -142,8 +141,11 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - paramètres PostgreSQL ;
 - versions et URL des quatre documents juridiques ;
 - `LEGAL_REVIEW_REFERENCE` en production ;
-- Redis avec TLS et mot de passe en production pour le rate limiting partagé.
-- ScyllaDB activée en production, avec TLS, authentification et facteur de réplication explicite.
+- Redis avec TLS et mot de passe en production pour le rate limiting partagé ;
+- ScyllaDB activée en production, avec TLS, authentification et facteur de réplication explicite ;
+- `SMS_PROVIDER`, `SWEEGO_API_KEY`, `SWEEGO_API_URL`, `SWEEGO_SMS_SENDER_ID`, `SWEEGO_SMS_REGION`, `SWEEGO_TIMEOUT` et `OTP_TTL` pour la livraison des OTP.
+
+`.env.example` est désormais versionné tandis que `.env` reste ignoré. Un inventaire statique compare les variables lues par `src`, `scripts` et `test` aux affectations de l’exemple : **92 variables utilisées, 92 documentées, aucune manquante**. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides. Les trois confirmations destructives y sont également présentes mais vides ; elles doivent être définies temporairement dans le terminal au moment de l’opération concernée.
 
 ### Pool PostgreSQL
 
@@ -170,16 +172,16 @@ Nest active les shutdown hooks. À l’arrêt :
 
 ### Téléphone
 
-- Le numéro est normalisé au format E.164.
+- Le numéro est normalisé au format E.164 et limité actuellement à la France (`+33` suivi de neuf chiffres sans zéro national).
 - Il est chiffré avec AES-256-GCM pour les cas nécessitant sa récupération.
 - Un HMAC-SHA-256 déterministe est stocké pour l’unicité et les recherches.
 - Le numéro en clair n’est pas persisté.
 
 ### OTP
 
-Le schéma et la consommation des OTP existent : hash, expiration, consommation unique et index de recherche. Cependant, aucun fournisseur SMS réel n’est encore branché. `POST /api/auth/otp/send` répond donc volontairement `503 otp_delivery_unavailable` au lieu de prétendre avoir envoyé un code.
+`POST /api/auth/otp/send` livre désormais un SMS transactionnel réel avec Sweego. La requête exige un en-tête `Idempotency-Key` UUID v4. L’API persiste d’abord le hash du code avec l’état `pending`, appelle Sweego avec un délai maximal, puis rend le code utilisable seulement après une réponse HTTP `200` contenant les identifiants de transaction et de message attendus. Une demande restée `pending` au-delà du timeout fournisseur et de cinq secondes de grâce est marquée `failed` lors de son prochain retry. Les états `pending`, `sent` et `failed`, l’identifiant de campagne et les identifiants fournisseur restent traçables sans persister le code en clair.
 
-L’intégration future devra rendre atomiques la persistance de l’OTP et la demande d’envoi au fournisseur, avec gestion des retries, délais, idempotence et observabilité.
+L’idempotence est garantie au niveau applicatif : rejouer la même clé pour le même numéro ne déclenche pas un second appel, tandis qu’une réutilisation pour un autre numéro renvoie `409`. L’activation d’un OTP acquiert un verrou transactionnel dérivé du hash téléphone ; un index PostgreSQL unique impose en complément un seul code `sent` non utilisé par téléphone. Aucun système distribué ne peut rendre atomiques une transaction PostgreSQL et un appel HTTP externe : si Sweego accepte un SMS mais que sa réponse est perdue, le code reste volontairement inutilisable et un retry avec une nouvelle clé peut produire un second SMS. Un suivi de livraison par webhook reste donc souhaitable pour l’observabilité opérationnelle.
 
 ### Access tokens
 
@@ -698,7 +700,7 @@ Les index conservés couvrent :
 - signalements en attente ;
 - notifications non lues et expirées.
 
-La migration `008` retire neuf index redondants, remplacés ou sans requête correspondante : doublons du hash téléphone et du JTI, ancien index des messages, index simple du statut des signalements, index simple des consentements, ancien tri par dernier message, index des comptes actifs, index d’anonymisation différée et ancien index partiel des refresh tokens. Ce dernier est remplacé par `idx_refresh_tokens_expires(expires_at)`, aligné sur la purge globale réellement exécutée.
+La migration `008` retire neuf index redondants, remplacés ou sans requête correspondante : doublons du hash téléphone et du JTI, ancien index des messages, index simple du statut des signalements, index simple des consentements, ancien tri par dernier message, index des comptes actifs, index d’anonymisation différée et ancien index partiel des refresh tokens. Ce dernier est remplacé par `idx_refresh_tokens_expires(expires_at)`, aligné sur la purge globale réellement exécutée. La migration `010` retire ensuite l’ancien index partiel des OTP utilisables, devenu redondant avec la contrainte unique par téléphone.
 
 ScyllaDB n’utilise volontairement aucun index secondaire. Les deux tables CQL sont dénormalisées selon leurs
 requêtes exactes, réparties en 32 partitions logiques par utilisateur et nettoyées par TTL. Les profils et
@@ -719,6 +721,8 @@ Les migrations versionnées sont :
 | `006_privacy_workflows` | demandes RGPD, accès, blocages, tombstones et anonymisation étendue |
 | `007_keyset_pagination_indexes` | index des paginations par curseur |
 | `008_index_cleanup` | suppression de neuf index redondants ou obsolètes et indexation directe de l’expiration des refresh tokens |
+| `009_otp_sms_delivery` | idempotence des demandes OTP, états de livraison Sweego et identifiants fournisseur |
+| `010_single_usable_otp` | reprise des doublons historiques, remplacement de l’ancien index partiel et contrainte d’un seul OTP utilisable par téléphone |
 
 Le moteur de migration :
 
@@ -728,9 +732,9 @@ Le moteur de migration :
 - refuse un checksum modifié pour une migration déjà appliquée ;
 - permet des exécutions répétées sans réappliquer les migrations.
 
-`pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues, refuse `ENV=production` et exige `CONFIRM_DB_RESET=RESET`.
+`pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev`, un hôte PostgreSQL local et `CONFIRM_DB_RESET=RESET`.
 
-Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les huit migrations conduisent au même ensemble d’index.
+Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les dix migrations conduisent au même ensemble d’index.
 
 Le schéma Scylla suit un registre séparé `scylla_schema_migrations`. `pnpm run scylla:migrate` crée le keyspace
 avec `NetworkTopologyStrategy`, applique `scylla/001_discovery.cql`, enregistre son SHA-256 et refuse toute
@@ -839,12 +843,14 @@ test/
 └── integration/
 ```
 
-État validé :
+Inventaire actuel :
 
-- 19 fichiers/suites unitaires, 90 cas ;
-- 2 suites e2e, 10 cas ;
-- 3 suites d’intégration, 25 cas dont 10 conditionnés par Scylla et 2 par Redis ;
-- total complet : 24 fichiers/suites Jest et 125 cas.
+- 22 fichiers/suites unitaires, 115 cas ;
+- 2 suites e2e, 11 cas ;
+- 3 suites d’intégration, 28 cas dont 10 conditionnés par Scylla et 2 par Redis ;
+- total complet : 27 fichiers/suites Jest et 154 cas.
+
+Le 17 août 2026, TypeScript, ESLint, le build et les 154 cas Jest ont été validés localement. Les 27 suites passent sans test ignoré avec PostgreSQL, ScyllaDB et Redis réels. Elles couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
 
@@ -862,8 +868,10 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 4. `pnpm run typecheck` ;
 5. `pnpm run test:unit` ;
 6. `pnpm run test:e2e` ;
-7. `pnpm run test:integration` avec intégration obligatoire ;
-8. `pnpm run build`.
+7. `pnpm test` avec les trois intégrations obligatoires ;
+8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
+
+Cette séquence a été exécutée avec succès le 17 août 2026 : build réussi, 154 cas Jest réussis sur 154 et aucun cas ignoré. Le smoke test a confirmé `/health/live`, `/health/ready`, l’envoi Sweego réel, l’absence de second SMS lors du retry d’une même clé, la vérification OTP, l’accès Bearer, la rotation du refresh token, le refus de l’ancien token et le logout `204`.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 
@@ -880,14 +888,14 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 - Les migrations sont reproductibles et protégées contre les modifications silencieuses.
 - L’exploitation possède maintenant health checks, shutdown propre et worker séparé.
 - La validation locale couvre de vraies instances PostgreSQL, ScyllaDB et Redis.
+- Le parcours OTP réel a été validé de bout en bout avec Sweego, idempotence et rotation des jetons.
 - Les métadonnées d’injection Nest sont protégées par un test de non-régression dédié.
 
 ## 27. Limites et risques encore ouverts
 
 ### Bloquants fonctionnels
 
-1. Aucun SMS OTP réel : impossible d’authentifier un utilisateur réel sans intégration externe.
-2. Aucun paiement/webhook : les plans sont lisibles mais non alimentés commercialement.
+1. Aucun paiement/webhook : les plans sont lisibles mais non alimentés commercialement.
 
 ### Bloquants conformité/organisation
 
@@ -918,13 +926,13 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 - maintenance sur un jeu de données expiré complet ;
 - coupure réseau Redis réelle dans un environnement jetable ; le `503` et le partage inter-instances sont déjà couverts ;
 - panne réseau Scylla réelle dans un environnement jetable, la panne simulée et son contrat HTTP étant déjà couverts ;
-- SMS et paiements futurs.
+- suivi de livraison Sweego par webhook et paiements futurs.
 
 ## 28. Feuille de route recommandée
 
 ### Avant bêta interne
 
-1. Brancher un fournisseur SMS avec idempotence et suivi de livraison.
+1. Valider le Sender ID Sweego, effectuer un envoi canari réel et ajouter le suivi de livraison opérationnel.
 2. Ajouter les contrats HTTP e2e manquants.
 3. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
 4. Ajouter métriques et alertes minimales.
@@ -1009,4 +1017,4 @@ concurrence transactionnelle, découverte hybride PostgreSQL/Scylla, modèle de 
 effacement inter-bases, rétention automatisée, migrations reproductibles, pagination stable, documentation
 OpenAPI et tests réels PostgreSQL.
 
-Le principal risque n’est plus la structure interne du code, mais l’intégration des briques externes et opérationnelles : SMS, paiement, supervision, sauvegardes, audit de sécurité et validation juridique. La prochaine phase doit donc privilégier ces dépendances de production et étendre les contrats e2e, plutôt que réécrire le socle déjà en place.
+Le principal risque n’est plus la structure interne du code, mais l’exploitation des briques externes : validation réelle du canal SMS, paiement, supervision, sauvegardes, audit de sécurité et validation juridique. La prochaine phase doit donc privilégier ces dépendances de production et étendre les contrats e2e, plutôt que réécrire le socle déjà en place.

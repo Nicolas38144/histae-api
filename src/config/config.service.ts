@@ -5,6 +5,7 @@ import { parsePhoneKey } from '../crypto/phone-crypto';
 export type LimitPolicy = { max: number; windowMs: number };
 type Environment = 'development' | 'test' | 'production';
 type MaintenanceMode = 'api' | 'worker' | 'disabled';
+type SmsProvider = 'disabled' | 'sweego';
 
 type RedisConfig = {
   address: string;
@@ -50,6 +51,15 @@ export class ConfigService {
   };
   readonly jwt: { secret: string; accessTtlMs: number; refreshTtlMs: number };
   readonly phone: { encryptionKey: string; hashKey: string };
+  readonly sms: {
+    provider: SmsProvider;
+    endpoint: string;
+    apiKey: string;
+    senderId: string;
+    region: string;
+    timeoutMillis: number;
+    otpTtlMillis: number;
+  };
   readonly scylla: ScyllaConfig;
   readonly redis: RedisConfig;
   readonly legal: {
@@ -135,6 +145,28 @@ export class ConfigService {
       refreshTtlMs: duration(envOr('JWT_REFRESH_TTL', '4320h'), 'JWT_REFRESH_TTL'),
     };
     this.phone = { encryptionKey, hashKey };
+    const smsProviderValue = smsProvider(envOr('SMS_PROVIDER', this.env === 'production' ? 'sweego' : 'disabled'));
+    const sweegoApiKey = process.env.SWEEGO_API_KEY?.trim() ?? '';
+    const sweegoSenderId = process.env.SWEEGO_SMS_SENDER_ID?.trim() ?? '';
+    if (this.env === 'production' && smsProviderValue !== 'sweego') {
+      throw new Error('config: production requires SMS_PROVIDER=sweego');
+    }
+    if (smsProviderValue === 'sweego' && (!sweegoApiKey || !sweegoSenderId)) {
+      throw new Error('config: SWEEGO_API_KEY and SWEEGO_SMS_SENDER_ID are required when SMS_PROVIDER=sweego');
+    }
+    const smsTimeoutMillis = duration(envOr('SWEEGO_TIMEOUT', '10s'), 'SWEEGO_TIMEOUT');
+    if (smsTimeoutMillis > 30_000) throw new Error('config: SWEEGO_TIMEOUT must not exceed 30s');
+    const otpTtlMillis = duration(envOr('OTP_TTL', '10m'), 'OTP_TTL');
+    if (otpTtlMillis < 60_000 || otpTtlMillis > 30 * 60_000) throw new Error('config: OTP_TTL must be between 1m and 30m');
+    this.sms = {
+      provider: smsProviderValue,
+      endpoint: httpsUrl(envOr('SWEEGO_API_URL', 'https://api.sweego.io/send'), 'SWEEGO_API_URL'),
+      apiKey: sweegoApiKey,
+      senderId: sweegoSenderId ? smsSenderId(sweegoSenderId) : '',
+      region: smsRegion(envOr('SWEEGO_SMS_REGION', 'FR')),
+      timeoutMillis: smsTimeoutMillis,
+      otpTtlMillis,
+    };
     const termsVersion = envOr('TERMS_OF_SERVICE_VERSION', '');
     const privacyVersion = envOr('PRIVACY_POLICY_VERSION', '');
     const sensitiveDataConsentVersion = envOr('SENSITIVE_DATA_CONSENT_VERSION', '');
@@ -257,6 +289,35 @@ function optionalBoolean(name: string, fallback: boolean): boolean {
 function maintenanceMode(value: string): MaintenanceMode {
   if (value === 'api' || value === 'worker' || value === 'disabled') return value;
   throw new Error('config: MAINTENANCE_MODE must be api, worker, or disabled');
+}
+
+function smsProvider(value: string): SmsProvider {
+  if (value === 'disabled' || value === 'sweego') return value;
+  throw new Error('config: SMS_PROVIDER must be disabled or sweego');
+}
+
+function smsSenderId(value: string): string {
+  if (!/^[A-Za-z0-9]{3,11}$/.test(value)) {
+    throw new Error('config: SWEEGO_SMS_SENDER_ID must contain 3 to 11 letters or digits');
+  }
+  return value;
+}
+
+function smsRegion(value: string): string {
+  const normalized = value.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalized)) throw new Error('config: SWEEGO_SMS_REGION must be an ISO 3166-1 alpha-2 code');
+  if (normalized !== 'FR') throw new Error('config: SWEEGO_SMS_REGION must be FR while OTP delivery is restricted to French phone numbers');
+  return normalized;
+}
+
+function httpsUrl(value: string, name: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:') throw new Error('invalid protocol');
+    return parsed.toString();
+  } catch {
+    throw new Error(`config: ${name} must be an absolute HTTPS URL`);
+  }
 }
 
 function legalUrl(value: string, name: string, environment: Environment): string {

@@ -4,6 +4,7 @@ import { DevelopmentOnlyGuard, JwtActiveGuard } from '../../../src/auth/auth.gua
 import { AuthRepository } from '../../../src/auth/auth.repository';
 import { AuthService } from '../../../src/auth/auth.service';
 import { OtpService } from '../../../src/auth/otp.service';
+import { SweegoSmsService } from '../../../src/auth/sweego-sms.service';
 import { TokenService } from '../../../src/auth/token.service';
 import { DatabaseService } from '../../../src/database/database.service';
 import { DiscoveryController } from '../../../src/discovery/discovery.controller';
@@ -36,7 +37,7 @@ import { UsersRepository } from '../../../src/users/users.repository';
 import { UsersService } from '../../../src/users/users.service';
 
 const injectedClasses = [
-  AuthController, JwtActiveGuard, DevelopmentOnlyGuard, AuthRepository, AuthService, OtpService, TokenService,
+  AuthController, JwtActiveGuard, DevelopmentOnlyGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, HealthController, RateLimitService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,

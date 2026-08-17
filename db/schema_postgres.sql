@@ -201,16 +201,27 @@ CREATE INDEX IF NOT EXISTS idx_dal_date          ON data_access_log(accessed_at 
 -- Durée de conservation : auto-purge des OTP expirés via job planifié
 -- =========================================
 CREATE TABLE otp_verification (
-  id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
-  phone_number_hash TEXT        NOT NULL,
-  otp_hash          TEXT        NOT NULL,                      -- HMAC-SHA-256 applicatif de l'OTP, jamais en clair
-  expires_at        TIMESTAMPTZ NOT NULL,
-  used              BOOLEAN     NOT NULL DEFAULT false,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                      UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  phone_number_hash       TEXT        NOT NULL,
+  otp_hash                TEXT        NOT NULL,                -- HMAC-SHA-256 applicatif de l'OTP, jamais en clair
+  expires_at              TIMESTAMPTZ NOT NULL,
+  used                    BOOLEAN     NOT NULL DEFAULT false,
+  idempotency_key         UUID        NOT NULL DEFAULT uuid_generate_v4(),
+  delivery_status         TEXT        NOT NULL DEFAULT 'pending'
+    CONSTRAINT chk_otp_delivery_status CHECK (delivery_status IN ('pending', 'sent', 'failed')),
+  provider                TEXT        NOT NULL DEFAULT 'sweego',
+  provider_transaction_id TEXT,
+  provider_message_id     TEXT,
+  delivery_error_code     TEXT,
+  sent_at                 TIMESTAMPTZ,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_otp_phone   ON otp_verification(phone_number_hash);
-CREATE INDEX IF NOT EXISTS idx_otp_expires ON otp_verification(expires_at);
+CREATE INDEX IF NOT EXISTS idx_otp_phone       ON otp_verification(phone_number_hash);
+CREATE INDEX IF NOT EXISTS idx_otp_expires     ON otp_verification(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_otp_idempotency ON otp_verification(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_otp_one_usable_per_phone ON otp_verification(phone_number_hash)
+  WHERE delivery_status = 'sent' AND used = false;
 
 
 -- =========================================
