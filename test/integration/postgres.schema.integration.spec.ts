@@ -16,7 +16,7 @@ import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { UsersRepository } from '../../src/users/users.repository';
 
 dotenv.config();
-const REQUIRED = process.env.REQUIRE_POSTGRES_TESTS === 'true';
+process.env.MAINTENANCE_MODE = 'disabled';
 const poolConfig: PoolConfig = {
   host: process.env.POSTGRES_HOST,
   port: Number(process.env.POSTGRES_PORT ?? 5432),
@@ -25,12 +25,11 @@ const poolConfig: PoolConfig = {
   database: process.env.POSTGRES_DB,
   ssl: process.env.POSTGRES_SSLMODE !== 'disable',
 };
-if (REQUIRED && (process.env.ENV !== 'development' || process.env.POSTGRES_DB !== 'histae-dev')) {
+if (process.env.ENV !== 'development' || process.env.POSTGRES_DB !== 'histae-dev') {
   throw new Error('PostgreSQL integration tests only allow ENV=development with POSTGRES_DB=histae-dev.');
 }
-const describePostgres = REQUIRED ? describe : describe.skip;
 
-describePostgres('PostgreSQL schema contract', () => {
+describe('PostgreSQL schema contract', () => {
   let pool: Pool;
 
   beforeAll(async () => {

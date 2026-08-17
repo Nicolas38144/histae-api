@@ -213,36 +213,33 @@ L’inventaire détaillé des 149 cas, leurs objectifs et leurs prérequis se tr
 ```powershell
 pnpm run test:unit
 pnpm run test:e2e
+pnpm test
 ```
 
 Le test d'intégration PostgreSQL est volontairement séparé. Il utilise exclusivement la base locale `histae-dev`
 définie dans `.env`, crée des UUID temporaires et nettoie précisément ses données :
 
 ```powershell
-$env:REQUIRE_POSTGRES_TESTS = 'true'
-pnpm run test:integration
+pnpm run test:integration:postgres
 ```
 
 La suite Scylla réelle utilise des UUID temporaires dans `histae_discovery` et `histae-dev`, sans opération globale sur les tables :
 
 ```powershell
-$env:TEST_SCYLLA_KEYSPACE = 'histae_discovery'
-$env:REQUIRE_SCYLLA_TESTS = 'true'
 pnpm run test:integration:scylla
 ```
 
 La suite Redis utilise la base logique isolée 15 et vérifie le partage atomique d’un compteur entre deux instances applicatives :
 
 ```powershell
-$env:TEST_REDIS_DB = '15'
-$env:TEST_REDIS_ADDR = '127.0.0.1:6379'
-$env:REQUIRE_REDIS_TESTS = 'true'
 pnpm run test:integration:redis
 ```
+
+Les trois suites réelles peuvent être lancées ensemble avec `pnpm run test:integration`.
 
 Toutes les vérifications sont lancées localement. Les suites PostgreSQL et Scylla refusent une cible différente
 de `ENV=development`, `POSTGRES_DB=histae-dev` et du keyspace `histae_discovery`.
 
-Validation du 17 août 2026 : le lint, le typecheck et le build réussissent. Sans infrastructure externe active,
-23 suites et 121 cas passent ; les 3 suites et 28 cas PostgreSQL, ScyllaDB et Redis sont ignorés. L’inventaire
-complet reste de 26 suites et 149 cas.
+Validation du 17 août 2026 : le lint, le typecheck, le build et les 23 suites autonomes avec leurs 121 cas
+réussissent. Les 3 suites et 28 cas PostgreSQL, ScyllaDB et Redis s’exécutent séparément ; l’inventaire complet
+reste de 26 suites et 149 cas.

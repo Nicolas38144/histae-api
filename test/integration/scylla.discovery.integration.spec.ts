@@ -17,12 +17,11 @@ import { ScyllaUnavailableError } from '../../src/scylla/scylla.service';
 
 dotenv.config();
 
-const REQUIRED = process.env.REQUIRE_SCYLLA_TESTS === 'true';
-const TEST_KEYSPACE = process.env.TEST_SCYLLA_KEYSPACE ?? 'histae_discovery';
+const TEST_KEYSPACE = 'histae_discovery';
+const TEST_CONTACT_POINTS = (process.env.SCYLLA_CONTACT_POINTS ?? '127.0.0.1').split(',').map((value) => value.trim());
 const LEGAL_VERSION = 'scylla-integration-v1';
-const describeScylla = REQUIRED ? describe : describe.skip;
 
-if (REQUIRED) assertDevelopmentTargets();
+assertDevelopmentTargets();
 
 const postgresConfig: PoolConfig = {
   host: process.env.POSTGRES_HOST,
@@ -35,12 +34,12 @@ const postgresConfig: PoolConfig = {
 
 const scyllaConfig: ScyllaConfig = {
   enabled: true,
-  contactPoints: (process.env.TEST_SCYLLA_CONTACT_POINTS ?? '127.0.0.1').split(',').map((value) => value.trim()),
-  port: Number(process.env.TEST_SCYLLA_PORT ?? 9042),
-  localDataCenter: process.env.TEST_SCYLLA_LOCAL_DC ?? 'datacenter1',
+  contactPoints: TEST_CONTACT_POINTS,
+  port: Number(process.env.SCYLLA_PORT ?? 9042),
+  localDataCenter: process.env.SCYLLA_LOCAL_DATACENTER ?? 'datacenter1',
   keyspace: TEST_KEYSPACE,
-  username: process.env.TEST_SCYLLA_USERNAME ?? '',
-  password: process.env.TEST_SCYLLA_PASSWORD ?? '',
+  username: process.env.SCYLLA_USERNAME ?? '',
+  password: process.env.SCYLLA_PASSWORD ?? '',
   tls: false,
   tlsCaPath: '',
   replicationFactor: 1,
@@ -50,7 +49,7 @@ const scyllaConfig: ScyllaConfig = {
 
 jest.setTimeout(120_000);
 
-describeScylla('Discovery with real ScyllaDB and PostgreSQL development stores', () => {
+describe('Discovery with real ScyllaDB and PostgreSQL development stores', () => {
   let client: Client;
   let pool: Pool;
   let store: DiscoveryStore;
@@ -250,11 +249,12 @@ describeScylla('Discovery with real ScyllaDB and PostgreSQL development stores',
 });
 
 function assertDevelopmentTargets(): void {
-  if (TEST_KEYSPACE !== 'histae_discovery') {
-    throw new Error('Scylla integration tests only allow TEST_SCYLLA_KEYSPACE=histae_discovery.');
-  }
   if (process.env.ENV !== 'development' || process.env.POSTGRES_DB !== 'histae-dev') {
     throw new Error('Scylla integration tests only allow ENV=development with POSTGRES_DB=histae-dev.');
+  }
+  const localHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+  if (!TEST_CONTACT_POINTS.length || TEST_CONTACT_POINTS.some((host) => !localHosts.has(host))) {
+    throw new Error('Scylla integration tests only allow local SCYLLA_CONTACT_POINTS.');
   }
 }
 

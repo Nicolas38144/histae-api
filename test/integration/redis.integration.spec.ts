@@ -6,15 +6,9 @@ import { RedisService } from '../../src/redis/redis.service';
 
 dotenv.config();
 
-const REQUIRED = process.env.REQUIRE_REDIS_TESTS === 'true';
-const TEST_REDIS_DB = Number(process.env.TEST_REDIS_DB ?? 15);
-const describeRedis = REQUIRED ? describe : describe.skip;
+const ISOLATED_REDIS_DATABASE = 15;
 
-if (REQUIRED && TEST_REDIS_DB !== 15) {
-  throw new Error('Redis integration tests only allow TEST_REDIS_DB=15.');
-}
-
-describeRedis('Redis distributed request protection', () => {
+describe('Redis distributed request protection', () => {
   let firstRedis: RedisService;
   let secondRedis: RedisService;
   let firstLimits: RateLimitService;
@@ -51,9 +45,9 @@ describeRedis('Redis distributed request protection', () => {
 function redisTestConfig(): ConfigService {
   return {
     redis: {
-      address: process.env.TEST_REDIS_ADDR ?? '127.0.0.1:6379',
-      password: process.env.TEST_REDIS_PASSWORD ?? '',
-      db: TEST_REDIS_DB,
+      address: '127.0.0.1:6379',
+      password: process.env.REDIS_PASSWORD ?? '',
+      db: ISOLATED_REDIS_DATABASE,
       tls: false,
       connectTimeoutMillis: 5_000,
       commandTimeoutMillis: 1_000,
@@ -62,4 +56,3 @@ function redisTestConfig(): ConfigService {
     rateLimit: { store: 'redis' },
   } as ConfigService;
 }
-

@@ -843,10 +843,10 @@ Inventaire actuel :
 
 - 21 fichiers/suites unitaires, 112 cas ;
 - 2 suites e2e, 9 cas ;
-- 3 suites d’intégration, 28 cas dont 10 conditionnés par Scylla et 2 par Redis ;
+- 3 suites d’intégration, 28 cas dont 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
 - total complet : 26 fichiers/suites Jest et 149 cas.
 
-Le 17 août 2026, TypeScript, ESLint et le build ont été validés localement. Sans infrastructure externe active, Jest a confirmé l’inventaire de 149 cas : 121 réussis et 28 ignorés dans les 3 suites d’intégration conditionnelles. Les tests exécutés couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
+Le 17 août 2026, TypeScript, ESLint, le build et les 121 cas autonomes ont été validés localement. Les 28 intégrations PostgreSQL, ScyllaDB et Redis s’exécutent séparément, sans flag d’activation. Les tests exécutés couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
 
@@ -864,10 +864,10 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 4. `pnpm run typecheck` ;
 5. `pnpm run test:unit` ;
 6. `pnpm run test:e2e` ;
-7. `pnpm test` avec les trois intégrations obligatoires ;
+7. `pnpm run test:integration` avec les trois dépendances réelles ;
 8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
 
-Pour cette mise à jour, le lint, le typecheck, le build et les 121 cas indépendants de l’infrastructure ont réussi le 17 août 2026 ; les 28 cas PostgreSQL, ScyllaDB et Redis ont été ignorés faute de services actifs. Une exécution des 149 cas avec ces trois dépendances reste requise avant livraison.
+Pour cette mise à jour, le lint, le typecheck, le build et les 121 cas indépendants de l’infrastructure ont réussi le 17 août 2026. Les 28 cas PostgreSQL, ScyllaDB et Redis n’ont pas été exécutés faute de services actifs et restent requis avant livraison.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 

@@ -23,15 +23,14 @@ Inventaire statique actuel : **26 fichiers de test, 26 suites Jest et 149 cas** 
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 21 suites unitaires, 2 suites e2e et 3 suites d’intégration. Chaque intégration réelle est ignorée sauf si son flag `REQUIRE_*_TESTS` vaut `true`. Avec uniquement `REQUIRE_POSTGRES_TESTS=true`, 137 cas doivent être exécutés et 12 ignorés ; sans aucun flag d’intégration, 121 cas doivent être exécutés et 28 ignorés. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 36 classes injectées Nest.
+Jest affiche 21 suites unitaires, 2 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 23 suites autonomes et leurs 121 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 28 cas, sans flag d’activation. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 36 classes injectées Nest.
 
-Le 17 août 2026, TypeScript, ESLint et le build ont réussi. Sans infrastructure externe active, Jest a confirmé l’inventaire de 149 cas : 121 réussis et 28 ignorés dans les 3 suites d’intégration conditionnelles.
+Le 17 août 2026, TypeScript, ESLint, le build et les 121 cas autonomes ont réussi. Les 28 intégrations réelles sont exécutées séparément lorsque PostgreSQL, ScyllaDB et Redis sont démarrés.
 
 ## Commandes
 
 ```powershell
-# Tous les tests découverts par Jest. Les intégrations réelles restent
-# désactivées tant que leurs flags REQUIRE_* ne sont pas positionnés.
+# Tous les tests autonomes, sans infrastructure externe.
 pnpm test
 
 # Tests isolés, sans PostgreSQL ni Redis.
@@ -40,29 +39,25 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Tests PostgreSQL/OpenAPI réels.
-# Redis Docker doit être démarré car le graphe Nest complet vérifie sa connexion.
-$env:REQUIRE_POSTGRES_TESTS = 'true'
-$env:MAINTENANCE_MODE = 'disabled'
+# Les 28 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
+# Tests PostgreSQL/OpenAPI réels uniquement.
+# Redis Docker doit être démarré car le graphe Nest complet vérifie sa connexion.
+pnpm run test:integration:postgres
+
 # Les 10 scénarios Scylla réels, avec PostgreSQL de développement.
-$env:TEST_SCYLLA_KEYSPACE = 'histae_discovery'
-$env:REQUIRE_SCYLLA_TESTS = 'true'
 pnpm run test:integration:scylla
 
 # Redis réel, exclusivement dans la base logique 15.
-$env:TEST_REDIS_ADDR = '127.0.0.1:6379'
-$env:TEST_REDIS_DB = '15'
-$env:REQUIRE_REDIS_TESTS = 'true'
 pnpm run test:integration:redis
 
 # Mode interactif.
 pnpm run test:watch
 ```
 
-Les suites PostgreSQL et Scylla lisent directement la configuration PostgreSQL de `.env`. Lorsqu'elles sont
-activées, elles refusent toute cible autre que `ENV=development` et `POSTGRES_DB=histae-dev`. Elles utilisent des
+Les suites PostgreSQL et Scylla lisent directement la configuration PostgreSQL de `.env`. Elles refusent toute
+cible autre que `ENV=development` et `POSTGRES_DB=histae-dev`. Elles utilisent des
 UUID aléatoires, annulent les scénarios transactionnels et nettoient précisément les autres données temporaires.
 La suite Scylla utilise le keyspace `histae_discovery` sans `DROP`, `TRUNCATE` ou `ALTER TABLE`. La suite Redis
 refuse toute base logique autre que 15 et ses compteurs uniques expirent automatiquement après deux secondes.
@@ -299,10 +294,10 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. activer explicitement `REQUIRE_POSTGRES_TESTS`, `REQUIRE_SCYLLA_TESTS` et `REQUIRE_REDIS_TESTS` ;
-6. exécuter `pnpm test` et vérifier que les 149 cas passent sans suite ignorée.
+5. exécuter `pnpm test` pour les 121 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 28 cas réels et vérifier que les 149 cas passent au total.
 
-La validation de cette mise à jour, exécutée le 17 août 2026 sans infrastructure externe active, a réussi : **23 suites et 121 cas réussis, 3 suites et 28 cas d’intégration ignorés**. Une exécution avec PostgreSQL, ScyllaDB et Redis actifs reste nécessaire avant livraison pour valider les 149 cas sans exception.
+La validation de cette mise à jour, exécutée le 17 août 2026 sans infrastructure externe active, a réussi : **23 suites et 121 cas autonomes réussis**. Une exécution des 28 intégrations avec PostgreSQL, ScyllaDB et Redis actifs reste nécessaire avant livraison.
 Un smoke test manuel complémentaire a validé la santé de l’API, l’envoi OTP Sweego réel, le retry idempotent sans
 second SMS, la consommation du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token
 et le logout `204`.
