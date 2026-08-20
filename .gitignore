@@ -1,6 +1,8 @@
 # Dependencies and package-manager cache
 /node_modules/
 /.pnpm-store/
+/package-lock.json
+/npm-shrinkwrap.json
 
 # Compiled output and TypeScript incremental state
 /dist/

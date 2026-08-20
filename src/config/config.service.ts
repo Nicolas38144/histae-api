@@ -74,6 +74,7 @@ export class ConfigService {
     reviewReference: string;
   };
   readonly trustProxy: boolean;
+  readonly corsOrigins: string[];
   readonly openApiEnabled: boolean;
   readonly maintenanceMode: MaintenanceMode;
   readonly rateLimit: {
@@ -191,6 +192,7 @@ export class ConfigService {
       reviewReference: legalReviewReference || 'not-reviewed-for-production',
     };
     this.trustProxy = boolean(envOr('TRUST_PROXY', 'false'), 'TRUST_PROXY');
+    this.corsOrigins = webOrigins(envOr('CORS_ORIGINS', this.env === 'development' ? 'http://localhost:5173' : ''), this.env);
     this.openApiEnabled = optionalBoolean('OPENAPI_ENABLED', this.env !== 'production');
     this.maintenanceMode = maintenanceMode(envOr('MAINTENANCE_MODE', this.env === 'production' ? 'disabled' : 'api'));
     const store = envOr('RATE_LIMIT_STORE', 'memory').toLowerCase();
@@ -289,6 +291,21 @@ function maintenanceMode(value: string): MaintenanceMode {
 function smsProvider(value: string): SmsProvider {
   if (value === 'disabled' || value === 'sweego') return value;
   throw new Error('config: SMS_PROVIDER must be disabled or sweego');
+}
+
+function webOrigins(value: string, environment: Environment): string[] {
+  if (!value.trim()) return [];
+  const origins = value.split(',').map((item) => item.trim()).filter(Boolean);
+  if (new Set(origins).size !== origins.length) throw new Error('config: CORS_ORIGINS contains duplicates');
+  for (const origin of origins) {
+    try {
+      const parsed = new URL(origin);
+      if (parsed.origin !== origin || (parsed.protocol !== 'https:' && (environment === 'production' || parsed.protocol !== 'http:'))) throw new Error();
+    } catch {
+      throw new Error('config: CORS_ORIGINS must contain comma-separated HTTP(S) origins and HTTPS in production');
+    }
+  }
+  return origins;
 }
 
 function smsSenderId(value: string): string {

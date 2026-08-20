@@ -8,6 +8,7 @@ import { PrivacyModule } from './privacy/privacy.module';
 import { ReportsModule } from './reports/reports.module';
 import { TraitsModule } from './traits/traits.module';
 import { UsersModule } from './users/users.module';
+import { AdminModule } from './admin/admin.module';
 
-@Module({ imports: [CoreModule, AuthModule, UsersModule, PrivacyModule, TraitsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
+@Module({ imports: [CoreModule, AuthModule, AdminModule, UsersModule, PrivacyModule, TraitsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
 export class AppModule {}

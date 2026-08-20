@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsUUID } from 'class-validator';
+import { IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 
 export class UserIdParamDto {
@@ -27,3 +27,11 @@ export class SendMessageDto {
 }
 
 export class MatchPaginationDto extends PaginationDto {}
+
+export class AdminMatchPaginationDto extends MatchPaginationDto {
+  @ApiProperty({ minLength: 3, maxLength: 500, description: 'Justification stored in the personal-data access log.' })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+}

@@ -35,6 +35,9 @@ import { TraitsService } from '../../../src/traits/traits.service';
 import { UsersController } from '../../../src/users/users.controller';
 import { UsersRepository } from '../../../src/users/users.repository';
 import { UsersService } from '../../../src/users/users.service';
+import { AdminController } from '../../../src/admin/admin.controller';
+import { AdminRepository } from '../../../src/admin/admin.repository';
+import { AdminService } from '../../../src/admin/admin.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
@@ -46,6 +49,7 @@ const injectedClasses = [
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
   TraitsController, TraitsRepository, TraitsService,
   ReportsController, ReportsRepository, ReportsService,
+  AdminController, AdminRepository, AdminService,
 ];
 
 describe('Nest dependency metadata', () => {

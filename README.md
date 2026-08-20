@@ -4,6 +4,15 @@ Backend de l’application mobile Histae construit avec **NestJS 11**, **TypeScr
 
 ## Démarrage
 
+Le dépôt utilise exclusivement **pnpm 11.22.0** avec Node.js 22 ou plus récent. Corepack peut installer et
+sélectionner automatiquement la version déclarée dans `package.json` :
+
+```powershell
+corepack enable
+corepack install
+pnpm --version
+```
+
 Dans PowerShell :
 
 ```powershell

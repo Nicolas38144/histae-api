@@ -5,7 +5,7 @@ import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/v
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { ContinuationQuota } from './matches.service';
 import { MatchesService } from './matches.service';
-import { MatchIdParamDto, MatchMessageParamDto, MatchPaginationDto, SendMessageDto, UserIdParamDto } from './dto/matches.dto';
+import { AdminMatchPaginationDto, MatchIdParamDto, MatchMessageParamDto, MatchPaginationDto, SendMessageDto, UserIdParamDto } from './dto/matches.dto';
 import type { PublicMatch, PublicMessage } from './matches.mapper';
 import { ChatMessageResponseDto, ContinuationQuotaResponseDto, ContinuationResponseDto, MatchPageResponseDto, MessagePageResponseDto, RevealResponseDto } from './dto/matches.responses';
 import { MessageResponseDto } from '../common/dto/responses.dto';
@@ -38,9 +38,12 @@ export class MatchesController {
   @ApiOkResponse({ type: MatchPageResponseDto })
   async userMatches(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: UserIdParamDto,
-    @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: MatchPaginationDto,
+    @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: AdminMatchPaginationDto,
+    @Req() request: AuthenticatedRequest,
   ): Promise<{ matches: PublicMatch[]; next_cursor: string | null }> {
-    const page = await this.matches.list(params.userId, query.limit, query.offset, query.cursor);
+    const page = await this.matches.listForAdmin(
+      params.userId, userId(request), request.auth!.account.role, query.reason, query.limit, query.offset, query.cursor,
+    );
     return { matches: page.items, next_cursor: page.next_cursor };
   }
 

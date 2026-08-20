@@ -3,5 +3,7 @@ allowBuilds:
   '@scarf/scarf': false
   unrs-resolver: false
 overrides:
+  '@fastify/static': 10.1.2
+  adm-zip: 0.6.0
   find-my-way: 9.7.0
   js-yaml: 5.2.3

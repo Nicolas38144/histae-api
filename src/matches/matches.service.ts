@@ -57,6 +57,26 @@ export class MatchesService {
     return { items: page.items.map(toPublicMatch), next_cursor: page.next_cursor };
   }
 
+  async listForAdmin(
+    targetUserId: string,
+    adminId: string,
+    adminRole: string,
+    reason: string,
+    limit: number,
+    offset: number,
+    rawCursor?: string,
+  ): Promise<CursorPage<PublicMatch>> {
+    const normalizedReason = reason.trim();
+    if (normalizedReason.length < 3 || normalizedReason.length > 500) {
+      throw apiError(400, 'invalid_match_request', 'The match request is invalid.');
+    }
+    const page = await this.list(targetUserId, limit, offset, rawCursor);
+    if (!await this.matches.logAdminMatchAccess(targetUserId, adminId, adminRole, normalizedReason)) {
+      throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
+    }
+    return page;
+  }
+
   async reveal(matchId: string, userId: string): Promise<boolean> {
     const result = await this.matches.recordReveal(matchId, userId);
     if (!result.ok) throwMatchCommandError(result.reason, 'match');

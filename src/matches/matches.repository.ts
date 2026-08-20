@@ -67,6 +67,15 @@ export class MatchesRepository {
     `, [userId, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
+  async logAdminMatchAccess(userId: string, adminId: string, adminRole: string, reason: string): Promise<boolean> {
+    const result = await this.database.query(`
+      INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
+      SELECT account.user_id, $2, $3, 'view_matches', $4
+      FROM user_account AS account WHERE account.user_id = $1 AND account.deleted_at IS NULL
+    `, [userId, adminId, adminRole, reason]);
+    return result.rowCount === 1;
+  }
+
   async findForUser(matchId: string, userId: string): Promise<MatchRow | undefined> {
     return (await this.database.query<MatchRow>(`
       SELECT id, user1_id, user2_id, status, expires_at, purge_after, continuation_initiator_id, created_at, last_message_at

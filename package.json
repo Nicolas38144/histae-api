@@ -2,6 +2,11 @@
   "name": "histae-api",
   "version": "3.0.0",
   "private": true,
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
   "description": "Histae API — NestJS and Fastify backend for the Histae mobile application.",
   "scripts": {
     "build": "nest build",

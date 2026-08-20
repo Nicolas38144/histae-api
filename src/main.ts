@@ -22,6 +22,16 @@ async function bootstrap(): Promise<void> {
   }));
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableShutdownHooks();
+  if (config.corsOrigins.length) {
+    app.enableCors({
+      origin: config.corsOrigins,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Request-ID'],
+      exposedHeaders: ['Retry-After', 'X-Request-ID'],
+      credentials: false,
+      maxAge: 600,
+    });
+  }
   if (config.openApiEnabled) {
     const document = SwaggerModule.createDocument(app, new DocumentBuilder()
       .setTitle('Histae API')
@@ -37,6 +47,12 @@ async function bootstrap(): Promise<void> {
   const fastify = app.getHttpAdapter().getInstance();
   const requestStarts = new WeakMap<object, bigint>();
   fastify.addHook('onRequest', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'no-referrer');
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (config.env === 'production') reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     const supplied = request.headers['x-request-id'];
     const requestId = typeof supplied === 'string' && isUUID(supplied, 'all') ? supplied : randomUUID();
     reply.header('X-Request-ID', requestId);

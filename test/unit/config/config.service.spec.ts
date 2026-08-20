@@ -88,6 +88,16 @@ describe('ConfigService SMS configuration', () => {
 
     expect(() => new ConfigService()).toThrow('config: SWEEGO_SMS_REGION must be FR');
   });
+
+  it('accepts an explicit list of web origins', () => {
+    process.env = baseEnvironment({ CORS_ORIGINS: 'http://localhost:5173,https://admin.histae.test' });
+    expect(new ConfigService().corsOrigins).toEqual(['http://localhost:5173', 'https://admin.histae.test']);
+  });
+
+  it('requires HTTPS origins in production', () => {
+    process.env = productionEnvironment({ CORS_ORIGINS: 'http://admin.histae.test' });
+    expect(() => new ConfigService()).toThrow('config: CORS_ORIGINS');
+  });
 });
 
 function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
