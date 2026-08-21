@@ -1,6 +1,6 @@
 # Tests de Histae API
 
-Mise à jour : 17 août 2026.
+Mise à jour : 21 août 2026.
 
 ## Organisation et règles
 
@@ -15,17 +15,17 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **26 fichiers de test, 26 suites Jest et 149 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **28 fichiers de test, 28 suites Jest et 164 cas** lorsque toutes les intégrations sont activées :
 
-- 112 tests unitaires ;
+- 126 tests unitaires ;
 - 9 tests e2e ;
-- 16 tests d’intégration PostgreSQL/OpenAPI ;
+- 17 tests d’intégration PostgreSQL/OpenAPI ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 21 suites unitaires, 2 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 23 suites autonomes et leurs 121 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 28 cas, sans flag d’activation. Les tests paramétrés couvrent notamment les environnements, les contraintes Sweego, les dates invalides et les 36 classes injectées Nest.
+Jest affiche 23 suites unitaires, 2 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 25 suites autonomes et leurs 135 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 29 cas, sans flag d’activation.
 
-Le 17 août 2026, TypeScript, ESLint, le build et les 121 cas autonomes ont réussi. Les 28 intégrations réelles sont exécutées séparément lorsque PostgreSQL, ScyllaDB et Redis sont démarrés.
+Le 21 août 2026, TypeScript, ESLint, le build et les 135 cas autonomes ont réussi. Les 17 intégrations PostgreSQL ont également réussi ; les suites ScyllaDB et Redis sont exécutées séparément lorsque leurs services sont démarrés.
 
 ## Commandes
 
@@ -39,7 +39,7 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 28 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 29 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL/OpenAPI réels uniquement.
@@ -241,7 +241,7 @@ Cette suite démarre Fastify avec le contrôleur de découverte et des dépendan
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 16 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 17 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
@@ -261,6 +261,7 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 14. **Éligibilité du feed** — exécute la requête PostgreSQL réelle, conserve le candidat compatible, exclut le blocage bilatéral, puis exclut un match existant.
 15. **Blocage** — confirme qu’un blocage clôt le match existant, programme sa purge et empêche la création d’un nouveau match pour la paire.
 16. **Effacement RGPD** — traite une demande d’effacement de `pending` à `in_progress`, puis `completed`; vérifie l’anonymisation du compte, la suppression du profil/préférences/position/blocages/état, le retrait des consentements, le masquage du message, la clôture du match et les journaux d’audit.
+17. **CA Premium estimé** — exécute l’agrégation administrateur réelle et vérifie que le nombre d’abonnements Premium multiplié par le tarif mensuel du catalogue produit le montant attendu.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -294,10 +295,11 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 121 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 28 cas réels et vérifier que les 149 cas passent au total.
+5. exécuter `pnpm test` pour les 135 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 29 cas réels et vérifier que les 164 cas passent au total.
 
-La validation de cette mise à jour, exécutée le 17 août 2026 sans infrastructure externe active, a réussi : **23 suites et 121 cas autonomes réussis**. Une exécution des 28 intégrations avec PostgreSQL, ScyllaDB et Redis actifs reste nécessaire avant livraison.
+La validation du 21 août 2026 a réussi : **25 suites et 135 cas autonomes**, ainsi que les **17 cas PostgreSQL**.
+Les 12 cas ScyllaDB et Redis sont conservés dans la campagne complète et ne sont pas affectés par cette évolution.
 Un smoke test manuel complémentaire a validé la santé de l’API, l’envoi OTP Sweego réel, le retry idempotent sans
 second SMS, la consommation du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token
 et le logout `204`.

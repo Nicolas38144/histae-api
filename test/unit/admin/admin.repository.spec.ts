@@ -26,3 +26,32 @@ describe('AdminRepository account safety', () => {
   });
 });
 
+describe('AdminRepository revenue', () => {
+  it('calculates an explicitly labelled Premium revenue estimate for the selected period', async () => {
+    const database = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{
+        period_start: new Date('2030-01-01T00:00:00.000Z'),
+        period_end: new Date('2030-02-01T00:00:00.000Z'),
+        premium_subscriptions: 2,
+        price_per_subscription_cents: 999,
+        estimated_revenue_cents: '1998',
+        currency: 'EUR',
+      }] }) };
+    const repository = new AdminRepository(database as never);
+
+    const revenue = await repository.revenue('previous_month');
+
+    expect(revenue).toEqual({
+      period: 'previous_month',
+      period_start: new Date('2030-01-01T00:00:00.000Z'),
+      period_end: new Date('2030-02-01T00:00:00.000Z'),
+      premium_subscriptions: 2,
+      price_per_subscription_cents: 999,
+      estimated_revenue_cents: 1998,
+      currency: 'EUR',
+      basis: 'premium_monthly_price',
+    });
+    expect(database.query.mock.calls[0][0]).toContain('subscription.updated_at');
+    expect(database.query.mock.calls[0][1]).toEqual(['previous_month']);
+  });
+});

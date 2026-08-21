@@ -41,5 +41,22 @@ describe('AdminService', () => {
       .rejects.toEqual(expect.objectContaining({ status: 400, code: 'invalid_admin_request' }));
     expect(repository.messages).not.toHaveBeenCalled();
   });
-});
 
+  it('forwards the selected revenue period to the metrics query', async () => {
+    const expected = { revenue: { period: 'last_7_days' } };
+    const repository = { metrics: jest.fn().mockResolvedValue(expected) };
+    const service = new AdminService(repository as never, config as never);
+
+    await expect(service.metrics('last_7_days')).resolves.toBe(expected);
+    expect(repository.metrics).toHaveBeenCalledWith('terms-v1', 'privacy-v1', 'last_7_days');
+  });
+
+  it('loads only the revenue aggregate for a period change', async () => {
+    const expected = { period: 'previous_month', estimated_revenue_cents: 1998 };
+    const repository = { revenue: jest.fn().mockResolvedValue(expected) };
+    const service = new AdminService(repository as never, config as never);
+
+    await expect(service.revenue('previous_month')).resolves.toBe(expected);
+    expect(repository.revenue).toHaveBeenCalledWith('previous_month');
+  });
+});

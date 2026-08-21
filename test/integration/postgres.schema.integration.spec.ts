@@ -8,6 +8,7 @@ import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../../src/app.module';
 import { AuthRepository } from '../../src/auth/auth.repository';
+import { AdminRepository } from '../../src/admin/admin.repository';
 import { DiscoveryRepository } from '../../src/discovery/discovery.repository';
 import { MatchesRepository } from '../../src/matches/matches.repository';
 import type { MatchRow } from '../../src/matches/matches.models';
@@ -51,6 +52,28 @@ describe('PostgreSQL schema contract', () => {
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
+  });
+
+  it('calculates the Premium revenue estimate from the catalog price and selected period', async () => {
+    const repository = new AdminRepository(databaseFor(pool) as never);
+    const revenue = await repository.revenue('all_time');
+    const expected = await pool.query<{ subscriptions: number; monthly_price_cents: number }>(`
+      SELECT count(subscription.user_id)::int AS subscriptions,
+        COALESCE(max(plan.monthly_price_cents), 0)::int AS monthly_price_cents
+      FROM subscription_plan AS plan
+      LEFT JOIN user_subscription AS subscription ON subscription.plan = plan.code
+      WHERE plan.code = 'premium'
+    `);
+    const row = expected.rows[0] ?? { subscriptions: 0, monthly_price_cents: 0 };
+
+    expect(revenue).toEqual(expect.objectContaining({
+      period: 'all_time',
+      premium_subscriptions: row.subscriptions,
+      price_per_subscription_cents: row.monthly_price_cents,
+      estimated_revenue_cents: row.subscriptions * row.monthly_price_cents,
+      currency: 'EUR',
+      basis: 'premium_monthly_price',
+    }));
   });
 
   it('contains the useful indexes and excludes the ten redundant or obsolete indexes', async () => {

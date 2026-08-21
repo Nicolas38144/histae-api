@@ -4,7 +4,7 @@ import type { CursorPage } from '../common/pagination';
 import { cursorPage, decodeCursor } from '../common/pagination';
 import { ConfigService } from '../config/config.service';
 import { toPublicMessage, type PublicMessage } from '../matches/matches.mapper';
-import type { AdminMetrics, AdminUser, AdminUserDetail, AdminUserRow, AdminUserStatus } from './admin.models';
+import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail, AdminUserRow, AdminUserStatus, RevenuePeriod } from './admin.models';
 import { AdminRepository } from './admin.repository';
 
 type AdminRole = 'admin' | 'superadmin';
@@ -53,8 +53,12 @@ export class AdminService {
     if (result === 'forbidden') throw apiError(403, 'admin_action_forbidden', 'The administrator cannot change this account.');
   }
 
-  metrics(): Promise<AdminMetrics> {
-    return this.admin.metrics(this.config.legal.termsVersion, this.config.legal.privacyVersion);
+  metrics(revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
+    return this.admin.metrics(this.config.legal.termsVersion, this.config.legal.privacyVersion, revenuePeriod);
+  }
+
+  revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {
+    return this.admin.revenue(revenuePeriod);
   }
 
   async messages(

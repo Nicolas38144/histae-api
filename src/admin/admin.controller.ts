@@ -5,12 +5,14 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { MessageResponseDto } from '../common/dto/responses.dto';
 import type { PublicMessage } from '../matches/matches.mapper';
-import type { AdminMetrics, AdminUser, AdminUserDetail } from './admin.models';
+import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail } from './admin.models';
 import { AdminService } from './admin.service';
 import {
   AdminAccessQueryDto,
   AdminMatchIdParamDto,
+  AdminMetricsQueryDto,
   AdminMessageQueryDto,
+  AdminRevenueQueryDto,
   AdminUserIdParamDto,
   ListAdminUsersDto,
   UpdateAdminUserStatusDto,
@@ -18,6 +20,7 @@ import {
 import {
   AdminMessagePageResponseDto,
   AdminMetricsResponseDto,
+  AdminRevenueResponseDto,
   AdminSessionResponseDto,
   AdminUserDetailResponseDto,
   AdminUserPageResponseDto,
@@ -38,8 +41,18 @@ export class AdminController {
 
   @Get('metrics')
   @ApiOkResponse({ type: AdminMetricsResponseDto })
-  metrics(): Promise<AdminMetrics> {
-    return this.admin.metrics();
+  metrics(
+    @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminMetricsQueryDto,
+  ): Promise<AdminMetrics> {
+    return this.admin.metrics(query.revenue_period);
+  }
+
+  @Get('revenue')
+  @ApiOkResponse({ type: AdminRevenueResponseDto })
+  revenue(
+    @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminRevenueQueryDto,
+  ): Promise<AdminRevenue> {
+    return this.admin.revenue(query.revenue_period);
   }
 
   @Get('users')
@@ -87,4 +100,3 @@ export class AdminController {
 function adminRole(request: AuthenticatedRequest): 'admin' | 'superadmin' {
   return request.auth!.account.role as 'admin' | 'superadmin';
 }
-

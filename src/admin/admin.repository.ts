@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { KeysetCursor } from '../common/pagination';
 import { DatabaseService } from '../database/database.service';
-import type { AdminMessageRow, AdminMetrics, AdminUserDetail, AdminUserRow, AdminUserStatus } from './admin.models';
+import type { AdminMessageRow, AdminMetrics, AdminRevenue, AdminUserDetail, AdminUserRow, AdminUserStatus, RevenuePeriod } from './admin.models';
 
 type AdminRole = 'admin' | 'superadmin';
 
@@ -159,7 +159,60 @@ export class AdminRepository {
     });
   }
 
-  async metrics(termsVersion: string, privacyVersion: string): Promise<AdminMetrics> {
+  async revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {
+    const row = (await this.database.query<{
+      period_start: Date | null;
+      period_end: Date;
+      premium_subscriptions: number;
+      price_per_subscription_cents: number;
+      estimated_revenue_cents: string | number;
+      currency: string;
+    }>(`
+      WITH anchor AS (
+        SELECT clock_timestamp() AS now_utc,
+          clock_timestamp() AT TIME ZONE 'Europe/Paris' AS paris_now
+      ), bounds AS (
+        SELECT
+          CASE $1::text
+            WHEN 'last_7_days' THEN now_utc - INTERVAL '7 days'
+            WHEN 'last_30_days' THEN now_utc - INTERVAL '30 days'
+            WHEN 'month_to_date' THEN date_trunc('month', paris_now) AT TIME ZONE 'Europe/Paris'
+            WHEN 'previous_month' THEN date_trunc('month', paris_now - INTERVAL '1 month') AT TIME ZONE 'Europe/Paris'
+            WHEN 'year_to_date' THEN date_trunc('year', paris_now) AT TIME ZONE 'Europe/Paris'
+            WHEN 'all_time' THEN NULL
+          END AS period_start,
+          CASE $1::text
+            WHEN 'previous_month' THEN date_trunc('month', paris_now) AT TIME ZONE 'Europe/Paris'
+            ELSE now_utc
+          END AS period_end
+        FROM anchor
+      )
+      SELECT bounds.period_start, bounds.period_end,
+        count(subscription.user_id)::int AS premium_subscriptions,
+        COALESCE(max(plan.monthly_price_cents), 0)::int AS price_per_subscription_cents,
+        (count(subscription.user_id) * COALESCE(max(plan.monthly_price_cents), 0))::bigint AS estimated_revenue_cents,
+        COALESCE(max(plan.currency), 'EUR')::text AS currency
+      FROM bounds
+      LEFT JOIN subscription_plan AS plan ON plan.code = 'premium'
+      LEFT JOIN user_subscription AS subscription ON subscription.plan = plan.code
+        AND (bounds.period_start IS NULL OR subscription.updated_at >= bounds.period_start)
+        AND subscription.updated_at < bounds.period_end
+      GROUP BY bounds.period_start, bounds.period_end
+    `, [revenuePeriod])).rows[0];
+
+    return {
+      period: revenuePeriod,
+      period_start: row?.period_start ?? null,
+      period_end: row?.period_end ?? new Date(),
+      premium_subscriptions: Number(row?.premium_subscriptions ?? 0),
+      price_per_subscription_cents: Number(row?.price_per_subscription_cents ?? 0),
+      estimated_revenue_cents: Number(row?.estimated_revenue_cents ?? 0),
+      currency: row?.currency ?? 'EUR',
+      basis: 'premium_monthly_price',
+    };
+  }
+
+  async metrics(termsVersion: string, privacyVersion: string, revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
     const users = (await this.database.query<AdminMetrics['users']>(`
       SELECT count(*)::int AS total,
         count(*) FILTER (WHERE NOT is_banned)::int AS active,
@@ -192,7 +245,8 @@ export class AdminRepository {
       WHERE account.deleted_at IS NULL
       GROUP BY plan.code ORDER BY plan.code
     `)).rows;
-    return { users, moderation, matches, messages, subscriptions };
+    const revenue = await this.revenue(revenuePeriod);
+    return { users, moderation, matches, messages, subscriptions, revenue };
   }
 
   async messages(

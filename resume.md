@@ -1,6 +1,6 @@
 # Histae API — résumé technique et fonctionnel détaillé
 
-Mise à jour : 17 août 2026.
+Mise à jour : 21 août 2026.
 
 ## 1. Vision du projet
 
@@ -402,6 +402,12 @@ Le catalogue PostgreSQL expose les plans, prix mensuel/annuel en centimes, devis
 - Le quota débité appartient à l’initiateur de la continuation.
 
 L’API sait lire les droits, mais aucun paiement ni webhook ne met encore à jour les abonnements.
+
+La synthèse administrateur fournit provisoirement un **chiffre d’affaires estimé**. Pour la période choisie,
+elle compte les lignes Premium dont `user_subscription.updated_at` appartient à l’intervalle, puis multiplie ce
+nombre par le tarif mensuel Premium courant. Les périodes disponibles sont les 7 ou 30 derniers jours, le mois
+en cours, le mois précédent, l’année en cours et l’historique complet. Ce chiffre n’est pas un encaissement
+comptable : il ignore notamment les renouvellements non enregistrés, remboursements, taxes, commissions et charges.
 
 ## 12. Matchs : modèle et machine d’état
 
@@ -841,12 +847,14 @@ test/
 
 Inventaire actuel :
 
-- 21 fichiers/suites unitaires, 112 cas ;
+- 23 fichiers/suites unitaires, 126 cas ;
 - 2 suites e2e, 9 cas ;
-- 3 suites d’intégration, 28 cas dont 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
-- total complet : 26 fichiers/suites Jest et 149 cas.
+- 3 suites d’intégration, 29 cas dont 17 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
+- total complet : 28 fichiers/suites Jest et 164 cas.
 
-Le 17 août 2026, TypeScript, ESLint, le build et les 121 cas autonomes ont été validés localement. Les 28 intégrations PostgreSQL, ScyllaDB et Redis s’exécutent séparément, sans flag d’activation. Les tests exécutés couvrent notamment la sécurité du reset PostgreSQL, la configuration Sweego, les numéros français, les livraisons abandonnées et la concurrence OTP.
+Le 21 août 2026, TypeScript, ESLint, le build et les 135 cas autonomes ont été validés localement. Les 17 tests
+d’intégration PostgreSQL ont aussi réussi avec le calcul réel du CA estimé. Les suites ScyllaDB et Redis restent
+exécutables séparément, sans flag d’activation.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
 
@@ -867,7 +875,9 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 7. `pnpm run test:integration` avec les trois dépendances réelles ;
 8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
 
-Pour cette mise à jour, le lint, le typecheck, le build et les 121 cas indépendants de l’infrastructure ont réussi le 17 août 2026. Les 28 cas PostgreSQL, ScyllaDB et Redis n’ont pas été exécutés faute de services actifs et restent requis avant livraison.
+Pour cette mise à jour, le lint, le typecheck, le build et les 135 cas indépendants de l’infrastructure ont réussi
+le 21 août 2026. Les 17 cas PostgreSQL ont également réussi sur `histae-dev`; les 12 cas ScyllaDB et Redis ne sont
+pas affectés par le calcul de CA et restent disponibles dans la campagne d’intégration complète.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 

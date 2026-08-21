@@ -46,7 +46,8 @@ Toutes ces routes exigent un compte `admin` ou `superadmin`. Les consultations d
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
 | GET | `/admin/me` | — | `200 { "user_id", "role" }`. Sert à vérifier le rôle après l’authentification OTP. |
-| GET | `/admin/metrics` | — | Synthèse des comptes, files de modération, matchs, messages et abonnements. Les indicateurs ne contiennent aucune donnée personnelle. |
+| GET | `/admin/metrics` | `revenue_period` optionnel, mêmes valeurs que `/admin/revenue` (défaut : `month_to_date`) | Synthèse initiale des comptes, files de modération, matchs, messages et abonnements, avec le CA estimé de la période initiale. Les indicateurs ne contiennent aucune donnée personnelle. |
+| GET | `/admin/revenue` | `revenue_period=last_7_days\|last_30_days\|month_to_date\|previous_month\|year_to_date\|all_time` (défaut : `month_to_date`) | Recalcule uniquement le CA estimé : nombre d’abonnements Premium mis à jour sur la période × tarif mensuel Premium courant. Cette estimation n’est ni un registre d’encaissements ni un bénéfice comptable. |
 | GET | `/admin/users` | `status=active\|banned`, `role=user\|admin\|superadmin`, `search` optionnels ; `limit`, `cursor` (`offset` déprécié) | `200 { "users": [...], "next_cursor" }`. La recherche porte sur le prénom ou un UUID exact. Aucun téléphone n’est retourné. |
 | GET | `/admin/users/:id` | UUID ; `reason` obligatoire (3 à 500 caractères) | Détail administratif : compte, profil, préférences, traits, dernier état de consentement et fraîcheur de présence sans coordonnées. L’accès est journalisé. |
 | PATCH | `/admin/users/:id/status` | `{ "is_banned", "reason"?: "…" }`. Le motif est obligatoire pour bannir. | Bannit ou débannit le compte. Un bannissement révoque immédiatement tous ses refresh tokens. Un admin ne peut agir que sur un rôle `user`; un superadmin ne peut agir ni sur lui-même ni sur un autre superadmin. |

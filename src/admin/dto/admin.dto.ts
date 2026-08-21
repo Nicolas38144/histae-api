@@ -2,7 +2,17 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import type { AdminUserStatus } from '../admin.models';
-import { ADMIN_USER_STATUSES } from '../admin.models';
+import type { RevenuePeriod } from '../admin.models';
+import { ADMIN_USER_STATUSES, REVENUE_PERIODS } from '../admin.models';
+
+export class AdminRevenueQueryDto {
+  @ApiPropertyOptional({ enum: REVENUE_PERIODS, default: 'month_to_date' })
+  @IsOptional()
+  @IsIn([...REVENUE_PERIODS])
+  revenue_period: RevenuePeriod = 'month_to_date';
+}
+
+export class AdminMetricsQueryDto extends AdminRevenueQueryDto {}
 
 export class AdminUserIdParamDto {
   @ApiProperty({ format: 'uuid' })
@@ -61,4 +71,3 @@ export class UpdateAdminUserStatusDto {
   @MaxLength(500)
   reason?: string | null;
 }
-

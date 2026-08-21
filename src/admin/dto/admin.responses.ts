@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { REVENUE_PERIODS } from '../admin.models';
 
 export class AdminSessionResponseDto {
   @ApiProperty({ format: 'uuid' }) user_id!: string;
@@ -34,16 +35,27 @@ export class AdminUserDetailResponseDto extends AdminUserResponseDto {
   @ApiPropertyOptional({ type: 'object', nullable: true, additionalProperties: true }) presence!: Record<string, unknown> | null;
 }
 
+export class AdminRevenueResponseDto {
+  @ApiProperty({ enum: REVENUE_PERIODS }) period!: string;
+  @ApiPropertyOptional({ format: 'date-time', nullable: true }) period_start!: Date | null;
+  @ApiProperty({ format: 'date-time' }) period_end!: Date;
+  @ApiProperty() premium_subscriptions!: number;
+  @ApiProperty() price_per_subscription_cents!: number;
+  @ApiProperty() estimated_revenue_cents!: number;
+  @ApiProperty() currency!: string;
+  @ApiProperty({ enum: ['premium_monthly_price'] }) basis!: string;
+}
+
 export class AdminMetricsResponseDto {
   @ApiProperty({ type: 'object', additionalProperties: true }) users!: Record<string, number>;
   @ApiProperty({ type: 'object', additionalProperties: true }) moderation!: Record<string, number>;
   @ApiProperty({ type: 'object', additionalProperties: true }) matches!: Record<string, number>;
   @ApiProperty({ type: 'object', additionalProperties: true }) messages!: Record<string, number>;
   @ApiProperty({ type: 'array', items: { type: 'object', additionalProperties: true } }) subscriptions!: Record<string, unknown>[];
+  @ApiProperty({ type: () => AdminRevenueResponseDto }) revenue!: AdminRevenueResponseDto;
 }
 
 export class AdminMessagePageResponseDto {
   @ApiProperty({ type: 'array', items: { type: 'object', additionalProperties: true } }) messages!: Record<string, unknown>[];
   @ApiProperty({ nullable: true }) next_cursor!: string | null;
 }
-

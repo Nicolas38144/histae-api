@@ -4,6 +4,27 @@ import type { ConsentType, LookingFor, Sex } from '../users/users.models';
 export const ADMIN_USER_STATUSES = ['active', 'banned'] as const;
 export type AdminUserStatus = typeof ADMIN_USER_STATUSES[number];
 
+export const REVENUE_PERIODS = [
+  'last_7_days',
+  'last_30_days',
+  'month_to_date',
+  'previous_month',
+  'year_to_date',
+  'all_time',
+] as const;
+export type RevenuePeriod = typeof REVENUE_PERIODS[number];
+
+export type AdminRevenue = {
+  period: RevenuePeriod;
+  period_start: Date | null;
+  period_end: Date;
+  premium_subscriptions: number;
+  price_per_subscription_cents: number;
+  estimated_revenue_cents: number;
+  currency: string;
+  basis: 'premium_monthly_price';
+};
+
 export type AdminUserRow = {
   id: string;
   role: 'user' | 'admin' | 'superadmin';
@@ -50,7 +71,7 @@ export type AdminMetrics = {
   matches: Record<MatchStatus, number>;
   messages: { total: number };
   subscriptions: Array<{ plan: string; users: number }>;
+  revenue: AdminRevenue;
 };
 
 export type AdminMessageRow = MessageRow & { cursor_at: string };
-
