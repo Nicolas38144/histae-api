@@ -16,6 +16,12 @@ import { MatchMaintenanceService } from '../../../src/matches/match-maintenance.
 import { MatchesController } from '../../../src/matches/matches.controller';
 import { MatchesRepository } from '../../../src/matches/matches.repository';
 import { MatchesService } from '../../../src/matches/matches.service';
+import { MobileController } from '../../../src/mobile/mobile.controller';
+import { MobileDeliveryService } from '../../../src/mobile/mobile-delivery.service';
+import { MobileRepository } from '../../../src/mobile/mobile.repository';
+import { MobileService } from '../../../src/mobile/mobile.service';
+import { PushService } from '../../../src/mobile/push.service';
+import { RealtimeService } from '../../../src/mobile/realtime.service';
 import { PlansController } from '../../../src/plans/plans.controller';
 import { PlansRepository } from '../../../src/plans/plans.repository';
 import { PlansService } from '../../../src/plans/plans.service';
@@ -46,6 +52,7 @@ const injectedClasses = [
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,
   MatchesController, MatchesRepository, MatchesService, MatchMaintenanceService,
+  MobileController, MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
   TraitsController, TraitsRepository, TraitsService,
   ReportsController, ReportsRepository, ReportsService,

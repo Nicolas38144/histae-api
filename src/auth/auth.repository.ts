@@ -173,12 +173,18 @@ export class AuthRepository {
     });
   }
 
-  async revokeRefreshToken(ownerId: string, jti: string, hash: string): Promise<boolean> {
-    const result = await this.database.query(`
-      UPDATE refresh_tokens SET revoked = true
-      WHERE jti = $1 AND user_id = $2 AND token_hash = $3 AND revoked = false AND expires_at > now()
-    `, [jti, ownerId, hash]);
-    return result.rowCount === 1;
+  async revokeRefreshToken(ownerId: string, jti: string, hash: string, deviceId?: string): Promise<boolean> {
+    return this.database.transaction(async (client) => {
+      const result = await client.query(`
+        UPDATE refresh_tokens SET revoked = true
+        WHERE jti = $1 AND user_id = $2 AND token_hash = $3 AND revoked = false AND expires_at > now()
+      `, [jti, ownerId, hash]);
+      if (result.rowCount !== 1) return false;
+      if (deviceId) {
+        await client.query('DELETE FROM device_token WHERE id = $1 AND user_id = $2', [deviceId, ownerId]);
+      }
+      return true;
+    });
   }
 }
 

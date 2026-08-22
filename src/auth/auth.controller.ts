@@ -1,14 +1,14 @@
-import { Controller, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { ApiAcceptedResponse, ApiHeader, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ValidatedBody } from '../common/http/validated-request.decorator';
-import { MessageResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
+import { MessageResponseDto, SessionResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { JwtActiveGuard, userId } from './auth.guard';
 import type { AuthenticatedRequest } from './auth.types';
 import { AuthService } from './auth.service';
-import { RefreshTokenDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
+import { LogoutDto, RefreshTokenDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
 import { AllowIncompleteOnboarding } from './onboarding.decorator';
 import { OtpService } from './otp.service';
 
@@ -21,6 +21,17 @@ export class AuthController {
     private readonly config: ConfigService,
     private readonly otp: OtpService,
   ) {}
+
+  @Get('me')
+  @UseGuards(JwtActiveGuard)
+  @AllowIncompleteOnboarding()
+  @ApiOkResponse({ type: SessionResponseDto })
+  me(@Req() request: AuthenticatedRequest): { user_id: string; onboarding_complete: boolean } {
+    return {
+      user_id: userId(request),
+      onboarding_complete: request.auth!.account.onboarding_complete,
+    };
+  }
 
   @Post('otp/send')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -66,7 +77,7 @@ export class AuthController {
   @UseGuards(JwtActiveGuard)
   @AllowIncompleteOnboarding()
   @ApiNoContentResponse()
-  async logout(@ValidatedBody() body: RefreshTokenDto, @Req() request: AuthenticatedRequest): Promise<void> {
-    await this.auth.logout(userId(request), body.refresh_token);
+  async logout(@ValidatedBody() body: LogoutDto, @Req() request: AuthenticatedRequest): Promise<void> {
+    await this.auth.logout(userId(request), body.refresh_token, body.device_id);
   }
 }

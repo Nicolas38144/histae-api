@@ -9,6 +9,7 @@ import { ReportsModule } from './reports/reports.module';
 import { TraitsModule } from './traits/traits.module';
 import { UsersModule } from './users/users.module';
 import { AdminModule } from './admin/admin.module';
+import { MobileModule } from './mobile/mobile.module';
 
-@Module({ imports: [CoreModule, AuthModule, AdminModule, UsersModule, PrivacyModule, TraitsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
+@Module({ imports: [CoreModule, AuthModule, MobileModule, AdminModule, UsersModule, PrivacyModule, TraitsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
 export class AppModule {}

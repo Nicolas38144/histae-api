@@ -58,9 +58,9 @@ export class AuthService {
     return { access_token: await this.tokens.accessToken(userId), refresh_token: next.plain };
   }
 
-  async logout(ownerId: string, rawToken: string): Promise<void> {
+  async logout(ownerId: string, rawToken: string, deviceId?: string): Promise<void> {
     const parsed = this.tokens.parseRefreshToken(rawToken);
-    if (!parsed || !await this.authRepository.revokeRefreshToken(ownerId, parsed.jti, parsed.hash)) throw invalidRefresh();
+    if (!parsed || !await this.authRepository.revokeRefreshToken(ownerId, parsed.jti, parsed.hash, deviceId)) throw invalidRefresh();
   }
 
   private async issueTokenPair(userId: string): Promise<TokenPair> {

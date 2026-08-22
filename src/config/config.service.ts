@@ -6,6 +6,7 @@ export type LimitPolicy = { max: number; windowMs: number };
 type Environment = 'development' | 'test' | 'production';
 type MaintenanceMode = 'api' | 'worker' | 'disabled';
 type SmsProvider = 'disabled' | 'sweego';
+type PushProvider = 'disabled' | 'fcm';
 
 type RedisConfig = {
   address: string;
@@ -14,6 +15,15 @@ type RedisConfig = {
   tls: boolean;
   connectTimeoutMillis: number;
   commandTimeoutMillis: number;
+};
+
+export type PushConfig = {
+  provider: PushProvider;
+  projectId: string;
+  clientEmail: string;
+  privateKey: string;
+  tokenUri: string;
+  timeoutMillis: number;
 };
 
 export type ScyllaConfig = {
@@ -50,6 +60,7 @@ export class ConfigService {
     application_name: string;
   };
   readonly jwt: { secret: string; accessTtlMs: number; refreshTtlMs: number };
+  readonly accountDeletionTokenTtlMs: number;
   readonly phone: { encryptionKey: string; hashKey: string };
   readonly sms: {
     provider: SmsProvider;
@@ -62,6 +73,7 @@ export class ConfigService {
   };
   readonly scylla: ScyllaConfig;
   readonly redis: RedisConfig;
+  readonly push: PushConfig;
   readonly legal: {
     termsVersion: string;
     privacyVersion: string;
@@ -143,6 +155,10 @@ export class ConfigService {
       accessTtlMs: duration(envOr('JWT_ACCESS_TTL', '15m'), 'JWT_ACCESS_TTL'),
       refreshTtlMs: duration(envOr('JWT_REFRESH_TTL', '4320h'), 'JWT_REFRESH_TTL'),
     };
+    this.accountDeletionTokenTtlMs = duration(envOr('ACCOUNT_DELETION_TOKEN_TTL', '10m'), 'ACCOUNT_DELETION_TOKEN_TTL');
+    if (this.accountDeletionTokenTtlMs < 60_000 || this.accountDeletionTokenTtlMs > 30 * 60_000) {
+      throw new Error('config: ACCOUNT_DELETION_TOKEN_TTL must be between 1m and 30m');
+    }
     this.phone = { encryptionKey, hashKey };
     const smsProviderValue = smsProvider(envOr('SMS_PROVIDER', this.env === 'production' ? 'sweego' : 'disabled'));
     const sweegoApiKey = process.env.SWEEGO_API_KEY?.trim() ?? '';
@@ -216,6 +232,23 @@ export class ConfigService {
       connectTimeoutMillis: duration(envOr('REDIS_CONNECT_TIMEOUT', '5s'), 'REDIS_CONNECT_TIMEOUT'),
       commandTimeoutMillis: duration(envOr('REDIS_COMMAND_TIMEOUT', '1s'), 'REDIS_COMMAND_TIMEOUT'),
     };
+    const pushProvider = envOr('PUSH_PROVIDER', 'disabled').toLowerCase();
+    if (pushProvider !== 'disabled' && pushProvider !== 'fcm') throw new Error('config: PUSH_PROVIDER must be disabled or fcm');
+    const pushProjectId = envOr('FIREBASE_PROJECT_ID', '');
+    const pushClientEmail = envOr('FIREBASE_CLIENT_EMAIL', '');
+    const pushPrivateKey = (process.env.FIREBASE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n').trim();
+    if (pushProvider === 'fcm' && (!pushProjectId || !pushClientEmail || !pushPrivateKey)) {
+      throw new Error('config: Firebase project ID, client email, and private key are required when PUSH_PROVIDER=fcm');
+    }
+    this.push = {
+      provider: pushProvider,
+      projectId: pushProjectId,
+      clientEmail: pushClientEmail,
+      privateKey: pushPrivateKey,
+      tokenUri: httpsUrl(envOr('FIREBASE_TOKEN_URI', 'https://oauth2.googleapis.com/token'), 'FIREBASE_TOKEN_URI'),
+      timeoutMillis: duration(envOr('PUSH_TIMEOUT', '5s'), 'PUSH_TIMEOUT'),
+    };
+    if (this.push.timeoutMillis > 30_000) throw new Error('config: PUSH_TIMEOUT must not exceed 30s');
     this.rateLimit = {
       store,
       global: limit('RATE_LIMIT_GLOBAL', 100, '1m'),

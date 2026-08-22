@@ -1,13 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { apiError } from '../common/api-error';
 import { DiscoveryStore } from '../discovery/discovery.store';
 import { ScyllaUnavailableError } from '../scylla/scylla.service';
 import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
+import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
 
 @Injectable()
 export class PrivacyService {
-  constructor(private readonly privacy: PrivacyRepository, private readonly discovery: DiscoveryStore) {}
+  constructor(
+    private readonly privacy: PrivacyRepository,
+    private readonly discovery: DiscoveryStore,
+    @Optional() private readonly delivery?: MobileDeliveryService,
+  ) {}
 
   async createRequest(userId: string, type: DataRequestType): Promise<DataSubjectRequestRow> {
     const request = await this.privacy.createRequest(userId, type);
@@ -68,10 +73,12 @@ export class PrivacyService {
   async blockUser(blockerId: string, blockedId: string): Promise<void> {
     if (blockerId === blockedId) throw apiError(400, 'invalid_block_request', 'An account cannot block itself.');
     if (!await this.privacy.blockUser(blockerId, blockedId)) throw apiError(404, 'user_not_found', 'The user to block was not found.');
+    await this.delivery?.matchesInvalidated([blockerId, blockedId]);
   }
 
-  unblockUser(blockerId: string, blockedId: string): Promise<void> {
-    return this.privacy.unblockUser(blockerId, blockedId);
+  async unblockUser(blockerId: string, blockedId: string): Promise<void> {
+    await this.privacy.unblockUser(blockerId, blockedId);
+    await this.delivery?.matchesInvalidated([blockerId, blockedId]);
   }
 
   blockedUsers(blockerId: string): Promise<BlockedUser[]> {

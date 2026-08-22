@@ -98,6 +98,39 @@ describe('ConfigService SMS configuration', () => {
     process.env = productionEnvironment({ CORS_ORIGINS: 'http://admin.histae.test' });
     expect(() => new ConfigService()).toThrow('config: CORS_ORIGINS');
   });
+
+  it.each(['59s', '31m'])('rejects the out-of-range account deletion token duration %s', (ttl) => {
+    process.env = baseEnvironment({ ACCOUNT_DELETION_TOKEN_TTL: ttl });
+
+    expect(() => new ConfigService()).toThrow('config: ACCOUNT_DELETION_TOKEN_TTL must be between 1m and 30m');
+  });
+
+  it('requires all Firebase service-account fields when FCM is enabled', () => {
+    process.env = baseEnvironment({ PUSH_PROVIDER: 'fcm', FIREBASE_PROJECT_ID: 'histae-test' });
+
+    expect(() => new ConfigService()).toThrow('config: Firebase project ID, client email, and private key are required');
+  });
+
+  it('accepts an explicit FCM configuration', () => {
+    process.env = baseEnvironment({
+      PUSH_PROVIDER: 'fcm',
+      FIREBASE_PROJECT_ID: 'histae-test',
+      FIREBASE_CLIENT_EMAIL: 'firebase-admin@histae-test.iam.gserviceaccount.com',
+      FIREBASE_PRIVATE_KEY: 'test-private-key',
+    });
+
+    expect(new ConfigService().push).toEqual(expect.objectContaining({
+      provider: 'fcm',
+      projectId: 'histae-test',
+      timeoutMillis: 5_000,
+    }));
+  });
+
+  it('caps the push provider timeout at 30 seconds', () => {
+    process.env = baseEnvironment({ PUSH_TIMEOUT: '31s' });
+
+    expect(() => new ConfigService()).toThrow('config: PUSH_TIMEOUT must not exceed 30s');
+  });
 });
 
 function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {

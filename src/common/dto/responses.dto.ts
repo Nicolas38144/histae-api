@@ -13,6 +13,12 @@ export class TokenPairResponseDto {
   refresh_token!: string;
 }
 
+export class SessionResponseDto {
+  @ApiProperty({ format: 'uuid' }) user_id!: string;
+  @ApiProperty({ description: 'Whether the current terms and privacy notice have been acknowledged.' })
+  onboarding_complete!: boolean;
+}
+
 export class HealthResponseDto {
   @ApiProperty({ enum: ['ok', 'ready'] })
   status!: 'ok' | 'ready';

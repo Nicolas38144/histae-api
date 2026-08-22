@@ -9,6 +9,7 @@ type RedisClient = ReturnType<typeof createClient>;
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly client: RedisClient;
+  private readonly subscribers = new Set<RedisClient>();
 
   constructor(private readonly config: ConfigService) {
     const protocol = config.redis.tls ? 'rediss' : 'redis';
@@ -33,6 +34,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    await Promise.all([...this.subscribers].map(async (subscriber) => {
+      if (subscriber.isOpen) await subscriber.quit();
+    }));
+    this.subscribers.clear();
     if (this.client.isOpen) await this.client.quit();
   }
 
@@ -48,6 +53,27 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async check(): Promise<void> {
     if (!this.enabled) return;
     await this.withTimeout(this.client.ping());
+  }
+
+  async publish(channel: string, message: string): Promise<void> {
+    if (!this.enabled) throw new Error('Redis is disabled');
+    await this.withTimeout(this.client.publish(channel, message));
+  }
+
+  async subscribe(channel: string, listener: (message: string) => void): Promise<() => Promise<void>> {
+    if (!this.enabled) throw new Error('Redis is disabled');
+    const subscriber = this.client.duplicate();
+    subscriber.on('error', (error: Error) => this.logger.error('Redis subscriber error', error.stack));
+    await subscriber.connect();
+    await subscriber.subscribe(channel, listener);
+    this.subscribers.add(subscriber);
+    return async () => {
+      this.subscribers.delete(subscriber);
+      if (subscriber.isOpen) {
+        await subscriber.unsubscribe(channel);
+        await subscriber.quit();
+      }
+    };
   }
 
   private async withTimeout<T>(work: Promise<T>): Promise<T> {
