@@ -13,6 +13,7 @@ export const migrations = [
   { version: '008_index_cleanup.sql', filename: '008_index_cleanup.sql' },
   { version: '009_otp_sms_delivery.sql', filename: '009_otp_sms_delivery.sql' },
   { version: '010_single_usable_otp.sql', filename: '010_single_usable_otp.sql' },
+  { version: '011_mobile_client_contract.sql', filename: '011_mobile_client_contract.sql' },
 ] as const;
 
 export async function loadMigration(migration: typeof migrations[number]): Promise<{ sql: string; checksum: string }> {

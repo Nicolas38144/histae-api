@@ -5,6 +5,7 @@ DROP FUNCTION IF EXISTS fct_anonymize_user(UUID);
 
 DROP TABLE IF EXISTS notification CASCADE;
 DROP TABLE IF EXISTS device_token CASCADE;
+DROP TABLE IF EXISTS account_deletion_token CASCADE;
 DROP TABLE IF EXISTS user_report CASCADE;
 DROP TABLE IF EXISTS user_block CASCADE;
 

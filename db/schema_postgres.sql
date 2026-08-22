@@ -383,12 +383,17 @@ CREATE TABLE chat_message (
   id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   match_id   UUID        NOT NULL REFERENCES match_init(id) ON DELETE CASCADE,
   sender_id  UUID        NOT NULL REFERENCES user_account(user_id) ON DELETE CASCADE,
+  idempotency_key UUID,
   content    TEXT        NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   read_at    TIMESTAMPTZ                                       -- NULL = non lu ; jamais modifié par l'expéditeur
 );
 
 CREATE INDEX IF NOT EXISTS idx_message_match_created_desc ON chat_message(match_id, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_message_sender_idempotency
+  ON chat_message(sender_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_chat_message_match_unread
+  ON chat_message(match_id, created_at DESC, id DESC) WHERE read_at IS NULL;
 
 
 -- =========================================
@@ -465,11 +470,26 @@ CREATE TABLE device_token (
   user_id      UUID        NOT NULL REFERENCES user_account(user_id) ON DELETE CASCADE,
   token        TEXT        NOT NULL UNIQUE,
   platform     TEXT        NOT NULL CHECK (platform IN ('ios', 'android')),
+  app_version  TEXT        CHECK (app_version IS NULL OR octet_length(app_version) BETWEEN 1 AND 50),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_used_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_device_token_user ON device_token(user_id);
+
+
+-- =========================================
+-- ACCOUNT DELETION CONFIRMATION
+-- Single-use, short-lived token. Only its SHA-256 hash is stored.
+-- =========================================
+CREATE TABLE account_deletion_token (
+  id         UUID        PRIMARY KEY,
+  user_id    UUID        NOT NULL UNIQUE REFERENCES user_account(user_id) ON DELETE CASCADE,
+  token_hash TEXT        NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_deletion_token_expires ON account_deletion_token(expires_at);
 
 
 -- =========================================
