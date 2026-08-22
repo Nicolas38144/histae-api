@@ -11,6 +11,15 @@ export class TraitsRepository {
     return (await this.database.query<Trait>('SELECT id, name FROM trait ORDER BY name, id')).rows;
   }
 
+  async listForUser(userId: string): Promise<Trait[]> {
+    return (await this.database.query<Trait>(`
+      SELECT trait.id, trait.name
+      FROM user_trait JOIN trait ON trait.id = user_trait.trait_id
+      WHERE user_trait.user_id = $1
+      ORDER BY trait.name, trait.id
+    `, [userId])).rows;
+  }
+
   async create(trait: Trait): Promise<void> {
     await this.database.query('INSERT INTO trait (id, name) VALUES ($1, $2)', [trait.id, trait.name]);
   }

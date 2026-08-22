@@ -10,6 +10,42 @@ describe('DiscoveryService', () => {
     legal: { sensitiveDataConsentVersion: 'sensitive-v1', locationConsentVersion: 'location-v1' },
   };
 
+  it('returns every missing prerequisite required to enter discovery', async () => {
+    const presenceExpiresAt = new Date('2030-01-01T12:00:00.000Z');
+    const repository = { discoveryStatus: jest.fn().mockResolvedValue({
+      has_profile: true,
+      has_sex: false,
+      has_preferences: false,
+      has_sensitive_consent: false,
+      has_location_consent: true,
+      has_fresh_presence: false,
+      presence_expires_at: presenceExpiresAt,
+    }) };
+    const service = new DiscoveryService(repository as never, {} as never, {} as never, config as never);
+
+    await expect(service.status(ACTOR_ID)).resolves.toEqual({
+      ready: false,
+      required_actions: ['sex', 'preferences', 'sensitive_data_consent', 'fresh_presence'],
+      presence_expires_at: presenceExpiresAt,
+    });
+    expect(repository.discoveryStatus).toHaveBeenCalledWith(ACTOR_ID, 'sensitive-v1', 'location-v1');
+  });
+
+  it('reports discovery ready when no prerequisite is missing', async () => {
+    const repository = { discoveryStatus: jest.fn().mockResolvedValue({
+      has_profile: true,
+      has_sex: true,
+      has_preferences: true,
+      has_sensitive_consent: true,
+      has_location_consent: true,
+      has_fresh_presence: true,
+      presence_expires_at: new Date('2030-01-01T12:00:00.000Z'),
+    }) };
+    const service = new DiscoveryService(repository as never, {} as never, {} as never, config as never);
+
+    await expect(service.status(ACTOR_ID)).resolves.toEqual(expect.objectContaining({ ready: true, required_actions: [] }));
+  });
+
   it('filters already-swiped profiles and keeps exact distance in its opaque cursor', async () => {
     const repository = {
       isDiscoveryReady: jest.fn().mockResolvedValue(true),

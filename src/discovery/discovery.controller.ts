@@ -7,8 +7,8 @@ import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { PublicMatch } from '../matches/matches.mapper';
 import { CreateSwipeDto, FeedQueryDto } from './dto/discovery.dto';
-import { FeedResponseDto, SwipeResponseDto } from './dto/discovery.responses';
-import type { FeedCandidate, SwipeDecision } from './discovery.models';
+import { DiscoveryStatusResponseDto, FeedResponseDto, SwipeResponseDto } from './dto/discovery.responses';
+import type { DiscoveryStatus, FeedCandidate, SwipeDecision } from './discovery.models';
 import { DiscoveryService } from './discovery.service';
 
 @Controller('api')
@@ -21,6 +21,12 @@ export class DiscoveryController {
     private readonly limits: RateLimitService,
     private readonly config: ConfigService,
   ) {}
+
+  @Get('users/me/discovery-status')
+  @ApiOkResponse({ type: DiscoveryStatusResponseDto })
+  status(@Req() request: AuthenticatedRequest): Promise<DiscoveryStatus> {
+    return this.discovery.status(userId(request));
+  }
 
   @Post('swipes')
   @ApiCreatedResponse({ type: SwipeResponseDto })

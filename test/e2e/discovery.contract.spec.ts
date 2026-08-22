@@ -19,6 +19,7 @@ describe('Discovery HTTP contract', () => {
   const discovery = {
     swipe: jest.fn().mockResolvedValue({ decision: 'like', matched: false }),
     feed: jest.fn().mockResolvedValue({ profiles: [], next_cursor: null }),
+    status: jest.fn().mockResolvedValue({ ready: false, required_actions: ['fresh_presence'], presence_expires_at: null }),
   };
   const limits = { enforce: jest.fn() };
   const activeGuard: CanActivate = {
@@ -52,6 +53,18 @@ describe('Discovery HTTP contract', () => {
   afterAll(async () => app?.close());
 
   beforeEach(() => jest.clearAllMocks());
+
+  it('exposes the authenticated discovery prerequisites without consuming feed quota', async () => {
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'GET',
+      url: '/api/users/me/discovery-status',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ready: false, required_actions: ['fresh_presence'], presence_expires_at: null });
+    expect(discovery.status).toHaveBeenCalledWith(USER_ID);
+    expect(limits.enforce).not.toHaveBeenCalled();
+  });
 
   it('records a validated swipe and applies its dedicated rate limit', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({

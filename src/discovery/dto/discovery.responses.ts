@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MatchResponseDto } from '../../matches/dto/matches.responses';
 import { SEXES } from '../../users/users.models';
-import { SWIPE_DECISIONS } from '../discovery.models';
+import { DISCOVERY_REQUIRED_ACTIONS, SWIPE_DECISIONS } from '../discovery.models';
 
 class FeedCandidateResponseDto {
   @ApiProperty({ format: 'uuid' }) user_id!: string;
@@ -22,4 +22,10 @@ export class SwipeResponseDto {
   @ApiProperty({ enum: SWIPE_DECISIONS }) decision!: string;
   @ApiProperty() matched!: boolean;
   @ApiPropertyOptional({ type: MatchResponseDto }) match?: MatchResponseDto;
+}
+
+export class DiscoveryStatusResponseDto {
+  @ApiProperty() ready!: boolean;
+  @ApiProperty({ enum: DISCOVERY_REQUIRED_ACTIONS, isArray: true }) required_actions!: string[];
+  @ApiProperty({ format: 'date-time', nullable: true }) presence_expires_at!: Date | null;
 }

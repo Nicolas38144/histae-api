@@ -22,6 +22,13 @@ export class TraitsController {
     return { traits: await this.traits.list() };
   }
 
+  @Get('users/me/traits')
+  @UseGuards(JwtActiveGuard)
+  @ApiOkResponse({ type: TraitListResponseDto })
+  async listMine(@Req() request: AuthenticatedRequest): Promise<{ traits: Trait[] }> {
+    return { traits: await this.traits.listForUser(userId(request)) };
+  }
+
   @Post('users/me/traits')
   @UseGuards(JwtActiveGuard)
   @HttpCode(HttpStatus.NO_CONTENT)

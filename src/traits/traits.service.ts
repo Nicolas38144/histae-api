@@ -12,6 +12,10 @@ export class TraitsService {
     return this.traits.list();
   }
 
+  async listForUser(userId: string): Promise<Trait[]> {
+    return this.traits.listForUser(userId);
+  }
+
   async create(name: string): Promise<Trait> {
     const normalized = normalize(name);
     const trait = { id: randomUUID(), name: normalized };

@@ -1,10 +1,34 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import type { DiscoveryCandidateRow, DiscoveryCursor } from './discovery.models';
+import type { DiscoveryCandidateRow, DiscoveryCursor, DiscoveryStatusRow } from './discovery.models';
 
 @Injectable()
 export class DiscoveryRepository {
   constructor(private readonly database: DatabaseService) {}
+
+  async discoveryStatus(userId: string, sensitiveVersion: string, locationVersion: string): Promise<DiscoveryStatusRow> {
+    return (await this.database.query<DiscoveryStatusRow>(`
+      SELECT
+        EXISTS (SELECT 1 FROM user_profile WHERE user_id = $1) AS has_profile,
+        EXISTS (SELECT 1 FROM user_profile WHERE user_id = $1 AND sex IS NOT NULL) AS has_sex,
+        EXISTS (SELECT 1 FROM user_preferences WHERE user_id = $1) AS has_preferences,
+        EXISTS (
+          SELECT 1 FROM user_consent WHERE user_id = $1
+            AND consent_type = 'sensitive_data_consent' AND granted = true
+            AND withdrawn_at IS NULL AND document_version = $2
+        ) AS has_sensitive_consent,
+        EXISTS (
+          SELECT 1 FROM user_consent WHERE user_id = $1
+            AND consent_type = 'location_consent' AND granted = true
+            AND withdrawn_at IS NULL AND document_version = $3
+        ) AS has_location_consent,
+        EXISTS (
+          SELECT 1 FROM user_presence WHERE user_id = $1 AND is_location_fresh = true
+            AND updated_at > clock_timestamp() - INTERVAL '1 hour'
+        ) AS has_fresh_presence,
+        (SELECT updated_at + INTERVAL '1 hour' FROM user_presence WHERE user_id = $1) AS presence_expires_at
+    `, [userId, sensitiveVersion, locationVersion])).rows[0]!;
+  }
 
   async isDiscoveryReady(userId: string, sensitiveVersion: string, locationVersion: string): Promise<boolean> {
     const result = await this.database.query<{ ready: boolean }>(`

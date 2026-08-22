@@ -28,3 +28,29 @@ export type DiscoveryDataReferences = {
 };
 
 export type FeedCandidate = Omit<DiscoveryCandidateRow, 'distance_km'> & { distance_km: number };
+
+export const DISCOVERY_REQUIRED_ACTIONS = [
+  'profile',
+  'sex',
+  'preferences',
+  'sensitive_data_consent',
+  'location_consent',
+  'fresh_presence',
+] as const;
+export type DiscoveryRequiredAction = typeof DISCOVERY_REQUIRED_ACTIONS[number];
+
+export type DiscoveryStatusRow = {
+  has_profile: boolean;
+  has_sex: boolean;
+  has_preferences: boolean;
+  has_sensitive_consent: boolean;
+  has_location_consent: boolean;
+  has_fresh_presence: boolean;
+  presence_expires_at: Date | null;
+};
+
+export type DiscoveryStatus = {
+  ready: boolean;
+  required_actions: DiscoveryRequiredAction[];
+  presence_expires_at: Date | null;
+};

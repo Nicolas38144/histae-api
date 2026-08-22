@@ -5,7 +5,7 @@ import type { PublicMatch } from '../matches/matches.mapper';
 import { MatchesService } from '../matches/matches.service';
 import { ScyllaUnavailableError } from '../scylla/scylla.service';
 import { ConfigService } from '../config/config.service';
-import type { DiscoveryCandidateRow, DiscoveryCursor, FeedCandidate, SwipeDecision } from './discovery.models';
+import type { DiscoveryCandidateRow, DiscoveryCursor, DiscoveryStatus, DiscoveryRequiredAction, FeedCandidate, SwipeDecision } from './discovery.models';
 import { SWIPE_DECISIONS } from './discovery.models';
 import { DiscoveryRepository } from './discovery.repository';
 import { DiscoveryStore } from './discovery.store';
@@ -20,6 +20,26 @@ export class DiscoveryService {
     private readonly matches: MatchesService,
     private readonly config: ConfigService,
   ) {}
+
+  async status(userId: string): Promise<DiscoveryStatus> {
+    const row = await this.discovery.discoveryStatus(
+      userId,
+      this.config.legal.sensitiveDataConsentVersion,
+      this.config.legal.locationConsentVersion,
+    );
+    const requiredActions: DiscoveryRequiredAction[] = [];
+    if (!row.has_profile) requiredActions.push('profile');
+    else if (!row.has_sex) requiredActions.push('sex');
+    if (!row.has_preferences) requiredActions.push('preferences');
+    if (!row.has_sensitive_consent) requiredActions.push('sensitive_data_consent');
+    if (!row.has_location_consent) requiredActions.push('location_consent');
+    if (!row.has_fresh_presence) requiredActions.push('fresh_presence');
+    return {
+      ready: requiredActions.length === 0,
+      required_actions: requiredActions,
+      presence_expires_at: row.presence_expires_at,
+    };
+  }
 
   async feed(userId: string, limit: number, rawCursor?: string): Promise<{ profiles: FeedCandidate[]; next_cursor: string | null }> {
     this.requireAvailable();
