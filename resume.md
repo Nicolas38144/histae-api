@@ -1,6 +1,6 @@
 # Histae API — résumé technique et fonctionnel détaillé
 
-Mise à jour : 21 août 2026.
+Mise à jour : 23 août 2026.
 
 ## 1. Vision du projet
 
@@ -14,6 +14,7 @@ La version actuelle fournit :
 - les plans d’abonnement et le quota de continuation ;
 - le cycle de vie des matchs ;
 - la messagerie ;
+- le contrat mobile enrichi, le temps réel SSE et les notifications push ;
 - les signalements et actions de modération ;
 - les blocages entre utilisateurs ;
 - l’export des données et les demandes d’exercice des droits ;
@@ -22,9 +23,10 @@ La version actuelle fournit :
 - les migrations, la maintenance, la documentation OpenAPI et les sondes d’exploitation.
 - le feed de découverte, les décisions de swipe et la création de matchs par likes réciproques avec ScyllaDB.
 
-Un ensemble fonctionnel reste volontairement incomplet :
+Deux ensembles fonctionnels restent volontairement incomplets :
 
-1. les paiements et webhooks d’abonnement.
+1. le stockage et l’envoi réels des photos : le profil accepte encore une URL HTTP(S), conformément à l’exclusion demandée pour cette livraison ;
+2. les paiements et webhooks d’abonnement.
 
 ## 2. État global
 
@@ -37,6 +39,8 @@ Les sept refactors prioritaires précédemment identifiés ont été traités :
 5. pagination par curseur et réponses OpenAPI explicites ;
 6. ESLint, typecheck et tests renforcés ;
 7. documentation et politique de rétention formalisées.
+
+Le contrat nécessaire à l’application Flutter utilisateur couvre désormais les priorités P0 et P1 demandées, à l’exception volontaire du véritable système de photo : bootstrap de session, traits courants, matchs enrichis, dernier message et non-lus, idempotence des messages, lecture groupée, statut de découverte, appareils, push FCM optionnel, flux SSE multi-instance et suppression de compte protégée par un jeton dédié à usage unique.
 
 Le typecheck strict, les tests isolés et une suite de dix scénarios contre le Scylla local couvrent la nouvelle
 découverte. Cette suite valide les deux vues, les LWT, les likes simultanés, le feed, la réparation du miroir,
@@ -54,6 +58,8 @@ un nettoyage ciblé et sans `DROP`, `TRUNCATE` ni `ALTER TABLE`.
 | Base principale | PostgreSQL |
 | Base de décisions de découverte | ScyllaDB 2026.2, via `cassandra-driver` 4.9 |
 | Rate limiting distribué | Redis 7.4 local et production ; mémoire uniquement en repli explicite |
+| Temps réel mobile | Server-Sent Events, relayés entre instances par Redis Pub/Sub |
+| Notifications push | Firebase Cloud Messaging HTTP v1, fournisseur désactivable |
 | Authentification | JWT HS256 + refresh tokens rotatifs |
 | Validation | `class-validator` et `class-transformer` |
 | Documentation | `@nestjs/swagger`, Swagger UI et document OpenAPI JSON |
@@ -86,10 +92,11 @@ Les principaux modules sont :
 | `traits` | catalogue et attribution de traits |
 | `plans` | plans Free/Premium et fonctionnalités commerciales |
 | `discovery` | éligibilité et distance PostgreSQL, exclusions et swipes Scylla, likes réciproques et création de match |
+| `mobile` | appareils, flux SSE, notifications persistées et livraison FCM |
 | `common` | erreurs, validation HTTP, pagination et DTO génériques |
 | `config` | validation centralisée de l’environnement |
 | `database` | pool et transactions PostgreSQL |
-| `redis` | connexion partagée, compteur atomique et readiness Redis |
+| `redis` | connexion partagée, compteur atomique, Pub/Sub et readiness Redis |
 | `ratelimit` | limites mémoire ou Redis |
 
 `CoreModule` est global et fournit une instance partagée de `ConfigService`, `DatabaseService`, `ScyllaService`,
@@ -144,6 +151,8 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - Redis avec TLS et mot de passe en production pour le rate limiting partagé ;
 - ScyllaDB activée en production, avec TLS, authentification et facteur de réplication explicite ;
 - `SMS_PROVIDER`, `SWEEGO_API_KEY`, `SWEEGO_API_URL`, `SWEEGO_SMS_SENDER_ID`, `SWEEGO_SMS_REGION`, `SWEEGO_TIMEOUT` et `OTP_TTL` pour la livraison des OTP.
+- `ACCOUNT_DELETION_TOKEN_TTL` pour la confirmation de suppression, avec une valeur autorisée de 1 à 30 minutes ;
+- `PUSH_PROVIDER` et, si FCM est activé, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_TOKEN_URI` et `PUSH_TIMEOUT`.
 
 `.env.example` inventorie les variables prises en charge tandis que `.env` reste ignoré. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides.
 
@@ -165,7 +174,7 @@ Nest active les shutdown hooks. À l’arrêt :
 
 - le pool PostgreSQL est fermé ;
 - le client ScyllaDB est arrêté ;
-- la connexion Redis est quittée proprement ;
+- la connexion Redis et ses abonnements Pub/Sub sont quittés proprement ;
 - les timers de maintenance embarqués sont annulés.
 
 ## 7. Authentification et sécurité des comptes
@@ -198,13 +207,15 @@ L’idempotence est garantie au niveau applicatif : rejouer la même clé pour l
 - que son rôle actuel permet éventuellement l’accès admin ;
 - que l’onboarding juridique est complet pour une route utilisateur normale.
 
+`GET /api/auth/me` fournit au mobile un bootstrap minimal `{ user_id, onboarding_complete }`, y compris pendant l’onboarding. Il n’expose volontairement aucun rôle : l’application Flutter est destinée aux utilisateurs, tandis que le dashboard administratif conserve `GET /api/admin/me`.
+
 ### Refresh tokens
 
 - Format public `jti:secret`.
 - Seul le hash SHA-256 du token complet est persisté.
 - Rotation atomique sous verrou PostgreSQL.
 - Ancien token révoqué lors d’un refresh réussi.
-- Déconnexion idempotente pour un token appartenant à l’utilisateur.
+- Déconnexion avec révocation du token ; un `device_id` optionnel permet de supprimer atomiquement l’enregistrement push de l’appareil concerné.
 - Durée par défaut : 4 320 heures, soit 180 jours.
 
 ### Rôles
@@ -242,8 +253,8 @@ En production, les URL doivent utiliser HTTPS. Les versions, les URL et `LEGAL_R
 
 ### Traduction côté mobile
 
-1. Après la création de session, le mobile appelle `GET /api/users/me/consents`.
-2. La réponse contient les quatre choix, leur état, l’éventuelle `document_version` acceptée, `required_document_version`, `document_url`, `onboarding_complete` et `required_actions`.
+1. Après la création de session, le mobile appelle `GET /api/auth/me`, puis `GET /api/users/me/consents` si l’onboarding n’est pas terminé.
+2. L’état de consentement contient les quatre choix, leur état, l’éventuelle `document_version` acceptée, `required_document_version`, `document_url`, `onboarding_complete` et `required_actions`.
 3. Le mobile affiche séparément les CGU et la notice, sans case précochée.
 4. Les choix sont envoyés par `PUT /api/users/me/consents`.
 5. Tant que les deux documents obligatoires ne sont pas courants, les routes utilisateur normales répondent `403 onboarding_incomplete`.
@@ -294,6 +305,7 @@ Les CGU et la notice courantes sont requises. Un sexe non nul exige aussi le con
 ### Traits
 
 - catalogue administrable ;
+- lecture des traits attribués au compte courant par `GET /api/users/me/traits` ;
 - nom non vide, 100 octets maximum ;
 - attribution utilisateur idempotente ;
 - suppression d’une attribution idempotente ;
@@ -330,6 +342,8 @@ Un utilisateur est prêt pour la découverte uniquement s’il possède :
 Une tentative avant cet état renvoie `409 discovery_not_ready`. Une cible supprimée, bannie, incomplète,
 bloquée dans l’un ou l’autre sens, ou déjà liée par un match est présentée comme indisponible avec
 `404 discovery_candidate_not_found`.
+
+Le mobile peut vérifier ces prérequis sans consommer une page du feed avec `GET /api/users/me/discovery-status`. La réponse expose `ready`, l’échéance de présence et les actions manquantes parmi `profile`, `sex`, `preferences`, `sensitive_data_consent`, `location_consent` et `fresh_presence`.
 
 ### Construction du feed
 
@@ -454,15 +468,25 @@ Cette structure évite qu’un message soit inséré après l’expiration obser
 
 Chaque participant possède une ligne `match_state`. La photo n’est considérée comme révélée que si les deux lignes ont `revealed=true`. Ce consentement est distinct de la continuation.
 
+La liste utilisateur `GET /api/matches/me` est directement exploitable par le mobile. Elle joint l’autre profil, son âge calculé, ses traits, les états de révélation et de continuation du demandeur, le compteur de messages non lus et le dernier message. La photo de l’autre utilisateur reste `null` tant que les deux participants n’ont pas révélé la leur. La route administrative conserve son contrat séparé et n’est pas utilisée par Flutter.
+
 ### Messagerie
 
 - réservée aux participants ;
 - disponible pour les états autorisés ;
 - contenu non vide, 2 000 caractères maximum ;
+- en-tête `Idempotency-Key` UUID v4 obligatoire ; une répétition identique rejoue le même message sans nouvelle notification, tandis qu’une réutilisation différente renvoie `409` ;
 - message horodaté avec `clock_timestamp()` ;
 - `last_message_at` mis à jour dans la même transaction ;
 - seul le destinataire peut marquer le message comme lu ;
+- lecture groupée par `read_through_message_id`, en complément de l’ancienne lecture unitaire ;
 - un match expiré refuse atomiquement l’insertion.
+
+### Temps réel et push mobile
+
+`GET /api/users/me/events` ouvre un flux SSE authentifié. Il commence par `connected`, maintient la connexion avec un heartbeat toutes les 25 secondes et diffuse les invalidations de matchs, créations/mises à jour de match, créations de message et accusés de lecture. Redis Pub/Sub relaie ces événements entre instances ; le mode mémoire reste disponible quand Redis est explicitement désactivé en environnement local.
+
+Les appareils iOS et Android sont enregistrés par utilisateur sans jamais réexposer leur jeton fournisseur. FCM HTTP v1 est optionnel et utilise un jeton OAuth de compte de service mis en cache. Une notification de nouveau match ou message est persistée puis envoyée au destinataire ; son payload ne contient que des identifiants, jamais le contenu privé du message. Les jetons signalés `UNREGISTERED` sont supprimés automatiquement. Une panne de livraison ne fait pas échouer la mutation métier déjà validée.
 
 ### Blocage
 
@@ -580,6 +604,8 @@ Les journaux sont réservés à l’administration et limités à 500 lignes par
 
 L’effacement ne se limite pas à mettre `deleted_at`.
 
+La suppression directe exige désormais deux étapes. `POST /api/users/me/deletion-token` remplace le jeton précédent et retourne un secret `uuid:secret` valable 10 minutes par défaut. Seul son SHA-256 est stocké. `DELETE /api/users/me` exige ce jeton, le consomme une seule fois, puis lance l’effacement inter-bases. Un jeton mal formé, inconnu, réutilisé ou expiré renvoie `401 invalid_or_expired_deletion_token`.
+
 ### Suppressions immédiates
 
 - profil ;
@@ -587,6 +613,7 @@ L’effacement ne se limite pas à mettre `deleted_at`.
 - traits utilisateur ;
 - localisation ;
 - refresh tokens ;
+- jeton de confirmation de suppression ;
 - tokens d’appareil ;
 - notifications ;
 - blocages entrants et sortants ;
@@ -621,6 +648,7 @@ L’objectif est d’effacer les données de profil et d’authentification imm�
 | Position | obsolète après 1 h, supprimée après 24 h |
 | OTP | supprimé après `expires_at` |
 | Refresh token | supprimé après expiration, révocation ou effacement |
+| Jeton de suppression de compte | usage unique ; 10 min par défaut, purge après `expires_at` |
 | Notification | supprimée après `expires_at`, 90 jours par défaut |
 | Preuve de choix retiré | 5 ans après retrait |
 | Demande RGPD clôturée/rejetée | 5 ans après clôture |
@@ -657,7 +685,7 @@ La procédure est décrite dans [`docs/legal-release-checklist.md`](docs/legal-r
 
 ## 19. Stockage PostgreSQL et ScyllaDB
 
-Le schéma canonique contient 23 tables :
+Le schéma canonique contient 24 tables :
 
 1. `user_account` ;
 2. `account_tombstone` ;
@@ -681,7 +709,8 @@ Le schéma canonique contient 23 tables :
 20. `user_block` ;
 21. `user_report` ;
 22. `device_token` ;
-23. `notification`.
+23. `notification` ;
+24. `account_deletion_token`.
 
 Les relations utilisent largement `ON DELETE CASCADE` ou `SET NULL` selon le besoin métier. Les contraintes SQL doublent les validations critiques : rôles, statuts, types de consentement, sexe, préférences, majorité, prix et limites.
 
@@ -699,10 +728,12 @@ Les index conservés couvrent :
 - recherche géographique ;
 - participants et échéances des matchs ;
 - pagination des matchs/messages/signalements ;
+- idempotence des messages par expéditeur et recherche des messages non lus ;
 - refresh tokens par utilisateur, par JTI unique et par date d’expiration ;
 - blocages ;
 - signalements en attente ;
-- notifications non lues et expirées.
+- notifications non lues et expirées ;
+- expiration des jetons de suppression de compte.
 
 La migration `008` retire neuf index redondants, remplacés ou sans requête correspondante : doublons du hash téléphone et du JTI, ancien index des messages, index simple du statut des signalements, index simple des consentements, ancien tri par dernier message, index des comptes actifs, index d’anonymisation différée et ancien index partiel des refresh tokens. Ce dernier est remplacé par `idx_refresh_tokens_expires(expires_at)`, aligné sur la purge globale réellement exécutée. La migration `010` retire ensuite l’ancien index partiel des OTP utilisables, devenu redondant avec la contrainte unique par téléphone.
 
@@ -727,6 +758,7 @@ Les migrations versionnées sont :
 | `008_index_cleanup` | suppression de neuf index redondants ou obsolètes et indexation directe de l’expiration des refresh tokens |
 | `009_otp_sms_delivery` | idempotence des demandes OTP, états de livraison Sweego et identifiants fournisseur |
 | `010_single_usable_otp` | reprise des doublons historiques, remplacement de l’ancien index partiel et contrainte d’un seul OTP utilisable par téléphone |
+| `011_mobile_client_contract` | idempotence des messages, index des non-lus, version d’application des appareils et jetons de suppression à usage unique |
 
 Le moteur de migration :
 
@@ -738,7 +770,7 @@ Le moteur de migration :
 
 `pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev` et un hôte PostgreSQL local.
 
-Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les dix migrations conduisent au même ensemble d’index.
+Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les onze migrations conduisent au même ensemble d’index.
 
 Le schéma Scylla suit un registre séparé `scylla_schema_migrations`. `pnpm run scylla:migrate` crée le keyspace
 avec `NetworkTopologyStrategy`, applique `scylla/001_discovery.cql`, enregistre son SHA-256 et refuse toute
@@ -762,7 +794,7 @@ Deux familles de maintenance existent :
 ### Vie privée
 
 - obsolescence et suppression de position ;
-- OTP, refresh tokens et notifications expirés ;
+- OTP, refresh tokens, notifications et jetons de suppression expirés ;
 - preuves de consentement retirées ;
 - demandes RGPD ;
 - journaux d’accès ;
@@ -847,14 +879,13 @@ test/
 
 Inventaire actuel :
 
-- 23 fichiers/suites unitaires, 126 cas ;
-- 2 suites e2e, 9 cas ;
-- 3 suites d’intégration, 29 cas dont 17 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
-- total complet : 28 fichiers/suites Jest et 164 cas.
+- 29 fichiers/suites unitaires, 152 cas ;
+- 3 suites e2e, 15 cas ;
+- 3 suites d’intégration, 33 cas dont 21 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
+- total complet : 35 fichiers/suites Jest et 200 cas.
 
-Le 21 août 2026, TypeScript, ESLint, le build et les 135 cas autonomes ont été validés localement. Les 17 tests
-d’intégration PostgreSQL ont aussi réussi avec le calcul réel du CA estimé. Les suites ScyllaDB et Redis restent
-exécutables séparément, sans flag d’activation.
+Le 23 août 2026, TypeScript, ESLint, le build et les 167 cas autonomes ont été validés localement. Les 33 tests
+d’intégration réels PostgreSQL, ScyllaDB et Redis ont également réussi. Les suites restent exécutables séparément, sans flag d’activation.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
 
@@ -875,9 +906,8 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 7. `pnpm run test:integration` avec les trois dépendances réelles ;
 8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
 
-Pour cette mise à jour, le lint, le typecheck, le build et les 135 cas indépendants de l’infrastructure ont réussi
-le 21 août 2026. Les 17 cas PostgreSQL ont également réussi sur `histae-dev`; les 12 cas ScyllaDB et Redis ne sont
-pas affectés par le calcul de CA et restent disponibles dans la campagne d’intégration complète.
+Pour cette mise à jour, le lint, le typecheck, le build et les 167 cas indépendants de l’infrastructure ont réussi
+le 23 août 2026. Les 21 cas PostgreSQL, les 10 cas ScyllaDB/PostgreSQL et les 2 cas Redis ont également réussi.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 
@@ -901,7 +931,8 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 
 ### Bloquants fonctionnels
 
-1. Aucun paiement/webhook : les plans sont lisibles mais non alimentés commercialement.
+1. Aucun véritable stockage de photo : le profil accepte uniquement une URL HTTP(S), conformément à l’exclusion de cette livraison.
+2. Aucun paiement/webhook : les plans sont lisibles mais non alimentés commercialement.
 
 ### Bloquants conformité/organisation
 
@@ -939,11 +970,12 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 ### Avant bêta interne
 
 1. Valider le Sender ID Sweego, effectuer un envoi canari réel et ajouter le suivi de livraison opérationnel.
-2. Ajouter les contrats HTTP e2e manquants.
-3. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
-4. Ajouter métriques et alertes minimales.
-5. Tester la restauration d’une sauvegarde.
-6. Préparer un cluster Scylla jetable pour les essais de panne sans toucher au keyspace de développement.
+2. Implémenter le stockage photo réel, sa validation, sa suppression et ses URL signées.
+3. Ajouter les contrats HTTP e2e encore manquants.
+4. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
+5. Ajouter métriques et alertes minimales.
+6. Tester la restauration d’une sauvegarde.
+7. Préparer un cluster Scylla jetable pour les essais de panne sans toucher au keyspace de développement.
 
 ### Avant bêta publique
 

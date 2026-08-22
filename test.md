@@ -1,6 +1,6 @@
 # Tests de Histae API
 
-Mise à jour : 21 août 2026.
+Mise à jour : 23 août 2026.
 
 ## Organisation et règles
 
@@ -15,17 +15,17 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **28 fichiers de test, 28 suites Jest et 164 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **35 fichiers de test, 35 suites Jest et 200 cas** lorsque toutes les intégrations sont activées :
 
-- 126 tests unitaires ;
-- 9 tests e2e ;
-- 17 tests d’intégration PostgreSQL/OpenAPI ;
+- 152 tests unitaires ;
+- 15 tests e2e ;
+- 21 tests d’intégration PostgreSQL/OpenAPI ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 23 suites unitaires, 2 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 25 suites autonomes et leurs 135 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 29 cas, sans flag d’activation.
+Jest affiche 29 suites unitaires, 3 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 32 suites autonomes et leurs 167 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 33 cas, sans flag d’activation.
 
-Le 21 août 2026, TypeScript, ESLint, le build et les 135 cas autonomes ont réussi. Les 17 intégrations PostgreSQL ont également réussi ; les suites ScyllaDB et Redis sont exécutées séparément lorsque leurs services sont démarrés.
+Le 23 août 2026, TypeScript, ESLint, le build et les 167 cas autonomes ont réussi. Les 33 intégrations réelles PostgreSQL, ScyllaDB et Redis ont également réussi.
 
 ## Commandes
 
@@ -39,7 +39,7 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 29 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 33 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL/OpenAPI réels uniquement.
@@ -63,6 +63,21 @@ La suite Scylla utilise le keyspace `histae_discovery` sans `DROP`, `TRUNCATE` o
 refuse toute base logique autre que 15 et ses compteurs uniques expirent automatiquement après deux secondes.
 
 ## Tests unitaires
+
+### `test/unit/admin/admin.repository.spec.ts` — 3 tests
+
+Vérifie la protection entre rôles administratifs, la révocation des sessions et l’audit lors d’un bannissement, ainsi que le calcul du revenu Premium estimé.
+
+### `test/unit/admin/admin.service.spec.ts` — 6 tests
+
+Vérifie le contrat public des listes, la validation et le mapping des actions administratives, la justification des accès aux conversations et le transfert des périodes de revenu.
+
+### `test/unit/auth/auth.repository.spec.ts` — 2 tests
+
+Suite `AuthRepository logout` :
+
+1. Vérifie que la révocation du refresh token et la suppression de l’appareil demandé partagent la même transaction.
+2. Vérifie qu’un token non révocable n’entraîne aucune suppression d’appareil.
 
 ### `test/unit/auth/auth.guard.spec.ts` — 4 tests
 
@@ -107,9 +122,9 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 36 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 45 tests paramétrés
 
-Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 36 classes injectées principales, y compris le service Redis partagé.
+Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 45 classes injectées principales, y compris le service Redis partagé et les six composants du module mobile.
 
 Chaque cas vérifie que `emitDecoratorMetadata` contient des tokens de constructeur réels et jamais `Function`, `Object` ou `undefined`. Ce test empêche la régression où un import `type` TypeScript supprimerait au runtime le token dont Nest a besoin pour l’injection de dépendances.
 
@@ -124,14 +139,14 @@ Suite `cursor pagination` :
 
 Suite `test layout` : parcourt le dépôt et garantit que tous les fichiers correspondant aux conventions `.spec.*` et `.test.*` se trouvent sous `test`.
 
-### `test/unit/config/config.service.spec.ts` — 17 tests
+### `test/unit/config/config.service.spec.ts` — 24 tests
 
 Suite `parseEnvironment` :
 
 - accepte séparément `development`, `test` et `production` ;
 - refuse séparément `undefined`, la chaîne vide, `staging` et une valeur ambiguë telle que `developmentish`.
 
-La section `ConfigService SMS configuration` ajoute dix cas : configuration Sweego française valide, fournisseur obligatoire en production, identifiants obligatoires, deux Sender ID invalides, URL non HTTPS, timeout supérieur à trente secondes, deux durées OTP hors limites et région autre que `FR`. La configuration échoue ainsi fermement au lieu de choisir implicitement un mode ou une valeur dangereuse.
+Les autres cas couvrent la configuration Sweego, CORS, les limites du TTL OTP et du jeton de suppression, les identifiants FCM obligatoires, une configuration FCM explicite et le timeout push maximal. La configuration échoue ainsi fermement au lieu de choisir implicitement un mode ou une valeur dangereuse.
 
 ### `test/unit/crypto/phone-crypto.spec.ts` — 2 tests
 
@@ -140,14 +155,15 @@ Suite `phone crypto` :
 1. Vérifie le chiffrement AES-256-GCM, l’aléa du nonce, la taille du format chiffré et l’absence du numéro en clair.
 2. Vérifie l’acceptation d’une clé brute de 32 octets ressemblant à de l’hexadécimal et le caractère déterministe du HMAC utilisé pour les recherches.
 
-### `test/unit/discovery/discovery.service.spec.ts` — 4 tests
+### `test/unit/discovery/discovery.service.spec.ts` — 6 tests
 
 Suite `DiscoveryService` :
 
-1. Vérifie l’exclusion des profils déjà swipés, l’arrondi public de distance et la précision exacte du curseur.
-2. Vérifie qu’un match PostgreSQL n’est créé qu’après un like réciproque.
-3. Refuse le remplacement d’une décision immuable avec `409 swipe_already_recorded`.
-4. Échoue en mode fermé avec `503 discovery_unavailable` lorsque Scylla est désactivée.
+1. et 2. Vérifient le statut de découverte incomplet puis prêt, avec la liste exacte des actions manquantes.
+3. Vérifie l’exclusion des profils déjà swipés, l’arrondi public de distance et la précision exacte du curseur.
+4. Vérifie qu’un match PostgreSQL n’est créé qu’après un like réciproque.
+5. Refuse le remplacement d’une décision immuable avec `409 swipe_already_recorded`.
+6. Échoue en mode fermé avec `503 discovery_unavailable` lorsque Scylla est désactivée.
 
 ### `test/unit/scripts/seed-fake-swipe.spec.ts` — 1 test
 
@@ -181,9 +197,34 @@ Suite `DiscoveryStore` avec un client Scylla simulé :
 
 Suite `MatchesRepository maintenance` : vérifie l’ordre et les compteurs des trois phases de maintenance : `active` vers `awaiting_continuation`, expiration, puis purge physique.
 
+### `test/unit/matches/matches.service.spec.ts` — 2 tests
+
+Suite `MatchesService mobile messaging` :
+
+1. Vérifie la normalisation de la clé d’idempotence et l’absence de seconde livraison lors du replay d’un message.
+2. Vérifie le mapping stable `409 idempotency_key_conflict` lorsqu’une clé est réutilisée pour une autre requête.
+
+### `test/unit/mobile/mobile.service.spec.ts` — 2 tests
+
+1. Vérifie l’enregistrement normalisé d’un appareil et garantit que le jeton fournisseur ne sort jamais dans la réponse publique.
+2. Vérifie l’erreur stable `404 device_not_found` pour un appareil inconnu de l’utilisateur.
+
+### `test/unit/mobile/realtime.service.spec.ts` — 2 tests
+
+1. Vérifie le filtrage strict des événements SSE par destinataire dans le repli mémoire.
+2. Vérifie qu’un événement est publié une seule fois par destinataire distinct via Redis.
+
+### `test/unit/mobile/push.service.spec.ts` — 1 test
+
+Vérifie que le mode push désactivé ne charge aucun jeton et n’effectue aucun appel réseau.
+
+### `test/unit/mobile/mobile-delivery.service.spec.ts` — 1 test
+
+Vérifie qu’un événement de message atteint les deux participants en temps réel, que seul le destinataire reçoit la notification et qu’aucun contenu privé du message n’est persisté ni transmis à FCM.
+
 ### `test/unit/privacy/privacy.repository.spec.ts` — 1 test
 
-Suite `PrivacyRepository maintenance` : vérifie les dix politiques de rétention, leur exécution par lots bornés, la suppression des positions après 24 heures, la conservation des preuves de consentement pendant cinq ans et celle des journaux d’accès pendant un an.
+Suite `PrivacyRepository maintenance` : vérifie les onze politiques de rétention, dont les jetons de suppression expirés, leur exécution par lots bornés, la suppression des positions après 24 heures, la conservation des preuves de consentement pendant cinq ans et celle des journaux d’accès pendant un an.
 
 ### `test/unit/privacy/privacy.service.spec.ts` — 2 tests
 
@@ -205,7 +246,7 @@ Suite `UsersRepository legal-choice ordering` :
 1. Vérifie que les horodatages viennent de PostgreSQL, que le retrait utilise `clock_timestamp()` et que l’état courant est ordonné par `event_sequence`.
 2. Vérifie l’idempotence d’un retry mobile identique : aucun nouvel événement n’est ajouté si le choix et la version sont déjà actifs.
 
-### `test/unit/users/users.service.spec.ts` — 13 tests
+### `test/unit/users/users.service.spec.ts` — 16 tests
 
 Suite `UsersService consent enforcement` :
 
@@ -217,41 +258,55 @@ Suite `UsersService consent enforcement` :
 6. Ne déclare l’onboarding terminé qu’avec les versions courantes des deux documents obligatoires.
 7 à 12. Refuse six dates calendaires invalides : jour inexistant, mois 13, mois 0, jour 0, format sans zéro initial et date-heure RFC3339 à la place de `YYYY-MM-DD`.
 13. Vérifie que l’effacement des données de découverte Scylla précède l’anonymisation PostgreSQL.
+14. Vérifie le format, l’échéance et le hashage d’un jeton de suppression nouvellement émis.
+15. Vérifie l’ordre jeton consommé → Scylla effacée → PostgreSQL anonymisé.
+16. Refuse un jeton mal formé sans toucher aux données du compte.
 
 ## Tests e2e
 
-### `test/e2e/auth.contract.spec.ts` — 4 tests
+### `test/e2e/auth.contract.spec.ts` — 6 tests
 
 Cette suite démarre une vraie application Fastify de test avec `AuthController`, le filtre d’erreur global et des services maîtrisés :
 
-1. Vérifie que `POST /api/auth/otp/send` accepte l’en-tête d’idempotence UUID v4, répond `202` et transmet la clé au service.
-2. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
-3. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
-4. Vérifie le format stable `404 route_not_found` pour une route inconnue.
+1. Vérifie le bootstrap utilisateur `GET /api/auth/me`.
+2. Vérifie que `POST /api/auth/otp/send` accepte l’en-tête d’idempotence UUID v4, répond `202` et transmet la clé au service.
+3. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
+4. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
+5. Vérifie que le logout transmet le `device_id` optionnel à supprimer.
+6. Vérifie le format stable `404 route_not_found` pour une route inconnue.
 
-### `test/e2e/discovery.contract.spec.ts` — 5 tests
+### `test/e2e/discovery.contract.spec.ts` — 6 tests
 
 Cette suite démarre Fastify avec le contrôleur de découverte et des dépendances contrôlées :
 
-1. Vérifie `POST /api/swipes`, son statut `201`, son payload et son rate limit dédié.
-2. Vérifie que le DTO refuse UUID et décision invalides avant le service.
-3. Vérifie la conversion de `limit` et le transfert du curseur de `GET /api/feed`.
-4. Vérifie l’enveloppe HTTP stable `503 discovery_unavailable` quand le service signale une panne Scylla.
-5. Vérifie que l’ancienne route `POST /api/fake-match` répond désormais au format stable `404 route_not_found`.
+1. Vérifie le contrat et l’absence de consommation de quota de `GET /api/users/me/discovery-status`.
+2. Vérifie `POST /api/swipes`, son statut `201`, son payload et son rate limit dédié.
+3. Vérifie que le DTO refuse UUID et décision invalides avant le service.
+4. Vérifie la conversion de `limit` et le transfert du curseur de `GET /api/feed`.
+5. Vérifie l’enveloppe HTTP stable `503 discovery_unavailable` quand le service signale une panne Scylla.
+6. Vérifie que l’ancienne route `POST /api/fake-match` répond désormais au format stable `404 route_not_found`.
+
+### `test/e2e/mobile.contract.spec.ts` — 3 tests
+
+Cette suite démarre Fastify avec le contrôleur mobile :
+
+1. Vérifie l’enregistrement d’un appareil, le statut `201` et l’absence du jeton FCM dans la réponse.
+2. Vérifie la liste et la suppression d’un appareil dans le contexte de l’utilisateur authentifié.
+3. Vérifie le rejet d’un jeton trop court ou d’une plateforme non supportée avant le service.
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 17 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 21 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
-1. **Tables requises** — vérifie l’existence des tables du contrat HTTP, des consentements, droits RGPD, blocages, notifications et tombstones.
-2. **Index requis et nettoyage** — vérifie les index de recherche, purge et pagination, les index OTP dont la contrainte unique d’un code utilisable, l’unicité d’un consentement actif, l’index de purge des refresh tokens par expiration et l’absence des dix index redondants ou obsolètes supprimés par les migrations `008` et `010`.
+1. **Tables requises** — vérifie l’existence des tables du contrat HTTP, des consentements, droits RGPD, blocages, notifications, tombstones et jetons de suppression.
+2. **Index requis et nettoyage** — vérifie les index de recherche, purge, pagination, messages non lus et idempotence, les index OTP dont la contrainte unique d’un code utilisable, l’unicité d’un consentement actif et l’absence des index redondants retirés.
 3. **Livraison OTP réelle** — confirme qu’un code devient utilisable seulement après acceptation fournisseur, qu’un retry de la clé n’insère rien et qu’un nouvel envoi échoué ne désactive pas le code précédent.
 4. **Livraison abandonnée** — vieillit une ligne `pending`, rejoue sa clé et vérifie son passage à `failed` avec `delivery_unknown`.
 5. **Concurrence OTP** — termine deux acceptations fournisseur simultanément et vérifie qu’un seul code reste `sent` et non utilisé.
-6. **Requêtes de rétention réelles** — exécute les dix requêtes contre PostgreSQL afin de détecter les erreurs SQL ou de typage que les mocks unitaires ne voient pas.
-7. **Démarrage Nest et OpenAPI** — démarre le graphe applicatif complet, génère le document Swagger, vérifie l’en-tête d’idempotence OTP, les schémas de consentement, découverte, matchs, exports et signalements, ainsi que l’absence de `/fake-match`.
+6. **Requêtes de rétention réelles** — exécute les onze requêtes contre PostgreSQL afin de détecter les erreurs SQL ou de typage que les mocks unitaires ne voient pas.
+7. **Démarrage Nest et OpenAPI** — démarre le graphe applicatif complet, génère le document Swagger et vérifie notamment le bootstrap, l’idempotence des messages, les matchs enrichis, la lecture groupée, les appareils, le SSE, la suppression confirmée et l’absence de `/fake-match`.
 8. **Choix juridiques autorisés** — accepte exactement les quatre types supportés et confirme que `marketing` est rejeté par la base.
 9. **Concurrence des consentements** — lance deux écritures concurrentes, vérifie leur ordre exact, une seule ligne active et la cohérence de `currentConsents`.
 10. **Expiration arrivée à échéance** — confirme qu’un match en attente dont la fenêtre est dépassée devient `expired` avec purge à trente jours.
@@ -262,6 +317,10 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 15. **Blocage** — confirme qu’un blocage clôt le match existant, programme sa purge et empêche la création d’un nouveau match pour la paire.
 16. **Effacement RGPD** — traite une demande d’effacement de `pending` à `in_progress`, puis `completed`; vérifie l’anonymisation du compte, la suppression du profil/préférences/position/blocages/état, le retrait des consentements, le masquage du message, la clôture du match et les journaux d’audit.
 17. **CA Premium estimé** — exécute l’agrégation administrateur réelle et vérifie que le nombre d’abonnements Premium multiplié par le tarif mensuel du catalogue produit le montant attendu.
+18. **Idempotence des messages** — rejoue le même envoi, retrouve le même UUID sans doublon et refuse une clé réutilisée avec un autre contenu.
+19. **Résumé mobile d’un match** — vérifie le profil joint, le dernier message, le compteur non lu et le masquage de la photo jusqu’à la révélation mutuelle.
+20. **Lecture groupée** — marque tous les messages reçus jusqu’à une borne, sans marquer ceux envoyés par le demandeur.
+21. **Jeton de suppression à usage unique** — accepte le bon hash une seule fois et refuse un hash erroné ou un replay.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -295,14 +354,10 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 135 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 29 cas réels et vérifier que les 164 cas passent au total.
+5. exécuter `pnpm test` pour les 167 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 33 cas réels et vérifier que les 200 cas passent au total.
 
-La validation du 21 août 2026 a réussi : **25 suites et 135 cas autonomes**, ainsi que les **17 cas PostgreSQL**.
-Les 12 cas ScyllaDB et Redis sont conservés dans la campagne complète et ne sont pas affectés par cette évolution.
-Un smoke test manuel complémentaire a validé la santé de l’API, l’envoi OTP Sweego réel, le retry idempotent sans
-second SMS, la consommation du code, l’accès authentifié, la rotation du refresh token, le refus de l’ancien token
-et le logout `204`.
+La validation du 23 août 2026 a réussi : **32 suites et 167 cas autonomes**, ainsi que les **33 cas réels** : 21 PostgreSQL/OpenAPI, 10 ScyllaDB/PostgreSQL et 2 Redis. Le build, TypeScript et ESLint sont également verts, et le moteur de migration confirme que `histae-dev` est compatible avec la migration `011`.
 
 ## Audit des tests obsolètes
 

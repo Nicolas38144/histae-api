@@ -1,6 +1,6 @@
 # Histae API — routes existantes
 
-Mise à jour : 17 août 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
+Mise à jour : 23 août 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
 
 ## Documentation OpenAPI
 
@@ -12,7 +12,7 @@ Lorsque `OPENAPI_ENABLED=true` (par défaut en développement et en test), l’i
 - Taille maximale d’un corps JSON : **1 Mio**.
 - Les erreurs suivent le format `{ "error": { "code", "message" } }`.
 - Une route « authentifiée » requiert `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
-- Pendant l'onboarding, `GET|PUT /users/me/consents`, `POST /auth/logout` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
+- Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, `POST /auth/logout`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
 - Une route « admin » accepte les rôles `admin` et `superadmin`.
 - `limit` est un entier de 1 à 100 (20 par défaut). Les listes volumineuses renvoient `next_cursor`; passez-le ensuite dans `cursor`. `offset` reste accepté pour compatibilité, mais est déprécié et doit valoir `0` avec un curseur.
 - Un rate limit global par IP est actif et partagé dans Redis entre les instances de l’API. Les clés Redis sont pseudonymisées par HMAC. En cas de dépassement : `429 rate_limit_exceeded` avec l’en-tête `Retry-After` ; Redis indisponible produit `503 rate_limit_unavailable`.
@@ -22,10 +22,11 @@ Lorsque `OPENAPI_ENABLED=true` (par défaut en développement et en test), l’i
 
 | Méthode | Route | Accès | Entrée | Résultat |
 | --- | --- | --- | --- | --- |
+| GET | `/auth/me` | Authentifiée, onboarding incomplet accepté | — | `200 { "user_id", "onboarding_complete" }`. Bootstrap minimal de session pour l’application mobile, sans exposer le rôle administratif. |
 | POST | `/auth/otp/send` | Public | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "phone_number": "+336…" }`. Seuls les numéros français `+33` sont acceptés. | `202 { "message": "Verification code request accepted." }` après acceptation de la demande. Une clé absente ou mal formée renvoie `400 invalid_idempotency_key`; sa réutilisation pour un autre numéro renvoie `409 idempotency_key_conflict`. Une erreur ou une réponse Sweego invalide renvoie `503 otp_delivery_unavailable`. Limite : 5/h par IP et par numéro pseudonymisé. |
 | POST | `/auth/otp/verify` | Public | `{ "phone_number": "+336…", "otp": "123456" }`, numéro français `+33` uniquement | `200` avec `{ "access_token", "refresh_token" }`. Le code OTP est consommé une seule fois. Si le téléphone n’est associé à aucun compte, un compte de rôle `user` est créé. Limite : 5/h par IP et numéro pseudonymisé. |
 | POST | `/auth/refresh` | Public | `{ "refresh_token": "jti:secret" }` | `200` avec une nouvelle paire de tokens. Le token utilisé est révoqué dans la même transaction. Limite : 30/15 min/IP. |
-| POST | `/auth/logout` | Authentifiée | `{ "refresh_token": "jti:secret" }` | `204`, révoque le refresh token s’il appartient à l’utilisateur courant. |
+| POST | `/auth/logout` | Authentifiée | `{ "refresh_token": "jti:secret", "device_id"?: "uuid" }` | `204`, révoque le refresh token s’il appartient à l’utilisateur courant et supprime atomiquement l’enregistrement push indiqué. |
 
 Pour l’envoi OTP, l’API persiste d’abord un hash avec l’état `pending`, appelle l’endpoint transactionnel Sweego, puis passe le code à `sent` uniquement après une réponse HTTP `200` contenant un `transaction_id` et un identifiant `swg_uids` valides. Rejouer rapidement la même clé lorsque la demande est `pending`, ou rejouer une demande déjà `sent`, renvoie le même `202` sans second appel fournisseur. Un `pending` plus ancien que le timeout Sweego augmenté de cinq secondes est marqué `failed` lors du retry et renvoie `503`, comme toute autre demande échouée. L’activation est sérialisée par téléphone et la base garantit qu’un seul OTP envoyé reste utilisable. La durée de validité est définie par `OTP_TTL`.
 
@@ -66,8 +67,20 @@ Toutes ces routes sont authentifiées.
 | GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
-| DELETE | `/users/me` | — | `204`. Efface immédiatement profil, préférences, traits, localisation, tokens, appareils, notifications, blocages, abonnement et swipes Scylla entrants/sortants ; retire les consentements et leurs métadonnées réseau ; anonymise le compte et les messages émis ; clôt les matchs avant purge différée. Si l’effacement Scylla ne peut pas être garanti : `503 data_erasure_unavailable`. |
+| POST | `/users/me/deletion-token` | — | `201 { "confirmation_token", "expires_at" }`. Remplace tout jeton précédent par un secret dédié, hashé en base, à usage unique et valable 10 minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1 à 30 min). |
+| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, puis efface immédiatement profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, abonnement et swipes Scylla entrants/sortants ; retire les consentements et leurs métadonnées réseau ; anonymise le compte et les messages émis ; clôt les matchs avant purge différée. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si l’effacement Scylla ne peut pas être garanti : `503 data_erasure_unavailable`. |
 | GET | `/users/me/continuation-quota` | — | `200` avec le plan effectif, l’usage et, pour un plan limité, `weekly_limit` et `remaining`. |
+
+### Appareils, push et temps réel
+
+| Méthode | Route | Corps / paramètres | Résultat |
+| --- | --- | --- | --- |
+| GET | `/users/me/devices` | — | `200 { "devices": [...] }`. Expose les UUID, plateformes, versions d’application et dates d’usage, jamais les jetons FCM. |
+| POST | `/users/me/devices` | `{ "push_token", "platform": "ios\|android", "app_version"?: "…" }` | `201` avec l’appareil public. Un jeton fournisseur déjà connu est réaffecté et rafraîchi de manière idempotente. |
+| DELETE | `/users/me/devices/:id` | UUID appareil | `204`, ou `404 device_not_found`. La propriété par l’utilisateur authentifié est imposée. |
+| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created` et `message.read`. |
+
+Le temps réel est relayé entre instances via Redis en production et fonctionne localement en mémoire lorsque Redis est explicitement désactivé. Les notifications push FCM sont optionnelles (`PUSH_PROVIDER=fcm`) et ne contiennent jamais le texte d’un message : seulement des identifiants nécessaires à la resynchronisation. Un jeton signalé `UNREGISTERED` par FCM est supprimé automatiquement.
 
 ### Consentements
 
@@ -97,6 +110,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | Méthode | Route | Accès | Corps / paramètres | Résultat |
 | --- | --- | --- | --- | --- |
 | GET | `/traits` | Authentifiée | — | `200 { "traits": [{ "id", "name" }] }`. |
+| GET | `/users/me/traits` | Authentifiée | — | `200 { "traits": [{ "id", "name" }] }` avec uniquement les traits actuellement attribués à l’utilisateur. |
 | POST | `/users/me/traits` | Authentifiée | `{ "trait_id": "uuid" }` | `204`. Trait absent : `404 trait_not_found`. L’opération est idempotente pour une attribution déjà existante. |
 | DELETE | `/users/me/traits/:traitId` | Authentifiée | UUID | `204`. L’opération est idempotente si le trait n’était pas attribué. |
 | POST | `/admin/traits` | Admin | `{ "name": "…" }` | `201 { "id", "name" }`. Nom non vide, 100 octets maximum ; doublon : `409 trait_already_exists`. |
@@ -115,12 +129,13 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 
 | Méthode | Route | Accès | Corps / paramètres | Résultat |
 | --- | --- | --- | --- | --- |
-| GET | `/matches/me` | Authentifiée | `limit`, `cursor` (`offset` déprécié) | `200 { "matches": [...], "next_cursor": "…\|null" }`, triés par activité. |
+| GET | `/matches/me` | Authentifiée | `limit`, `cursor` (`offset` déprécié) | `200 { "matches": [...], "next_cursor": "…\|null" }`, triés par activité. Chaque élément contient l’autre utilisateur (`firstname`, âge, sexe, bio, traits et photo conditionnelle), `my_revealed`, `photos_revealed`, `my_continued`, `unread_count` et `last_message`. La photo reste `null` avant la révélation mutuelle. |
 | GET | `/matches/:userId` | Admin | UUID utilisateur ; `reason` obligatoire (3 à 500 caractères) ; `limit`, `cursor` (`offset` déprécié) | Même réponse paginée pour l’utilisateur ciblé. La consultation est inscrite dans `data_access_log`. |
 | PATCH | `/matches/:id/reveal` | Authentifiée | — | `200` avec `{ "message", "photos_revealed" }`. Chaque participant enregistre son consentement ; `photos_revealed` devient vrai quand les deux ont consenti. |
 | PATCH | `/matches/:id/continue` | Authentifiée | — | `200` avec `{ "message", "match_confirmed" }`. Disponible après la fenêtre initiale de 24 h, puis demande le consentement des deux participants. Le quota hebdomadaire est débité lorsque le second consentement confirme le match. |
 | GET | `/matches/:id/messages` | Authentifiée | UUID match ; `limit`, `cursor` (`offset` déprécié) | `200 { "messages": [...], "next_cursor": "…\|null" }`. Le demandeur doit participer au match. |
-| POST | `/matches/:id/messages` | Authentifiée | `{ "content": "…" }` | `201` avec le message créé. Contenu non vide, 2 000 caractères maximum. Limite : 60/min/utilisateur, puis `429 message_rate_limit_exceeded`. |
+| POST | `/matches/:id/messages` | Authentifiée | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "content": "…" }` | `201` avec le message stable. Rejouer la même clé, le même match et le même contenu retourne le message existant sans nouvelle notification ; réutiliser la clé pour une autre requête renvoie `409 idempotency_key_conflict`. Contenu non vide, 2 000 caractères maximum. Limite : 60/min/utilisateur. |
+| PATCH | `/matches/:id/messages/read` | Authentifiée | `{ "read_through_message_id": "uuid" }` | `200 { "updated_count", "read_through_message_id" }`. Marque en une transaction tous les messages reçus jusqu’à la borne incluse. |
 | PATCH | `/matches/:id/messages/:msgId/read` | Authentifiée | UUID match et UUID message | `200 { "message": "message marked as read" }`. Un expéditeur ne peut pas marquer son propre message comme lu. |
 
 Un match est initialement `active` pendant 24 h. Il passe ensuite à `awaiting_continuation`, puis à `confirmed` si les deux utilisateurs acceptent, ou à `expired` après la seconde fenêtre. Les routes concernées peuvent renvoyer notamment `404 match_not_found`, `409 continuation_not_available_yet`, `409 invalid_match_state`, `409 messaging_not_available`, `410 match_expired` et `403 continuation_quota_reached`.
@@ -129,6 +144,7 @@ Un match est initialement `active` pendant 24 h. Il passe ensuite à `awaiting_c
 
 | Méthode | Route | Accès | Corps / paramètres | Résultat |
 | --- | --- | --- | --- | --- |
+| GET | `/users/me/discovery-status` | Authentifiée | — | `200 { "ready", "required_actions", "presence_expires_at" }`. Les actions possibles sont `profile`, `sex`, `preferences`, `sensitive_data_consent`, `location_consent` et `fresh_presence`. |
 | POST | `/swipes` | Authentifiée | `{ "target_user_id": "uuid", "decision": "like\|pass" }` | `201 { "decision", "matched", "match"? }`. La décision est immuable pendant sa rétention. Deux likes réciproques créent atomiquement le match PostgreSQL. Limite dédiée : 120/min/utilisateur par défaut. |
 | GET | `/feed` | Authentifiée | `limit` de 1 à 100 (20 par défaut), `cursor` opaque optionnel | `200 { "profiles": [...], "next_cursor": "…\|null" }`. Limite : 60/min/utilisateur, puis `429 feed_rate_limit_exceeded`. Chaque profil expose `user_id`, prénom, âge, sexe, bio éventuelle, distance arrondie au dixième et traits. |
 
