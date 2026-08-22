@@ -48,7 +48,7 @@ describe('PostgreSQL schema contract', () => {
       'user_account', 'otp_verification', 'refresh_tokens', 'user_profile', 'user_preferences',
       'match_init', 'match_state', 'chat_message', 'user_report', 'subscription_plan', 'user_consent',
       'data_subject_request', 'data_access_log', 'user_block', 'device_token', 'notification',
-      'account_tombstone',
+      'account_tombstone', 'account_deletion_token',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -88,6 +88,8 @@ describe('PostgreSQL schema contract', () => {
       'idx_notification_expire', 'idx_otp_idempotency', 'idx_otp_one_usable_per_phone',
       'idx_dsr_one_open_per_type', 'idx_match_init_activity', 'idx_message_match_created_desc',
       'idx_user_report_created_desc', 'idx_user_report_status_created_desc',
+      'idx_chat_message_sender_idempotency', 'idx_chat_message_match_unread',
+      'idx_account_deletion_token_expires',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -244,6 +246,7 @@ describe('PostgreSQL schema contract', () => {
         expired_data_access_logs: expect.any(Number),
         expired_reports: expect.any(Number),
         expired_account_tombstones: expect.any(Number),
+        expired_account_deletion_tokens: expect.any(Number),
       });
     } finally {
       await client.query('ROLLBACK');
@@ -264,7 +267,7 @@ describe('PostgreSQL schema contract', () => {
       }));
       expect(document.paths['/api/matches/me']?.get?.responses?.['200']).toEqual(expect.objectContaining({
         content: expect.objectContaining({
-          'application/json': expect.objectContaining({ schema: { $ref: '#/components/schemas/MatchPageResponseDto' } }),
+          'application/json': expect.objectContaining({ schema: { $ref: '#/components/schemas/UserMatchPageResponseDto' } }),
         }),
       }));
       expect(document.paths['/api/feed']?.get?.responses?.['200']).toBeDefined();
@@ -272,6 +275,15 @@ describe('PostgreSQL schema contract', () => {
       expect(document.paths['/api/auth/otp/send']?.post?.parameters).toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
       ]));
+      expect(document.paths['/api/matches/{id}/messages']?.post?.parameters).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
+      ]));
+      expect(document.paths['/api/auth/me']?.get).toBeDefined();
+      expect(document.paths['/api/users/me/traits']?.get).toBeDefined();
+      expect(document.paths['/api/users/me/discovery-status']?.get).toBeDefined();
+      expect(document.paths['/api/users/me/deletion-token']?.post).toBeDefined();
+      expect(document.paths['/api/users/me/devices']?.post).toBeDefined();
+      expect(document.paths['/api/users/me/events']?.get).toBeDefined();
       expect(document.paths['/api/fake-match']).toBeUndefined();
       expect(document.components?.schemas).toEqual(expect.objectContaining({
         ConsentStateResponseDto: expect.any(Object),
@@ -446,7 +458,7 @@ describe('PostgreSQL schema contract', () => {
     const repository = new MatchesRepository(databaseFor(pool) as never);
 
     try {
-      await expect(repository.createMessage(randomUUID(), matchId, firstUserId, 'too late'))
+      await expect(repository.createMessage(randomUUID(), matchId, firstUserId, 'too late', randomUUID()))
         .resolves.toEqual({ ok: false, reason: 'expired' });
       const [match, messages] = await Promise.all([
         pool.query<{ status: string }>('SELECT status FROM match_init WHERE id = $1', [matchId]),
@@ -643,6 +655,142 @@ describe('PostgreSQL schema contract', () => {
       expect(accessLog.rows[0]?.actions).toEqual(expect.arrayContaining(['admin_review_dsr', 'system_anonymize']));
     } finally {
       await deleteAccounts(pool, userId, otherUserId, adminId);
+    }
+  });
+
+  it('replays a message idempotently and rejects key reuse for different content', async () => {
+    const [firstUserId, secondUserId] = [randomUUID(), randomUUID()].sort();
+    const matchId = randomUUID();
+    const key = randomUUID();
+    await insertAccounts(pool, firstUserId, secondUserId);
+    const repository = new MatchesRepository(databaseFor(pool) as never);
+    const match: MatchRow = {
+      id: matchId,
+      user1_id: firstUserId,
+      user2_id: secondUserId,
+      status: 'active',
+      expires_at: new Date(Date.now() + 86_400_000),
+      purge_after: null,
+      continuation_initiator_id: null,
+      created_at: new Date(),
+      last_message_at: null,
+    };
+
+    try {
+      await repository.create(match);
+      const first = await repository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
+      const replay = await repository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
+      await expect(repository.createMessage(randomUUID(), matchId, firstUserId, 'different', key))
+        .resolves.toEqual({ ok: false, reason: 'idempotency_conflict' });
+      expect(first).toEqual(expect.objectContaining({ ok: true, value: expect.objectContaining({ created: true }) }));
+      expect(replay).toEqual(expect.objectContaining({ ok: true, value: expect.objectContaining({ created: false }) }));
+      if (first.ok && replay.ok) expect(replay.value.message.id).toBe(first.value.message.id);
+      const count = await pool.query<{ count: number }>(
+        'SELECT count(*)::integer AS count FROM chat_message WHERE match_id = $1', [matchId],
+      );
+      expect(count.rows[0]?.count).toBe(1);
+    } finally {
+      await deleteAccounts(pool, firstUserId, secondUserId);
+    }
+  });
+
+  it('returns the mobile match summary without revealing a photo before mutual consent', async () => {
+    const viewerId = randomUUID();
+    const otherId = randomUUID();
+    const [firstUserId, secondUserId] = [viewerId, otherId].sort();
+    const matchId = randomUUID();
+    await insertAccounts(pool, viewerId, otherId);
+    await pool.query(`
+      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo) VALUES
+        ($1, 'Viewer', '1990-01-01', 'male', 'viewer bio', 'https://example.test/viewer.jpg'),
+        ($2, 'Other', '1992-01-01', 'female', 'other bio', 'https://example.test/other.jpg')
+    `, [viewerId, otherId]);
+    const repository = new MatchesRepository(databaseFor(pool) as never);
+    const match: MatchRow = {
+      id: matchId,
+      user1_id: firstUserId,
+      user2_id: secondUserId,
+      status: 'active',
+      expires_at: new Date(Date.now() + 86_400_000),
+      purge_after: null,
+      continuation_initiator_id: null,
+      created_at: new Date(),
+      last_message_at: null,
+    };
+
+    try {
+      await repository.create(match);
+      await repository.createMessage(randomUUID(), matchId, otherId, 'latest message', randomUUID());
+      const hidden = await repository.listDetailedForUser(viewerId, 20, 0);
+      expect(hidden[0]).toEqual(expect.objectContaining({
+        other_user_id: otherId,
+        other_firstname: 'Other',
+        other_photo: null,
+        my_revealed: false,
+        photos_revealed: false,
+        unread_count: 1,
+        last_message_content: 'latest message',
+      }));
+
+      await pool.query('UPDATE match_state SET revealed = true WHERE match_id = $1', [matchId]);
+      const revealed = await repository.listDetailedForUser(viewerId, 20, 0);
+      expect(revealed[0]).toEqual(expect.objectContaining({
+        other_photo: 'https://example.test/other.jpg',
+        my_revealed: true,
+        photos_revealed: true,
+      }));
+    } finally {
+      await deleteAccounts(pool, viewerId, otherId);
+    }
+  });
+
+  it('marks all received messages through a cursor message in one transaction', async () => {
+    const [firstUserId, secondUserId] = [randomUUID(), randomUUID()].sort();
+    const matchId = randomUUID();
+    const newestId = randomUUID();
+    await insertAccounts(pool, firstUserId, secondUserId);
+    await pool.query(`
+      INSERT INTO match_init (id, user1_id, user2_id, status, expires_at)
+      VALUES ($1, $2, $3, 'active', clock_timestamp() + INTERVAL '1 day')
+    `, [matchId, firstUserId, secondUserId]);
+    await pool.query('INSERT INTO match_state (match_id, user_id) VALUES ($1, $2), ($1, $3)', [matchId, firstUserId, secondUserId]);
+    await pool.query(`
+      INSERT INTO chat_message (id, match_id, sender_id, content, created_at) VALUES
+        ($1, $4, $5, 'incoming old', '2026-08-20T10:00:00Z'),
+        ($2, $4, $6, 'outgoing', '2026-08-20T10:01:00Z'),
+        ($3, $4, $5, 'incoming new', '2026-08-20T10:02:00Z')
+    `, [randomUUID(), randomUUID(), newestId, matchId, secondUserId, firstUserId]);
+    const repository = new MatchesRepository(databaseFor(pool) as never);
+
+    try {
+      const result = await repository.markMessagesReadThrough(matchId, newestId, firstUserId);
+      expect(result).toEqual(expect.objectContaining({ ok: true, value: expect.objectContaining({ updated_count: 2 }) }));
+      const messages = await pool.query<{ sender_id: string; read_at: Date | null }>(`
+        SELECT sender_id, read_at FROM chat_message WHERE match_id = $1 ORDER BY created_at
+      `, [matchId]);
+      expect(messages.rows.filter((row) => row.sender_id === secondUserId).every((row) => row.read_at instanceof Date)).toBe(true);
+      expect(messages.rows.find((row) => row.sender_id === firstUserId)?.read_at).toBeNull();
+    } finally {
+      await deleteAccounts(pool, firstUserId, secondUserId);
+    }
+  });
+
+  it('consumes an account deletion confirmation token only once', async () => {
+    const userId = randomUUID();
+    const otherId = randomUUID();
+    const tokenId = randomUUID();
+    await insertAccounts(pool, userId, otherId);
+    const repository = new UsersRepository(databaseFor(pool) as never);
+
+    try {
+      await expect(repository.replaceDeletionToken(
+        userId, tokenId, 'token-hash', new Date(Date.now() + 600_000),
+      )).resolves.toBe(true);
+      await expect(repository.consumeDeletionToken(userId, tokenId, 'wrong-hash', new Date())).resolves.toBe(false);
+      await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(true);
+      await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(false);
+    } finally {
+      await deleteAccounts(pool, userId, otherId);
     }
   });
 });
