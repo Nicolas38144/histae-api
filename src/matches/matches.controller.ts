@@ -1,13 +1,13 @@
-import { Controller, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Headers, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
-import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { ContinuationQuota } from './matches.service';
 import { MatchesService } from './matches.service';
-import { AdminMatchPaginationDto, MatchIdParamDto, MatchMessageParamDto, MatchPaginationDto, SendMessageDto, UserIdParamDto } from './dto/matches.dto';
-import type { PublicMatch, PublicMessage } from './matches.mapper';
-import { ChatMessageResponseDto, ContinuationQuotaResponseDto, ContinuationResponseDto, MatchPageResponseDto, MessagePageResponseDto, RevealResponseDto } from './dto/matches.responses';
+import { AdminMatchPaginationDto, MatchIdParamDto, MatchMessageParamDto, MatchPaginationDto, ReadMessagesDto, SendMessageDto, UserIdParamDto } from './dto/matches.dto';
+import type { PublicMatch, PublicMessage, PublicUserMatch } from './matches.mapper';
+import { ChatMessageResponseDto, ContinuationQuotaResponseDto, ContinuationResponseDto, MatchPageResponseDto, MessagePageResponseDto, ReadMessagesResponseDto, RevealResponseDto, UserMatchPageResponseDto } from './dto/matches.responses';
 import { MessageResponseDto } from '../common/dto/responses.dto';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
@@ -24,11 +24,11 @@ export class MatchesController {
 
   @Get('matches/me')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: MatchPageResponseDto })
+  @ApiOkResponse({ type: UserMatchPageResponseDto })
   async myMatches(
     @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: MatchPaginationDto,
     @Req() request: AuthenticatedRequest,
-  ): Promise<{ matches: PublicMatch[]; next_cursor: string | null }> {
+  ): Promise<{ matches: PublicUserMatch[]; next_cursor: string | null }> {
     const page = await this.matches.list(userId(request), query.limit, query.offset, query.cursor);
     return { matches: page.items, next_cursor: page.next_cursor };
   }
@@ -85,13 +85,27 @@ export class MatchesController {
   @UseGuards(JwtActiveGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiCreatedResponse({ type: ChatMessageResponseDto })
+  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'UUID v4 reused only for retries of the same logical message.' })
   async sendMessage(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @ValidatedBody({ code: 'invalid_message_payload', message: 'The message request body is invalid.' }) body: SendMessageDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() request: AuthenticatedRequest,
   ): Promise<PublicMessage> {
     await this.limits.enforce('messages', userId(request), this.config.rateLimit.message, 'message_rate_limit_exceeded');
-    return this.matches.sendMessage(params.id, userId(request), body.content);
+    return this.matches.sendMessage(params.id, userId(request), body.content, idempotencyKey);
+  }
+
+  @Patch('matches/:id/messages/read')
+  @UseGuards(JwtActiveGuard)
+  @ApiOkResponse({ type: ReadMessagesResponseDto })
+  async markReadThrough(
+    @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
+    @ValidatedBody({ code: 'invalid_read_payload', message: 'The read request body is invalid.' }) body: ReadMessagesDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ updated_count: number; read_through_message_id: string }> {
+    const updatedCount = await this.matches.markReadThrough(params.id, body.read_through_message_id, userId(request));
+    return { updated_count: updatedCount, read_through_message_id: body.read_through_message_id };
   }
 
   @Patch('matches/:id/messages/:msgId/read')

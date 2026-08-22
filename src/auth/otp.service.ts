@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomInt, randomUUID } from 'node:crypto';
 import { apiError } from '../common/api-error';
+import { normalizeIdempotencyKey } from '../common/idempotency';
 import { ConfigService } from '../config/config.service';
 import { hmacSha256 } from '../crypto/phone-crypto';
 import { AuthRepository } from './auth.repository';
@@ -83,14 +84,6 @@ function accepted(): { message: string } {
 
 function generateOtp(): string {
   return randomInt(0, 1_000_000).toString().padStart(6, '0');
-}
-
-function normalizeIdempotencyKey(input: string | undefined): string {
-  const key = input?.trim().toLowerCase() ?? '';
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(key)) {
-    throw apiError(400, 'invalid_idempotency_key', 'The Idempotency-Key header must contain a UUID v4.');
-  }
-  return key;
 }
 
 function normalizePhone(input: string, code: string, message: string): string {

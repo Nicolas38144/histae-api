@@ -26,6 +26,12 @@ export class SendMessageDto {
   content!: string;
 }
 
+export class ReadMessagesDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('all')
+  read_through_message_id!: string;
+}
+
 export class MatchPaginationDto extends PaginationDto {}
 
 export class AdminMatchPaginationDto extends MatchPaginationDto {
