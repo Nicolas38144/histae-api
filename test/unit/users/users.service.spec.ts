@@ -10,7 +10,7 @@ describe('UsersService consent enforcement', () => {
     privacyUrl: 'https://histae.test/legal/privacy',
     sensitiveDataConsentUrl: 'https://histae.test/legal/sensitive-data',
     locationConsentUrl: 'https://histae.test/legal/location',
-  } };
+  }, accountDeletionTokenTtlMs: 10 * 60 * 1_000 };
 
   it('does not persist sensitive profile data without the required consents', async () => {
     const repository = {
@@ -151,5 +151,58 @@ describe('UsersService consent enforcement', () => {
     await service.anonymize('user-id');
 
     expect(calls).toEqual(['scylla', 'postgres']);
+  });
+
+  it('issues a short-lived deletion token while storing only its hash', async () => {
+    const repository = { replaceDeletionToken: jest.fn().mockResolvedValue(true) };
+    const service = new UsersService(repository as never, config as never, {} as never);
+
+    const result = await service.issueDeletionToken('user-id');
+
+    expect(result.confirmation_token).toMatch(/^[0-9a-f-]{36}:[A-Za-z0-9_-]{43}$/);
+    expect(result.expires_at.getTime()).toBeGreaterThan(Date.now());
+    expect(repository.replaceDeletionToken).toHaveBeenCalledWith(
+      'user-id',
+      result.confirmation_token.split(':')[0],
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      result.expires_at,
+    );
+    expect(repository.replaceDeletionToken.mock.calls[0][2]).not.toBe(result.confirmation_token);
+  });
+
+  it('consumes a valid one-time token before erasing Scylla and PostgreSQL data', async () => {
+    const calls: string[] = [];
+    const repository = {
+      replaceDeletionToken: jest.fn().mockResolvedValue(true),
+      consumeDeletionToken: jest.fn(async () => { calls.push('token'); return true; }),
+      anonymize: jest.fn(async () => { calls.push('postgres'); }),
+    };
+    const discovery = { deleteUserData: jest.fn(async () => { calls.push('scylla'); }) };
+    const service = new UsersService(repository as never, config as never, discovery as never);
+    const { confirmation_token: token } = await service.issueDeletionToken('user-id');
+
+    await service.confirmAnonymize('user-id', token);
+
+    expect(calls).toEqual(['token', 'scylla', 'postgres']);
+    expect(repository.consumeDeletionToken).toHaveBeenCalledWith(
+      'user-id',
+      token.split(':')[0],
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.any(Date),
+    );
+  });
+
+  it('rejects a malformed deletion token without erasing account data', async () => {
+    const repository = { consumeDeletionToken: jest.fn(), anonymize: jest.fn() };
+    const discovery = { deleteUserData: jest.fn() };
+    const service = new UsersService(repository as never, config as never, discovery as never);
+
+    await expect(service.confirmAnonymize('user-id', 'not-a-token')).rejects.toEqual(expect.objectContaining({
+      status: 401,
+      code: 'invalid_or_expired_deletion_token',
+    }));
+    expect(repository.consumeDeletionToken).not.toHaveBeenCalled();
+    expect(discovery.deleteUserData).not.toHaveBeenCalled();
+    expect(repository.anonymize).not.toHaveBeenCalled();
   });
 });

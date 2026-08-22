@@ -49,4 +49,5 @@ export type PrivacyMaintenanceResult = {
   expired_data_access_logs: number;
   expired_reports: number;
   expired_account_tombstones: number;
+  expired_account_deletion_tokens: number;
 };

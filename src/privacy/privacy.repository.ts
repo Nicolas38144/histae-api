@@ -68,6 +68,7 @@ export class PrivacyRepository {
       `, [request.user_id, adminId, adminRole, `DSR ${request.type} moved to ${status}`]);
       if (request.type === 'erasure' && status === 'completed') {
         await beforeErasure(request.user_id);
+        await client.query('DELETE FROM account_deletion_token WHERE user_id = $1', [request.user_id]);
         await client.query('SELECT fct_anonymize_user($1)', [request.user_id]);
       }
       return 'updated';
@@ -204,6 +205,9 @@ export class PrivacyRepository {
     const expiredTombstones = await database.query(`DELETE FROM account_tombstone WHERE phone_number_hash IN (
       SELECT phone_number_hash FROM account_tombstone WHERE expires_at <= $1::timestamptz ORDER BY expires_at LIMIT $2
     )`, [now, batchSize]);
+    const expiredDeletionTokens = await database.query(`DELETE FROM account_deletion_token WHERE id IN (
+      SELECT id FROM account_deletion_token WHERE expires_at <= $1::timestamptz ORDER BY expires_at LIMIT $2
+    )`, [now, batchSize]);
     return {
       stale_presences: stalePresences.rowCount ?? 0,
       expired_presences: expiredPresences.rowCount ?? 0,
@@ -215,6 +219,7 @@ export class PrivacyRepository {
       expired_data_access_logs: expiredDataAccessLogs.rowCount ?? 0,
       expired_reports: expiredReports.rowCount ?? 0,
       expired_account_tombstones: expiredTombstones.rowCount ?? 0,
+      expired_account_deletion_tokens: expiredDeletionTokens.rowCount ?? 0,
     };
   }
 }

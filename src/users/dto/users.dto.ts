@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayMinSize, IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, Matches, MaxLength, ValidateNested } from 'class-validator';
 import type { ConsentType, LookingFor, Sex } from '../users.models';
 import { LEGAL_CHOICE_TYPES, LOOKING_FOR_VALUES, SEXES } from '../users.models';
 
@@ -78,4 +78,12 @@ export class UpdateConsentsDto {
   @ValidateNested({ each: true })
   @Type(() => ConsentChoiceDto)
   consents!: ConsentChoiceDto[];
+}
+
+export class ConfirmAccountDeletionDto {
+  @ApiProperty({ description: 'Single-use token returned by POST /api/users/me/deletion-token.' })
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:[A-Za-z0-9_-]{43}$/)
+  confirmation_token!: string;
 }

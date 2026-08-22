@@ -1,15 +1,15 @@
-import { Controller, Delete, Get, Headers, HttpCode, HttpStatus, Patch, Put, Req, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Headers, HttpCode, HttpStatus, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ValidatedBody } from '../common/http/validated-request.decorator';
-import { ApiBearerAuth, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { AllowIncompleteOnboarding } from '../auth/onboarding.decorator';
 import { UsersService } from './users.service';
 import type { ConsentChange, PreferencesInput, PresenceInput, ProfileInput } from './users.service';
-import { UpdateConsentsDto, UpdatePreferencesDto, UpdatePresenceDto, UpdateProfileDto } from './dto/users.dto';
+import { ConfirmAccountDeletionDto, UpdateConsentsDto, UpdatePreferencesDto, UpdatePresenceDto, UpdateProfileDto } from './dto/users.dto';
 import type { PublicProfile } from './users.mapper';
 import type { ConsentState, PreferencesRow } from './users.models';
-import { ConsentStateResponseDto, PreferencesResponseDto, ProfileResponseDto } from './dto/users.responses';
+import { AccountDeletionTokenResponseDto, ConsentStateResponseDto, PreferencesResponseDto, ProfileResponseDto } from './dto/users.responses';
 import { MessageResponseDto } from '../common/dto/responses.dto';
 
 @Controller('api/users/me')
@@ -104,7 +104,18 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @AllowIncompleteOnboarding()
   @ApiNoContentResponse()
-  async deleteAccount(@Req() request: AuthenticatedRequest): Promise<void> {
-    await this.users.anonymize(userId(request));
+  async deleteAccount(
+    @ValidatedBody({ code: 'invalid_account_deletion_payload', message: 'The account deletion request body is invalid.' }) body: ConfirmAccountDeletionDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<void> {
+    await this.users.confirmAnonymize(userId(request), body.confirmation_token);
+  }
+
+  @Post('deletion-token')
+  @HttpCode(HttpStatus.CREATED)
+  @AllowIncompleteOnboarding()
+  @ApiCreatedResponse({ type: AccountDeletionTokenResponseDto })
+  issueDeletionToken(@Req() request: AuthenticatedRequest): Promise<{ confirmation_token: string; expires_at: Date }> {
+    return this.users.issueDeletionToken(userId(request));
   }
 }

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { apiError } from '../common/api-error';
 import { ConfigService } from '../config/config.service';
 import { DiscoveryStore } from '../discovery/discovery.store';
@@ -112,6 +113,24 @@ export class UsersService {
     await this.users.anonymize(userId);
   }
 
+  async issueDeletionToken(userId: string): Promise<{ confirmation_token: string; expires_at: Date }> {
+    const id = randomUUID();
+    const confirmationToken = `${id}:${randomBytes(32).toString('base64url')}`;
+    const expiresAt = new Date(Date.now() + this.config.accountDeletionTokenTtlMs);
+    if (!await this.users.replaceDeletionToken(userId, id, sha256(confirmationToken), expiresAt)) {
+      throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
+    }
+    return { confirmation_token: confirmationToken, expires_at: expiresAt };
+  }
+
+  async confirmAnonymize(userId: string, confirmationToken: string): Promise<void> {
+    const parsed = parseDeletionToken(confirmationToken);
+    if (!parsed || !await this.users.consumeDeletionToken(userId, parsed.id, sha256(confirmationToken), new Date())) {
+      throw apiError(401, 'invalid_or_expired_deletion_token', 'The account deletion confirmation token is invalid or expired.');
+    }
+    await this.anonymize(userId);
+  }
+
   async getConsents(userId: string): Promise<ConsentState> {
     const current = await this.users.currentConsents(userId);
     const byType = new Map(current.map((consent) => [consent.consent_type, consent]));
@@ -174,6 +193,16 @@ export class UsersService {
   private documentVersion(consentType: ConsentType): string {
     return legalDocumentVersion(consentType, this.config.legal);
   }
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function parseDeletionToken(value: string): { id: string } | undefined {
+  const normalized = value.trim();
+  const match = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):[A-Za-z0-9_-]{43}$/.exec(normalized);
+  return match ? { id: match[1]! } : undefined;
 }
 
 function parseIsoBirthdate(value: string): { year: number; month: number; day: number } | undefined {

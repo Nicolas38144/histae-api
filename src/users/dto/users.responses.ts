@@ -68,3 +68,8 @@ export class ConsentStateResponseDto {
   @ApiProperty({ enum: LEGAL_CHOICE_TYPES, isArray: true })
   required_actions!: string[];
 }
+
+export class AccountDeletionTokenResponseDto {
+  @ApiProperty() confirmation_token!: string;
+  @ApiProperty({ format: 'date-time' }) expires_at!: Date;
+}

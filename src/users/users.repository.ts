@@ -63,7 +63,32 @@ export class UsersRepository {
   }
 
   async anonymize(userId: string): Promise<void> {
-    await this.database.query('SELECT fct_anonymize_user($1)', [userId]);
+    await this.database.transaction(async (client) => {
+      await client.query('DELETE FROM account_deletion_token WHERE user_id = $1', [userId]);
+      await client.query('SELECT fct_anonymize_user($1)', [userId]);
+    });
+  }
+
+  async replaceDeletionToken(userId: string, id: string, tokenHash: string, expiresAt: Date): Promise<boolean> {
+    return this.database.transaction(async (client) => {
+      const account = await client.query<{ user_id: string }>(`
+        SELECT user_id FROM user_account WHERE user_id = $1 AND deleted_at IS NULL FOR UPDATE
+      `, [userId]);
+      if (!account.rows[0]) return false;
+      await client.query('DELETE FROM account_deletion_token WHERE user_id = $1', [userId]);
+      await client.query(`
+        INSERT INTO account_deletion_token (id, user_id, token_hash, expires_at)
+        VALUES ($1, $2, $3, $4)
+      `, [id, userId, tokenHash, expiresAt]);
+      return true;
+    });
+  }
+
+  async consumeDeletionToken(userId: string, id: string, tokenHash: string, now: Date): Promise<boolean> {
+    return (await this.database.query(`
+      DELETE FROM account_deletion_token
+      WHERE id = $1 AND user_id = $2 AND token_hash = $3 AND expires_at > $4
+    `, [id, userId, tokenHash, now])).rowCount === 1;
   }
 
   async activeLegalChoices(userId: string, consentTypes: ConsentType[]): Promise<Array<{ consent_type: ConsentType; document_version: string }>> {

@@ -12,7 +12,8 @@ describe('PrivacyRepository maintenance', () => {
       .mockResolvedValueOnce({ rowCount: 7 })
       .mockResolvedValueOnce({ rowCount: 8 })
       .mockResolvedValueOnce({ rowCount: 9 })
-      .mockResolvedValueOnce({ rowCount: 10 });
+      .mockResolvedValueOnce({ rowCount: 10 })
+      .mockResolvedValueOnce({ rowCount: 11 });
     const repository = new PrivacyRepository({} as never);
 
     await expect(repository.runMaintenance({ query } as never, new Date('2030-01-07T12:00:00.000Z'), 1_000)).resolves.toEqual({
@@ -26,8 +27,9 @@ describe('PrivacyRepository maintenance', () => {
       expired_data_access_logs: 8,
       expired_reports: 9,
       expired_account_tombstones: 10,
+      expired_account_deletion_tokens: 11,
     });
-    expect(query).toHaveBeenCalledTimes(10);
+    expect(query).toHaveBeenCalledTimes(11);
     expect(query.mock.calls.every((call) => call[0].includes('LIMIT $2'))).toBe(true);
     expect(query.mock.calls[1][0]).toContain("INTERVAL '24 hours'");
     expect(query.mock.calls[5][0]).toContain("INTERVAL '5 years'");
