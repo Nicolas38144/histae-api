@@ -59,6 +59,16 @@ describe('Billing HTTP contract', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
+  it('returns the subscription projection for the authenticated account', async () => {
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'GET', url: '/api/users/me/subscription',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ plan: 'free', access_granted: false });
+    expect(billing.subscription).toHaveBeenCalledWith(USER_ID);
+  });
+
   it('creates Checkout from the authenticated account, billing period, and idempotency header only', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'POST',
@@ -83,6 +93,19 @@ describe('Billing HTTP contract', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe('invalid_checkout_payload');
     expect(billing.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('creates the Stripe customer portal under the billing rate limit', async () => {
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'POST', url: '/api/users/me/subscription/portal',
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ url: 'https://billing.stripe.test/portal' });
+    expect(limits.enforce).toHaveBeenCalledWith(
+      'billing', USER_ID, { max: 10, windowMs: 60_000 }, 'billing_rate_limit_exceeded',
+    );
+    expect(billing.createPortal).toHaveBeenCalledWith(USER_ID);
   });
 
   it('passes Stripe the unmodified raw JSON bytes and signature header', async () => {

@@ -20,9 +20,11 @@ describe('Auth HTTP contract', () => {
   let app: NestFastifyApplication;
   const auth = {
     sendOtp: jest.fn().mockResolvedValue({ message: 'Verification code request accepted.' }),
+    verifyOtp: jest.fn().mockResolvedValue({ access_token: 'access-token', refresh_token: 'refresh-token' }),
     refresh: jest.fn().mockResolvedValue({ access_token: 'next-access', refresh_token: 'next-refresh' }),
     logout: jest.fn().mockResolvedValue(undefined),
   };
+  const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
   const activeGuard: CanActivate = {
     canActivate(context: ExecutionContext): boolean {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -39,7 +41,7 @@ describe('Auth HTTP contract', () => {
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: auth },
-        { provide: RateLimitService, useValue: { enforce: jest.fn() } },
+        { provide: RateLimitService, useValue: limits },
         { provide: ConfigService, useValue: { env: 'development', rateLimit: { otp: { max: 5, windowMs: 3_600_000 }, refresh: { max: 30, windowMs: 900_000 } } } },
         { provide: OtpService, useValue: { rateLimitKey: jest.fn().mockReturnValue('phone-key') } },
         { provide: JwtService, useValue: {} },
@@ -75,6 +77,25 @@ describe('Auth HTTP contract', () => {
     expect(response.json()).toEqual({ message: 'Verification code request accepted.' });
     expect(auth.sendOtp).toHaveBeenCalledWith('+33612345678', idempotencyKey);
   });
+
+  it('verifies an OTP under both IP and phone rate limits', async () => {
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'POST',
+      url: '/api/auth/otp/verify',
+      payload: { phone_number: '+33612345678', otp: '123456' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ access_token: 'access-token', refresh_token: 'refresh-token' });
+    expect(limits.enforce).toHaveBeenNthCalledWith(
+      1, 'otp-verify-ip', '127.0.0.1', { max: 5, windowMs: 3_600_000 }, 'otp_rate_limit_exceeded',
+    );
+    expect(limits.enforce).toHaveBeenNthCalledWith(
+      2, 'otp-verify-phone', 'phone-key', { max: 5, windowMs: 3_600_000 }, 'otp_rate_limit_exceeded',
+    );
+    expect(auth.verifyOtp).toHaveBeenCalledWith('+33612345678', '123456');
+  });
+
   it('keeps refresh successful response at HTTP 200', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'POST',

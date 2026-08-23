@@ -8,6 +8,7 @@ import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { MobileController } from '../../src/mobile/mobile.controller';
 import { MobileService } from '../../src/mobile/mobile.service';
 import { RealtimeService } from '../../src/mobile/realtime.service';
+import { of } from 'rxjs';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const DEVICE_ID = '22222222-2222-4222-8222-222222222222';
@@ -26,6 +27,12 @@ describe('Mobile HTTP contract', () => {
     listDevices: jest.fn().mockResolvedValue([device]),
     removeDevice: jest.fn().mockResolvedValue(undefined),
   };
+  const realtime = {
+    stream: jest.fn().mockReturnValue(of({
+      type: 'connected',
+      data: { server_time: '2030-01-01T00:00:00.000Z' },
+    })),
+  };
   const activeGuard: CanActivate = {
     canActivate(context: ExecutionContext): boolean {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -42,10 +49,18 @@ describe('Mobile HTTP contract', () => {
       controllers: [MobileController],
       providers: [
         { provide: MobileService, useValue: mobile },
-        { provide: RealtimeService, useValue: { stream: jest.fn() } },
+        { provide: RealtimeService, useValue: realtime },
       ],
     }).overrideGuard(JwtActiveGuard).useValue(activeGuard).compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    app.getHttpAdapter().getInstance().addHook('onRequest', async (request) => {
+      if (request.url !== '/api/users/me/events') return;
+      Object.assign(request.raw.socket, {
+        setKeepAlive: jest.fn(),
+        setNoDelay: jest.fn(),
+        setTimeout: jest.fn(),
+      });
+    });
     app.useGlobalFilters(new ApiExceptionFilter());
     await app.init();
   });
@@ -96,5 +111,17 @@ describe('Mobile HTTP contract', () => {
       message: 'The device registration request body is invalid.',
     } });
     expect(mobile.registerDevice).not.toHaveBeenCalled();
+  });
+
+  it('opens the authenticated server-sent event stream', async () => {
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'GET', url: '/api/users/me/events',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.body).toContain('event: connected');
+    expect(response.body).toContain('data: {"server_time":"2030-01-01T00:00:00.000Z"}');
+    expect(realtime.stream).toHaveBeenCalledWith(USER_ID);
   });
 });
