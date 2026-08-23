@@ -15,17 +15,17 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **39 fichiers de test, 39 suites Jest et 238 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **43 fichiers de test, 43 suites Jest et 271 cas** lorsque toutes les intégrations sont activées :
 
 - 181 tests unitaires ;
-- 18 tests e2e ;
+- 51 tests e2e ;
 - 27 tests d’intégration PostgreSQL/OpenAPI ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 32 suites unitaires, 4 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 36 suites autonomes et leurs 199 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 39 cas, sans flag d’activation.
+Jest affiche 32 suites unitaires, 8 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 40 suites autonomes et leurs 232 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 39 cas, sans flag d’activation.
 
-Le 23 août 2026, TypeScript, ESLint, le build et les 199 cas autonomes ont réussi. Les 39 intégrations réelles PostgreSQL, ScyllaDB et Redis ont également réussi.
+Le 23 août 2026, TypeScript, ESLint, le build et les 232 cas autonomes ont réussi. Les 39 intégrations réelles PostgreSQL, ScyllaDB et Redis ont également réussi.
 
 ## Commandes
 
@@ -320,16 +320,25 @@ Suite `UsersService consent enforcement` :
 
 ## Tests e2e
 
-### `test/e2e/auth.contract.spec.ts` — 6 tests
+### `test/e2e/auth.contract.spec.ts` — 7 tests
 
 Cette suite démarre une vraie application Fastify de test avec `AuthController`, le filtre d’erreur global et des services maîtrisés :
 
 1. Vérifie le bootstrap utilisateur `GET /api/auth/me`.
 2. Vérifie que `POST /api/auth/otp/send` accepte l’en-tête d’idempotence UUID v4, répond `202` et transmet la clé au service.
-3. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
-4. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
-5. Vérifie que le logout transmet le `device_id` optionnel à supprimer.
-6. Vérifie le format stable `404 route_not_found` pour une route inconnue.
+3. Vérifie `POST /api/auth/otp/verify`, la paire de tokens et les limites distinctes par IP et téléphone.
+4. Vérifie que `POST /api/auth/refresh` répond `200` avec la nouvelle paire de tokens.
+5. Vérifie qu’un champ JSON inconnu est refusé avec l’enveloppe d’erreur stable.
+6. Vérifie que le logout transmet le `device_id` optionnel à supprimer.
+7. Vérifie le format stable `404 route_not_found` pour une route inconnue.
+
+### `test/e2e/billing.contract.spec.ts` — 5 tests
+
+1. Vérifie la projection renvoyée par `GET /api/users/me/subscription`.
+2. Vérifie `POST /api/users/me/subscription/checkout`, son statut `201`, la période et la clé d’idempotence.
+3. Refuse un `price_id` injecté par le client avant d’atteindre le service.
+4. Vérifie la création du portail Stripe et le rate limit Billing.
+5. Vérifie que le webhook reçoit les octets JSON bruts inchangés et l’en-tête `Stripe-Signature`.
 
 ### `test/e2e/discovery.contract.spec.ts` — 6 tests
 
@@ -342,19 +351,55 @@ Cette suite démarre Fastify avec le contrôleur de découverte et des dépendan
 5. Vérifie l’enveloppe HTTP stable `503 discovery_unavailable` quand le service signale une panne Scylla.
 6. Vérifie que l’ancienne route `POST /api/fake-match` répond désormais au format stable `404 route_not_found`.
 
-### `test/e2e/mobile.contract.spec.ts` — 3 tests
+### `test/e2e/matches.contract.spec.ts` — 9 tests
+
+1. Vérifie la liste des matchs et la transmission de la pagination par curseur.
+2. Refuse une limite de pagination hors bornes avant le service.
+3. Vérifie les consentements de révélation et de continuation ainsi que leurs états explicites.
+4. Vérifie la pagination des messages et la sérialisation des dates.
+5. Vérifie l’envoi idempotent d’un message et son rate limit utilisateur.
+6. Refuse un contenu de message invalide avant rate limit et persistance.
+7. Vérifie la lecture groupée et conserve le contrat de lecture unitaire historique.
+8. Vérifie le quota hebdomadaire de continuation.
+9. Refuse un identifiant de match invalide avant toute opération.
+
+### `test/e2e/mobile.contract.spec.ts` — 4 tests
 
 Cette suite démarre Fastify avec le contrôleur mobile :
 
 1. Vérifie l’enregistrement d’un appareil, le statut `201` et l’absence du jeton FCM dans la réponse.
 2. Vérifie la liste et la suppression d’un appareil dans le contexte de l’utilisateur authentifié.
 3. Vérifie le rejet d’un jeton trop court ou d’une plateforme non supportée avant le service.
+4. Ouvre le flux SSE authentifié et vérifie son type MIME ainsi que l’événement `connected`.
 
-### `test/e2e/billing.contract.spec.ts` — 3 tests
+### `test/e2e/privacy.contract.spec.ts` — 6 tests
 
-1. Vérifie `POST /api/users/me/subscription/checkout`, son statut `201`, la période et la clé d’idempotence.
-2. Refuse un `price_id` injecté par le client avant d’atteindre le service.
-3. Vérifie que le webhook reçoit les octets JSON bruts inchangés et l’en-tête `Stripe-Signature`.
+1. Crée et liste les demandes de droits RGPD de l’utilisateur.
+2. Refuse un type de demande inconnu avant le service.
+3. Vérifie l’export portable et sa limite de débit dédiée.
+4. Liste le contrat public minimal des comptes bloqués.
+5. Vérifie le blocage et le déblocage d’un UUID cible.
+6. Refuse un identifiant de cible invalide avant mutation.
+
+### `test/e2e/reports.contract.spec.ts` — 3 tests
+
+1. Crée un signalement validé sous le rate limit utilisateur dédié.
+2. Normalise les champs facultatifs absents en `null`.
+3. Refuse cible, motif et champs supplémentaires invalides avant le rate limit.
+
+### `test/e2e/users.contract.spec.ts` — 11 tests
+
+1. Renvoie le profil et les préférences de découverte de l’utilisateur authentifié.
+2. Renvoie et met à jour les choix juridiques avec IP et User-Agent d’audit.
+3. Refuse des choix juridiques invalides avant le service.
+4. Met à jour uniquement les champs publics du profil mobile.
+5. Refuse l’injection d’un champ de privilège dans le profil.
+6. Met à jour les préférences et la présence géographique.
+7. Émet puis consomme le jeton dédié de suppression du compte.
+8. Refuse un jeton de suppression mal formé avant effacement.
+9. Liste, ajoute et retire les traits du compte authentifié.
+10. Refuse un identifiant de trait invalide avant mutation.
+11. Expose les plans publics sans session mobile.
 
 ## Tests d’intégration réels
 
@@ -422,10 +467,10 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 199 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 39 cas réels et vérifier que les 238 cas passent au total.
+5. exécuter `pnpm test` pour les 232 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 39 cas réels et vérifier que les 271 cas passent au total.
 
-La validation du 23 août 2026 a réussi : **36 suites et 199 cas autonomes**, ainsi que les **39 cas réels** : 27 PostgreSQL/OpenAPI, 10 ScyllaDB/PostgreSQL et 2 Redis. Le build, TypeScript et ESLint sont également verts, `pnpm audit` ne signale aucune vulnérabilité connue, et le moteur de migration confirme que `histae-dev` est compatible avec la migration `014`.
+La validation du 23 août 2026 a réussi : **40 suites et 232 cas autonomes**, ainsi que les **39 cas réels** : 27 PostgreSQL/OpenAPI, 10 ScyllaDB/PostgreSQL et 2 Redis. Le build, TypeScript et ESLint sont également verts, `pnpm audit` ne signale aucune vulnérabilité connue, et le moteur de migration confirme que `histae-dev` est compatible avec la migration `014`.
 
 ## Audit des tests obsolètes
 
@@ -444,7 +489,6 @@ Par conséquent, **aucun test valide n’a été supprimé artificiellement**. S
 
 La suite actuelle est robuste sur les zones récemment refactorées, mais elle n’est pas exhaustive. Les prochains ajouts utiles sont :
 
-- contrats HTTP complets des routes utilisateur, privacy, matches, traits et signalements ;
 - tests de concurrence du second consentement de continuation et de consommation du quota Free ;
 - scénarios complets de rotation/réutilisation frauduleuse d’un refresh token avec PostgreSQL ;
 - tests du tombstone d’un compte banni et de son expiration ;

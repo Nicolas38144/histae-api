@@ -923,11 +923,11 @@ test/
 Inventaire actuel :
 
 - 32 fichiers/suites unitaires, 181 cas ;
-- 4 suites e2e, 18 cas ;
+- 8 suites e2e, 51 cas ;
 - 3 suites d’intégration, 39 cas dont 27 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
-- total complet : 39 fichiers/suites Jest et 238 cas.
+- total complet : 43 fichiers/suites Jest et 271 cas.
 
-Le 23 août 2026, TypeScript, ESLint, le build et les 199 cas autonomes ont été validés localement. Les 39 tests
+Le 23 août 2026, TypeScript, ESLint, le build et les 232 cas autonomes ont été validés localement. Les 39 tests
 d’intégration réels PostgreSQL, ScyllaDB et Redis ont également réussi. Les suites restent exécutables séparément, sans flag d’activation.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
@@ -949,7 +949,7 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 7. `pnpm run test:integration` avec les trois dépendances réelles ;
 8. smoke test manuel de la santé, de l’OTP réel, de Stripe Checkout en mode test, des webhooks, de l’idempotence, des jetons et du logout.
 
-Pour cette mise à jour, le lint, le typecheck, le build et les 199 cas indépendants de l’infrastructure ont réussi
+Pour cette mise à jour, le lint, le typecheck, le build et les 232 cas indépendants de l’infrastructure ont réussi
 le 23 août 2026. Les 27 cas PostgreSQL, les 10 cas ScyllaDB/PostgreSQL et les 2 cas Redis ont également réussi.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
@@ -996,7 +996,6 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 
 ### Couverture de test à étendre
 
-- contrats HTTP complets hors auth ;
 - concurrence du second consentement de continuation ;
 - refresh token avec PostgreSQL réel ;
 - retrait des consentements et effacement immédiat associé ;
@@ -1014,11 +1013,10 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 
 1. Valider le Sender ID Sweego, effectuer un envoi canari réel et ajouter le suivi de livraison opérationnel.
 2. Implémenter le stockage photo réel, sa validation, sa suppression et ses URL signées.
-3. Ajouter les contrats HTTP e2e encore manquants.
-4. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
-5. Ajouter métriques et alertes minimales.
-6. Tester la restauration d’une sauvegarde.
-7. Préparer un cluster Scylla jetable pour les essais de panne sans toucher au keyspace de développement.
+3. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
+4. Ajouter métriques et alertes minimales.
+5. Tester la restauration d’une sauvegarde.
+6. Préparer un cluster Scylla jetable pour les essais de panne sans toucher au keyspace de développement.
 
 ### Avant bêta publique
 
