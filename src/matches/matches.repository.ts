@@ -299,12 +299,12 @@ export class MatchesRepository {
 
   async expireAwaitingMatch(matchId: string, now: Date): Promise<void> {
     await this.database.query(`
-      UPDATE match_init 
+      UPDATE match_init
       SET
         status = 'expired',
         purge_after = $3
       WHERE
-        id = $1 
+        id = $1
         AND status = 'awaiting_continuation'
         AND expires_at <= $2
     `, [matchId, now, new Date(now.getTime() + MATCH_PURGE_MS)]);
@@ -319,7 +319,13 @@ export class MatchesRepository {
         FROM user_subscription AS subscription
         WHERE
           subscription.user_id = $1
-          AND (subscription.plan = 'free' OR subscription.current_period_ends_at IS NULL OR subscription.current_period_ends_at > $2)
+          AND (
+            subscription.plan = 'free'
+            OR (
+              (subscription.provider IS NULL OR subscription.status IN ('trialing', 'active', 'past_due'))
+              AND (subscription.current_period_ends_at IS NULL OR subscription.current_period_ends_at > $2)
+            )
+          )
       ), 'free')
     `, [userId, now]);
     const plan = result.rows[0];

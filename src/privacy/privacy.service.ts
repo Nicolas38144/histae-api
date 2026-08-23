@@ -5,12 +5,14 @@ import { ScyllaUnavailableError } from '../scylla/scylla.service';
 import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
+import { BillingService } from '../billing/billing.service';
 
 @Injectable()
 export class PrivacyService {
   constructor(
     private readonly privacy: PrivacyRepository,
     private readonly discovery: DiscoveryStore,
+    private readonly billing: BillingService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
 
@@ -43,7 +45,10 @@ export class PrivacyService {
         adminId,
         adminRole,
         notes,
-        (userId) => this.discovery.deleteUserData(userId),
+        async (userId) => {
+          await this.billing.deleteCustomerForAccount(userId);
+          await this.discovery.deleteUserData(userId);
+        },
       );
     } catch (error) {
       if (error instanceof ScyllaUnavailableError) {

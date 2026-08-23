@@ -17,6 +17,7 @@ export const MOBILE_EVENT_TYPES = [
   'matches.invalidated',
   'message.created',
   'message.read',
+  'subscription.updated',
 ] as const;
 export type MobileEventType = typeof MOBILE_EVENT_TYPES[number];
 
@@ -28,4 +29,4 @@ export type MobileEvent = {
   data: Record<string, string | number | boolean | null>;
 };
 
-export type NotificationType = 'new_match' | 'new_message';
+export type NotificationType = 'new_match' | 'new_message' | 'billing_payment_failed' | 'subscription_trial_ending';

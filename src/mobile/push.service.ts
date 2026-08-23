@@ -25,9 +25,7 @@ export class PushService {
   private async send(token: string, type: NotificationType, data: Record<string, string>): Promise<void> {
     try {
       const accessToken = await this.googleAccessToken();
-      const copy = type === 'new_match'
-        ? { title: 'Nouveau match', body: 'Vous avez un nouveau match sur Histae.' }
-        : { title: 'Nouveau message', body: 'Vous avez reçu un nouveau message sur Histae.' };
+      const copy = notificationCopy(type);
       const response = await fetch(
         `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(this.config.push.projectId)}/messages:send`,
         {
@@ -91,4 +89,13 @@ function isUnregistered(body: FcmErrorResponse | undefined): boolean {
 
 function base64Url(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+function notificationCopy(type: NotificationType): { title: string; body: string } {
+  if (type === 'new_match') return { title: 'Nouveau match', body: 'Vous avez un nouveau match sur Histae.' };
+  if (type === 'new_message') return { title: 'Nouveau message', body: 'Vous avez reçu un nouveau message sur Histae.' };
+  if (type === 'billing_payment_failed') {
+    return { title: 'Paiement à vérifier', body: 'Votre paiement Premium a échoué. Vérifiez votre moyen de paiement.' };
+  }
+  return { title: 'Essai Premium', body: 'Votre période d’essai Premium se termine bientôt.' };
 }

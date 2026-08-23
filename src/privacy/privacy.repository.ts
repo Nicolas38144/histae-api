@@ -91,7 +91,18 @@ export class PrivacyRepository {
       const messages = await client.query(`SELECT id, match_id, content, created_at, read_at FROM chat_message WHERE sender_id = $1 ORDER BY created_at`, [userId]);
       const reports = await client.query(`SELECT id, reported_id, match_id, reason, description, status, created_at, resolved_at FROM user_report WHERE reporter_id = $1 ORDER BY created_at`, [userId]);
       const blocks = await client.query(`SELECT blocked_id, created_at FROM user_block WHERE blocker_id = $1 ORDER BY created_at`, [userId]);
-      const subscription = await client.query(`SELECT plan, current_period_ends_at, updated_at FROM user_subscription WHERE user_id = $1`, [userId]);
+      const subscription = await client.query(`
+        SELECT plan, provider, provider_subscription_id, provider_price_id, billing_period, status,
+          cancel_at_period_end, current_period_starts_at, current_period_ends_at,
+          trial_ends_at, canceled_at, provider_event_created_at, updated_at
+        FROM user_subscription WHERE user_id = $1
+      `, [userId]);
+      const billingInvoices = await client.query(`
+        SELECT stripe_invoice_id, stripe_subscription_id, status, currency, amount_due,
+          amount_paid, amount_remaining, period_starts_at, period_ends_at, paid_at,
+          created_at, provider_event_created_at
+        FROM billing_invoice WHERE user_id = $1 ORDER BY created_at
+      `, [userId]);
       await client.query(`
         INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
         VALUES ($1, $1, 'user', 'export_data', 'Self-service data export')
@@ -108,6 +119,7 @@ export class PrivacyRepository {
         submitted_reports: reports.rows,
         blocked_users: blocks.rows,
         subscription: subscription.rows[0] ?? null,
+        billing_invoices: billingInvoices.rows,
       };
     });
   }

@@ -24,6 +24,7 @@ import {
   legalDocumentVersion,
 } from './users.models';
 import { UsersRepository } from './users.repository';
+import { BillingService } from '../billing/billing.service';
 
 export { ConsentChange, PreferencesInput, PresenceInput, ProfileInput } from './users.models';
 
@@ -33,6 +34,7 @@ export class UsersService {
     private readonly users: UsersRepository,
     private readonly config: ConfigService,
     private readonly discovery: DiscoveryStore,
+    private readonly billing: BillingService,
   ) {}
 
   async getProfile(userId: string): Promise<PublicProfile> {
@@ -56,7 +58,7 @@ export class UsersService {
     const bio = input.bio === null ? null : input.bio.trim();
     if (bio !== null && Buffer.byteLength(bio) > 2_000) throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
     const photo = input.photo === null ? null : input.photo.trim();
-    if (photo !== null && (Buffer.byteLength(photo) > 2_048 || !isHttpUrl(photo))) {
+    if (photo !== null && (Buffer.byteLength(photo) > 2_048 || !isSafePhotoUrl(photo))) {
       throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
     }
     if (!await this.users.upsertProfile(userId, { firstname, birthdate: input.birthdate, sex: input.sex, bio, photo })) {
@@ -103,6 +105,7 @@ export class UsersService {
 
   async anonymize(userId: string): Promise<void> {
     try {
+      await this.billing.deleteCustomerForAccount(userId);
       await this.discovery.deleteUserData(userId);
     } catch (error) {
       if (error instanceof ScyllaUnavailableError) {
@@ -224,10 +227,10 @@ function isAdult(birthdate: { year: number; month: number; day: number }): boole
   return birthdate.month < currentMonth || (birthdate.month === currentMonth && birthdate.day <= now.getUTCDate());
 }
 
-function isHttpUrl(value: string): boolean {
+function isSafePhotoUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !!parsed.host;
+    return parsed.protocol === 'https:' && !!parsed.host && !parsed.username && !parsed.password;
   } catch {
     return false;
   }

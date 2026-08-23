@@ -47,6 +47,18 @@ export class MobileDeliveryService {
     await this.deliver(userIds, 'matches.invalidated', {});
   }
 
+  async subscriptionUpdated(userId: string, status: string): Promise<void> {
+    await this.deliver([userId], 'subscription.updated', { status });
+  }
+
+  async billingPaymentFailed(userId: string): Promise<void> {
+    await this.notify(userId, 'billing_payment_failed', {});
+  }
+
+  async subscriptionTrialEnding(userId: string): Promise<void> {
+    await this.notify(userId, 'subscription_trial_ending', {});
+  }
+
   private async deliver(
     userIds: string[],
     type: MobileEventType,
