@@ -15,6 +15,7 @@ import type { MatchRow } from '../../src/matches/matches.models';
 import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { UsersRepository } from '../../src/users/users.repository';
+import { BillingRepository } from '../../src/billing/billing.repository';
 
 dotenv.config();
 process.env.MAINTENANCE_MODE = 'disabled';
@@ -48,7 +49,8 @@ describe('PostgreSQL schema contract', () => {
       'user_account', 'otp_verification', 'refresh_tokens', 'user_profile', 'user_preferences',
       'match_init', 'match_state', 'chat_message', 'user_report', 'subscription_plan', 'user_consent',
       'data_subject_request', 'data_access_log', 'user_block', 'device_token', 'notification',
-      'account_tombstone', 'account_deletion_token',
+      'account_tombstone', 'account_deletion_token', 'billing_customer',
+      'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -90,6 +92,9 @@ describe('PostgreSQL schema contract', () => {
       'idx_user_report_created_desc', 'idx_user_report_status_created_desc',
       'idx_chat_message_sender_idempotency', 'idx_chat_message_match_unread',
       'idx_account_deletion_token_expires',
+      'idx_user_subscription_provider_id', 'idx_billing_checkout_one_live_per_user',
+      'idx_billing_checkout_expiry', 'idx_stripe_webhook_processed', 'idx_billing_invoice_user_created',
+      'idx_billing_customer_active_stripe_id',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -284,6 +289,12 @@ describe('PostgreSQL schema contract', () => {
       expect(document.paths['/api/users/me/deletion-token']?.post).toBeDefined();
       expect(document.paths['/api/users/me/devices']?.post).toBeDefined();
       expect(document.paths['/api/users/me/events']?.get).toBeDefined();
+      expect(document.paths['/api/users/me/subscription']?.get).toBeDefined();
+      expect(document.paths['/api/users/me/subscription/checkout']?.post?.parameters).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
+      ]));
+      expect(document.paths['/api/users/me/subscription/portal']?.post).toBeDefined();
+      expect(document.paths['/api/billing/stripe/webhook']?.post).toBeDefined();
       expect(document.paths['/api/fake-match']).toBeUndefined();
       expect(document.components?.schemas).toEqual(expect.objectContaining({
         ConsentStateResponseDto: expect.any(Object),
@@ -291,6 +302,8 @@ describe('PostgreSQL schema contract', () => {
         SwipeResponseDto: expect.any(Object),
         PortableDataResponseDto: expect.any(Object),
         ReportPageResponseDto: expect.any(Object),
+        SubscriptionResponseDto: expect.any(Object),
+        CheckoutSessionResponseDto: expect.any(Object),
       }));
     } finally {
       await app.close();
@@ -324,6 +337,215 @@ describe('PostgreSQL schema contract', () => {
     } finally {
       await client.query('ROLLBACK');
       client.release();
+    }
+  });
+
+  it('records a Stripe webhook exactly once even when Stripe retries it', async () => {
+    const repository = new BillingRepository(databaseFor(pool) as never);
+    const eventId = `evt_${randomUUID().replaceAll('-', '')}`;
+    const work = jest.fn().mockResolvedValue('applied');
+    const metadata = {
+      id: eventId,
+      type: 'customer.subscription.updated',
+      objectId: 'sub_HistaeIntegration',
+      livemode: false,
+      apiVersion: '2026-07-29.dahlia',
+      createdAt: new Date(),
+    };
+
+    try {
+      await expect(repository.processWebhook(metadata, work)).resolves.toEqual({ duplicate: false, result: 'applied' });
+      await expect(repository.processWebhook(metadata, work)).resolves.toEqual({ duplicate: true });
+      expect(work).toHaveBeenCalledTimes(1);
+    } finally {
+      await pool.query('DELETE FROM stripe_webhook_event WHERE id = $1', [eventId]);
+    }
+  });
+
+  it('creates and replays one Checkout while blocking a second live session', async () => {
+    const userId = randomUUID();
+    const otherUserId = randomUUID();
+    const idempotencyKey = randomUUID();
+    const attemptId = randomUUID();
+    const compactId = userId.replaceAll('-', '');
+    await insertAccounts(pool, userId, otherUserId);
+    const repository = new BillingRepository(databaseFor(pool) as never);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 30 * 60_000);
+
+    try {
+      await expect(repository.beginCheckout(
+        userId, idempotencyKey, 'monthly', attemptId, now, expiresAt, new Date(now.getTime() - 60_000),
+      )).resolves.toEqual(expect.objectContaining({
+        state: 'created', attemptId, stripeCustomerId: null, trialDays: 30, trialUsed: false,
+      }));
+      await expect(repository.saveCustomer(userId, `cus_${compactId}`)).resolves.toBe(true);
+      const session = {
+        session_id: `cs_test_${compactId}`,
+        url: 'https://checkout.stripe.test/session',
+        expires_at: expiresAt,
+      };
+      await expect(repository.markCheckoutOpen(attemptId, session)).resolves.toBe(true);
+      await expect(repository.beginCheckout(
+        userId, idempotencyKey, 'monthly', randomUUID(), now, expiresAt, new Date(now.getTime() - 60_000),
+      )).resolves.toEqual({ state: 'replay', session });
+      await expect(repository.beginCheckout(
+        userId, randomUUID(), 'annual', randomUUID(), now, expiresAt, new Date(now.getTime() - 60_000),
+      )).resolves.toEqual({ state: 'in_progress' });
+    } finally {
+      await deleteAccounts(pool, userId, otherUserId);
+    }
+  });
+
+  it('does not let an older Stripe event overwrite a newer subscription projection', async () => {
+    const userId = randomUUID();
+    const otherUserId = randomUUID();
+    const compactId = userId.replaceAll('-', '');
+    const invoiceId = `in_order${compactId}`;
+    const repository = new BillingRepository(databaseFor(pool) as never);
+    const base = {
+      userId,
+      stripeCustomerId: `cus_${compactId}`,
+      stripeSubscriptionId: `sub_${compactId}`,
+      stripePriceId: `price_${compactId}`,
+      billingPeriod: 'monthly' as const,
+      cancelAtPeriodEnd: false,
+      currentPeriodStartsAt: new Date('2030-01-01T00:00:00.000Z'),
+      currentPeriodEndsAt: new Date('2030-02-01T00:00:00.000Z'),
+      trialStartsAt: null,
+      trialEndsAt: null,
+      canceledAt: null,
+    };
+    await insertAccounts(pool, userId, otherUserId);
+    await repository.saveCustomer(userId, base.stripeCustomerId);
+
+    try {
+      await repository.upsertSubscription({
+        ...base, status: 'active', eventCreatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      }, databaseFor(pool));
+      await repository.upsertSubscription({
+        ...base, status: 'canceled', eventCreatedAt: new Date('2030-01-01T00:00:00.000Z'),
+      }, databaseFor(pool));
+
+      const projection = await pool.query<{ status: string; provider_event_created_at: Date }>(`
+        SELECT status, provider_event_created_at FROM user_subscription WHERE user_id = $1
+      `, [userId]);
+      expect(projection.rows[0]).toEqual({
+        status: 'active', provider_event_created_at: new Date('2030-01-02T00:00:00.000Z'),
+      });
+
+      const invoice = {
+        stripeInvoiceId: invoiceId,
+        stripeCustomerId: base.stripeCustomerId,
+        stripeSubscriptionId: base.stripeSubscriptionId,
+        currency: 'EUR',
+        amountDue: 500,
+        periodStartsAt: base.currentPeriodStartsAt,
+        periodEndsAt: base.currentPeriodEndsAt,
+        createdAt: new Date('2030-01-01T00:00:00.000Z'),
+      };
+      await repository.upsertInvoice(userId, {
+        ...invoice,
+        status: 'paid',
+        amountPaid: 500,
+        amountRemaining: 0,
+        paidAt: new Date('2030-01-02T00:00:00.000Z'),
+        eventCreatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      }, databaseFor(pool));
+      await repository.upsertInvoice(userId, {
+        ...invoice,
+        status: 'open',
+        amountPaid: 0,
+        amountRemaining: 500,
+        paidAt: null,
+        eventCreatedAt: new Date('2030-01-01T00:00:00.000Z'),
+      }, databaseFor(pool));
+      await repository.upsertInvoice(userId, {
+        ...invoice,
+        status: 'open',
+        amountPaid: 0,
+        amountRemaining: 500,
+        paidAt: null,
+        eventCreatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      }, databaseFor(pool));
+      const storedInvoice = await pool.query<{ status: string; provider_event_created_at: Date }>(`
+        SELECT status, provider_event_created_at FROM billing_invoice WHERE stripe_invoice_id = $1
+      `, [invoiceId]);
+      expect(storedInvoice.rows[0]).toEqual({
+        status: 'paid', provider_event_created_at: new Date('2030-01-02T00:00:00.000Z'),
+      });
+    } finally {
+      await pool.query('DELETE FROM billing_invoice WHERE stripe_invoice_id = $1', [invoiceId]);
+      await deleteAccounts(pool, userId, otherUserId);
+    }
+  });
+
+  it('preserves consumed trial history when replacing a deleted Stripe Customer', async () => {
+    const userId = randomUUID();
+    const otherUserId = randomUUID();
+    const compactId = userId.replaceAll('-', '');
+    const repository = new BillingRepository(databaseFor(pool) as never);
+    const deletedCustomerId = `cus_deleted${compactId}`;
+    const replacementCustomerId = `cus_replacement${compactId}`;
+    const trialUsedAt = new Date('2029-12-01T00:00:00.000Z');
+    await insertAccounts(pool, userId, otherUserId);
+    await pool.query(`
+      INSERT INTO billing_customer (user_id, stripe_customer_id, trial_used_at)
+      VALUES ($1, $2, $3)
+    `, [userId, deletedCustomerId, trialUsedAt]);
+
+    try {
+      await expect(repository.markCustomerDeleted(
+        deletedCustomerId, new Date('2030-01-01T00:00:00.000Z'), databaseFor(pool),
+      )).resolves.toBe(userId);
+      await expect(repository.customerForUser(userId)).resolves.toBeUndefined();
+      const now = new Date();
+      await expect(repository.beginCheckout(
+        userId, randomUUID(), 'monthly', randomUUID(), now,
+        new Date(now.getTime() + 30 * 60_000), new Date(now.getTime() - 60_000),
+      )).resolves.toEqual(expect.objectContaining({
+        state: 'created', stripeCustomerId: null, trialUsed: true,
+      }));
+      await expect(repository.saveCustomer(userId, replacementCustomerId)).resolves.toBe(true);
+      const customer = await pool.query<{
+        stripe_customer_id: string;
+        stripe_customer_deleted_at: Date | null;
+        trial_used_at: Date;
+      }>(`
+        SELECT stripe_customer_id, stripe_customer_deleted_at, trial_used_at
+        FROM billing_customer WHERE user_id = $1
+      `, [userId]);
+      expect(customer.rows[0]).toEqual({
+        stripe_customer_id: replacementCustomerId,
+        stripe_customer_deleted_at: null,
+        trial_used_at: trialUsedAt,
+      });
+    } finally {
+      await deleteAccounts(pool, userId, otherUserId);
+    }
+  });
+
+  it('grants Premium only for entitled Stripe statuses within their current period', async () => {
+    const [userId, otherUserId] = [randomUUID(), randomUUID()];
+    await insertAccounts(pool, userId, otherUserId);
+    const repository = new MatchesRepository(databaseFor(pool) as never);
+
+    try {
+      await pool.query(`
+        INSERT INTO user_subscription (
+          user_id, plan, provider, provider_subscription_id, provider_price_id,
+          billing_period, status, current_period_ends_at, provider_event_created_at
+        ) VALUES ($1, 'premium', 'stripe', $2, $3, 'monthly', 'active', clock_timestamp() + INTERVAL '1 month', clock_timestamp())
+      `, [userId, `sub_${userId.replaceAll('-', '')}`, `price_${userId.replaceAll('-', '')}`]);
+      await expect(repository.effectivePlan(userId, new Date())).resolves.toEqual({ plan: 'premium', weeklyLimit: null });
+
+      await pool.query("UPDATE user_subscription SET status = 'canceled' WHERE user_id = $1", [userId]);
+      await expect(repository.effectivePlan(userId, new Date())).resolves.toEqual({ plan: 'free', weeklyLimit: 3 });
+
+      await pool.query("UPDATE user_subscription SET status = 'past_due', current_period_ends_at = clock_timestamp() - INTERVAL '1 second' WHERE user_id = $1", [userId]);
+      await expect(repository.effectivePlan(userId, new Date())).resolves.toEqual({ plan: 'free', weeklyLimit: 3 });
+    } finally {
+      await deleteAccounts(pool, userId, otherUserId);
     }
   });
 
@@ -790,6 +1012,55 @@ describe('PostgreSQL schema contract', () => {
       await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(true);
       await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(false);
     } finally {
+      await deleteAccounts(pool, userId, otherId);
+    }
+  });
+
+  it('removes Stripe customer/session identity and detaches retained invoices during anonymization', async () => {
+    const userId = randomUUID();
+    const otherId = randomUUID();
+    const compactId = userId.replaceAll('-', '');
+    const customerId = `cus_${compactId}`;
+    const subscriptionId = `sub_${compactId}`;
+    const invoiceId = `in_${compactId}`;
+    await insertAccounts(pool, userId, otherId);
+
+    try {
+      await pool.query('INSERT INTO billing_customer (user_id, stripe_customer_id) VALUES ($1, $2)', [userId, customerId]);
+      await pool.query(`
+        INSERT INTO billing_checkout_session (
+          id, user_id, idempotency_key, billing_period, stripe_session_id,
+          checkout_url, status, expires_at
+        ) VALUES ($1, $2, $3, 'monthly', $4, 'https://checkout.stripe.test/session', 'open', clock_timestamp() + INTERVAL '30 minutes')
+      `, [randomUUID(), userId, randomUUID(), `cs_test_${compactId}`]);
+      await pool.query(`
+        INSERT INTO user_subscription (
+          user_id, plan, provider, provider_subscription_id, provider_price_id,
+          billing_period, status, current_period_ends_at, provider_event_created_at
+        ) VALUES ($1, 'premium', 'stripe', $2, $3, 'monthly', 'active', clock_timestamp() + INTERVAL '1 month', clock_timestamp())
+      `, [userId, subscriptionId, `price_${compactId}`]);
+      await pool.query(`
+        INSERT INTO billing_invoice (
+          stripe_invoice_id, user_id, stripe_customer_id, stripe_subscription_id,
+          status, currency, amount_due, amount_paid, amount_remaining,
+          period_starts_at, period_ends_at, created_at
+        ) VALUES ($1, $2, $3, $4, 'paid', 'EUR', 500, 500, 0,
+          clock_timestamp(), clock_timestamp() + INTERVAL '1 month', clock_timestamp())
+      `, [invoiceId, userId, customerId, subscriptionId]);
+
+      await pool.query('SELECT fct_anonymize_user($1)', [userId]);
+
+      const identity = await pool.query<{ customers: number; sessions: number; subscriptions: number }>(`
+        SELECT
+          (SELECT count(*)::integer FROM billing_customer WHERE user_id = $1) AS customers,
+          (SELECT count(*)::integer FROM billing_checkout_session WHERE user_id = $1) AS sessions,
+          (SELECT count(*)::integer FROM user_subscription WHERE user_id = $1) AS subscriptions
+      `, [userId]);
+      const invoice = await pool.query<{ user_id: string | null }>('SELECT user_id FROM billing_invoice WHERE stripe_invoice_id = $1', [invoiceId]);
+      expect(identity.rows[0]).toEqual({ customers: 0, sessions: 0, subscriptions: 0 });
+      expect(invoice.rows[0]?.user_id).toBeNull();
+    } finally {
+      await pool.query('DELETE FROM billing_invoice WHERE stripe_invoice_id = $1', [invoiceId]);
       await deleteAccounts(pool, userId, otherId);
     }
   });

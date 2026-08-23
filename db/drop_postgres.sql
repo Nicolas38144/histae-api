@@ -2,6 +2,12 @@
 -- CLEAN RESET — DROP EXISTING OBJECTS
 -- =========================================
 DROP FUNCTION IF EXISTS fct_anonymize_user(UUID);
+DROP FUNCTION IF EXISTS fct_cleanup_billing_identity();
+
+DROP TABLE IF EXISTS stripe_webhook_event CASCADE;
+DROP TABLE IF EXISTS billing_invoice CASCADE;
+DROP TABLE IF EXISTS billing_checkout_session CASCADE;
+DROP TABLE IF EXISTS billing_customer CASCADE;
 
 DROP TABLE IF EXISTS notification CASCADE;
 DROP TABLE IF EXISTS device_token CASCADE;

@@ -72,7 +72,11 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
       new MatchesService(new MatchesRepository(database as never)),
       legalConfig() as never,
     );
-    privacy = new PrivacyService(new PrivacyRepository(database as never), store);
+    privacy = new PrivacyService(
+      new PrivacyRepository(database as never),
+      store,
+      { deleteCustomerForAccount: jest.fn().mockResolvedValue(undefined) } as never,
+    );
   });
 
   beforeEach(async () => {

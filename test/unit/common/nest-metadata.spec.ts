@@ -44,6 +44,10 @@ import { UsersService } from '../../../src/users/users.service';
 import { AdminController } from '../../../src/admin/admin.controller';
 import { AdminRepository } from '../../../src/admin/admin.repository';
 import { AdminService } from '../../../src/admin/admin.service';
+import { BillingController, StripeWebhookController } from '../../../src/billing/billing.controller';
+import { BillingRepository } from '../../../src/billing/billing.repository';
+import { BillingService } from '../../../src/billing/billing.service';
+import { StripeGateway } from '../../../src/billing/stripe.gateway';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
@@ -57,6 +61,7 @@ const injectedClasses = [
   TraitsController, TraitsRepository, TraitsService,
   ReportsController, ReportsRepository, ReportsService,
   AdminController, AdminRepository, AdminService,
+  BillingController, StripeWebhookController, BillingRepository, BillingService, StripeGateway,
 ];
 
 describe('Nest dependency metadata', () => {

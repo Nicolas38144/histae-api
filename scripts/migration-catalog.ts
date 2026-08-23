@@ -14,6 +14,9 @@ export const migrations = [
   { version: '009_otp_sms_delivery.sql', filename: '009_otp_sms_delivery.sql' },
   { version: '010_single_usable_otp.sql', filename: '010_single_usable_otp.sql' },
   { version: '011_mobile_client_contract.sql', filename: '011_mobile_client_contract.sql' },
+  { version: '012_stripe_billing.sql', filename: '012_stripe_billing.sql' },
+  { version: '013_preserve_stripe_trial_history.sql', filename: '013_preserve_stripe_trial_history.sql' },
+  { version: '014_billing_event_order.sql', filename: '014_billing_event_order.sql' },
 ] as const;
 
 export async function loadMigration(migration: typeof migrations[number]): Promise<{ sql: string; checksum: string }> {
