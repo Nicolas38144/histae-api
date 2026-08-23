@@ -32,13 +32,28 @@ Pour l’envoi OTP, l’API persiste d’abord un hash avec l’état `pending`,
 
 Le 17 août 2026, ce contrat a été validé manuellement avec Sweego réel : envoi vers un numéro français, retry de la même clé sans second SMS, vérification du code, accès Bearer, rotation du refresh token avec refus de l’ancien et logout `204`.
 
-Les access tokens utilisent HS256 et expirent selon `JWT_ACCESS_TTL`; les refresh tokens suivent `JWT_REFRESH_TTL`. Les erreurs d’authentification les plus courantes sont `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`, `otp_delivery_unavailable`, `otp_rate_limit_exceeded` et `refresh_rate_limit_exceeded`.
+Les access tokens utilisent HS256, le type `access`, l’issuer `histae-api`, l’audience `histae-app` et expirent selon `JWT_ACCESS_TTL`; les refresh tokens contiennent un secret aléatoire de 256 bits et suivent `JWT_REFRESH_TTL`. Les erreurs d’authentification les plus courantes sont `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`, `otp_delivery_unavailable`, `otp_rate_limit_exceeded` et `refresh_rate_limit_exceeded`.
 
 ## Plans
 
 | Méthode | Route | Accès | Résultat |
 | --- | --- | --- | --- |
 | GET | `/plans` | Public | `200 { "plans": [...] }`. Chaque plan expose son code, nom, prix mensuel/annuel, devise, jours d’essai, éventuelle limite hebdomadaire et fonctionnalités. |
+
+## Abonnement Stripe utilisateur
+
+Le client mobile n’envoie jamais de Product ID, Price ID, montant, devise, durée d’essai ou identifiant de client Stripe. L’API choisit le Price mensuel ou annuel depuis sa configuration, et seul un webhook Stripe signé peut modifier les droits Premium. Les créations de Checkout et de portail sont limitées à 10/min/utilisateur par défaut.
+
+| Méthode | Route | Accès | Corps / paramètres | Résultat |
+| --- | --- | --- | --- | --- |
+| GET | `/users/me/subscription` | Authentifiée | — | `200` avec `plan`, `provider`, `status`, `access_granted`, `billing_period`, les dates de période/essai/annulation, `cancel_at_period_end` et `customer_portal_available`. Les statuts Stripe donnant accès sont `trialing`, `active` et `past_due`, uniquement pendant la période projetée. |
+| POST | `/users/me/subscription/checkout` | Authentifiée | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "billing_period": "monthly\|annual" }` | `201 { "session_id", "url", "expires_at" }`. URL Checkout hébergée, valable 30 minutes. Une seule session peut être créée ou ouverte par utilisateur. Un premier abonnement peut recevoir l’essai du catalogue ; un essai déjà consommé n’est jamais réattribué. |
+| POST | `/users/me/subscription/portal` | Authentifiée | — | `201 { "url" }`. Crée une session courte du portail client Stripe pour gérer moyen de paiement, changement de tarif et annulation. Requiert un client Stripe déjà lié. |
+| POST | `/billing/stripe/webhook` | Public, signature Stripe obligatoire | Corps JSON brut et en-tête `Stripe-Signature` | `200 { "received": true }`. Vérifie le corps brut avec `STRIPE_WEBHOOK_SECRET`, refuse un événement test/live incohérent, déduplique par Event ID et traite transactionnellement Checkout, abonnements, factures et suppression du Customer. Cette route est exclue de la petite limite globale mais limitée séparément à 300/min/IP par défaut. |
+
+Événements traités : `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created|updated|deleted|paused|resumed|trial_will_end`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed` et `customer.deleted`. Les autres événements valides sont acquittés sans effet métier ni stockage. Les événements de facture ou d’abonnement plus anciens que la projection courante sont ignorés. Les transitions d’abonnement émettent `subscription.updated` en SSE ; un paiement échoué ou une fin d’essai proche produit aussi une notification persistée/FCM.
+
+Erreurs spécifiques : `billing_unavailable`, `invalid_stripe_signature`, `stripe_mode_mismatch`, `invalid_stripe_event`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded` et `billing_webhook_rate_limit_exceeded`.
 
 ## Console d’administration
 
@@ -63,12 +78,12 @@ Toutes ces routes sont authentifiées.
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
 | GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
-| PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null", "photo"?: "http(s)://…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max ; URL photo : 2 048 octets max. |
+| PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null", "photo"?: "https://…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max ; URL photo HTTPS sans identifiants intégrés : 2 048 octets max. |
 | GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
 | POST | `/users/me/deletion-token` | — | `201 { "confirmation_token", "expires_at" }`. Remplace tout jeton précédent par un secret dédié, hashé en base, à usage unique et valable 10 minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1 à 30 min). |
-| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, puis efface immédiatement profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, abonnement et swipes Scylla entrants/sortants ; retire les consentements et leurs métadonnées réseau ; anonymise le compte et les messages émis ; clôt les matchs avant purge différée. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si l’effacement Scylla ne peut pas être garanti : `503 data_erasure_unavailable`. |
+| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, supprime le Customer Stripe et annule ses abonnements, puis efface profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, projection d’abonnement et swipes Scylla entrants/sortants ; les factures sont détachées du compte pour leur conservation comptable. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si Stripe ou Scylla ne permet pas un effacement complet : `503 data_erasure_unavailable`. |
 | GET | `/users/me/continuation-quota` | — | `200` avec le plan effectif, l’usage et, pour un plan limité, `weekly_limit` et `remaining`. |
 
 ### Appareils, push et temps réel
@@ -78,7 +93,7 @@ Toutes ces routes sont authentifiées.
 | GET | `/users/me/devices` | — | `200 { "devices": [...] }`. Expose les UUID, plateformes, versions d’application et dates d’usage, jamais les jetons FCM. |
 | POST | `/users/me/devices` | `{ "push_token", "platform": "ios\|android", "app_version"?: "…" }` | `201` avec l’appareil public. Un jeton fournisseur déjà connu est réaffecté et rafraîchi de manière idempotente. |
 | DELETE | `/users/me/devices/:id` | UUID appareil | `204`, ou `404 device_not_found`. La propriété par l’utilisateur authentifié est imposée. |
-| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created` et `message.read`. |
+| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created`, `message.read` et `subscription.updated`. |
 
 Le temps réel est relayé entre instances via Redis en production et fonctionne localement en mémoire lorsque Redis est explicitement désactivé. Les notifications push FCM sont optionnelles (`PUSH_PROVIDER=fcm`) et ne contiennent jamais le texte d’un message : seulement des identifiants nécessaires à la resynchronisation. Un jeton signalé `UNREGISTERED` par FCM est supprimé automatiquement.
 
@@ -97,7 +112,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | --- | --- | --- | --- | --- |
 | POST | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | `{ "type": "access\|erasure\|portability\|rectification\|restriction\|objection" }` | `201` avec la demande. Une seule demande ouverte par utilisateur et par type. |
 | GET | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | — | `200 { "requests": [...] }`. |
-| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
+| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, la projection d’abonnement, les factures Stripe rattachées et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
 | GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. |
 | POST | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. Clôt immédiatement les matchs entre les deux comptes et empêche leur recréation. |
 | DELETE | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. |

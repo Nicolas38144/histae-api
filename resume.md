@@ -12,6 +12,7 @@ La version actuelle fournit :
 - l’onboarding juridique de l’utilisateur ;
 - le profil, les préférences, les traits et la localisation ;
 - les plans d’abonnement et le quota de continuation ;
+- la souscription Premium Stripe, Checkout hébergé, portail client et webhooks ;
 - le cycle de vie des matchs ;
 - la messagerie ;
 - le contrat mobile enrichi, le temps réel SSE et les notifications push ;
@@ -23,10 +24,9 @@ La version actuelle fournit :
 - les migrations, la maintenance, la documentation OpenAPI et les sondes d’exploitation.
 - le feed de découverte, les décisions de swipe et la création de matchs par likes réciproques avec ScyllaDB.
 
-Deux ensembles fonctionnels restent volontairement incomplets :
+Un ensemble fonctionnel reste volontairement incomplet :
 
-1. le stockage et l’envoi réels des photos : le profil accepte encore une URL HTTP(S), conformément à l’exclusion demandée pour cette livraison ;
-2. les paiements et webhooks d’abonnement.
+1. le stockage et l’envoi réels des photos : le profil accepte encore une URL HTTPS externe, conformément à l’exclusion demandée pour cette livraison.
 
 ## 2. État global
 
@@ -60,6 +60,7 @@ un nettoyage ciblé et sans `DROP`, `TRUNCATE` ni `ALTER TABLE`.
 | Rate limiting distribué | Redis 7.4 local et production ; mémoire uniquement en repli explicite |
 | Temps réel mobile | Server-Sent Events, relayés entre instances par Redis Pub/Sub |
 | Notifications push | Firebase Cloud Messaging HTTP v1, fournisseur désactivable |
+| Paiement | Stripe Billing, Checkout hébergé, Customer Portal et webhooks signés |
 | Authentification | JWT HS256 + refresh tokens rotatifs |
 | Validation | `class-validator` et `class-transformer` |
 | Documentation | `@nestjs/swagger`, Swagger UI et document OpenAPI JSON |
@@ -91,6 +92,7 @@ Les principaux modules sont :
 | `reports` | signalements utilisateur et traitement administrateur |
 | `traits` | catalogue et attribution de traits |
 | `plans` | plans Free/Premium et fonctionnalités commerciales |
+| `billing` | client Stripe, Checkout/portail, projection des abonnements, factures et webhooks |
 | `discovery` | éligibilité et distance PostgreSQL, exclusions et swipes Scylla, likes réciproques et création de match |
 | `mobile` | appareils, flux SSE, notifications persistées et livraison FCM |
 | `common` | erreurs, validation HTTP, pagination et DTO génériques |
@@ -134,7 +136,7 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - Un `X-Request-ID` UUID valide fourni par le client est conservé.
 - Sinon, l’API génère un UUID.
 - L’identifiant est renvoyé dans la réponse et inclus dans les logs HTTP.
-- La durée en millisecondes, la méthode, l’URL et le statut sont journalisés.
+- La durée en millisecondes, la méthode, le chemin sans query string et le statut sont journalisés ; les recherches et justifications ne passent jamais dans les logs HTTP.
 
 ## 6. Configuration et démarrage sécurisé
 
@@ -145,7 +147,8 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - `JWT_SECRET` : au moins 32 octets ;
 - `PHONE_ENCRYPTION_KEY` : clé AES-256-GCM ;
 - `PHONE_HASH_KEY` : clé HMAC-SHA-256 ;
-- paramètres PostgreSQL ;
+- ces trois clés doivent être distinctes ;
+- paramètres PostgreSQL, avec TLS obligatoire en production ;
 - versions et URL des quatre documents juridiques ;
 - `LEGAL_REVIEW_REFERENCE` en production ;
 - Redis avec TLS et mot de passe en production pour le rate limiting partagé ;
@@ -153,6 +156,7 @@ Les erreurs inattendues et les erreurs serveur sont journalisées côté API, ma
 - `SMS_PROVIDER`, `SWEEGO_API_KEY`, `SWEEGO_API_URL`, `SWEEGO_SMS_SENDER_ID`, `SWEEGO_SMS_REGION`, `SWEEGO_TIMEOUT` et `OTP_TTL` pour la livraison des OTP.
 - `ACCOUNT_DELETION_TOKEN_TTL` pour la confirmation de suppression, avec une valeur autorisée de 1 à 30 minutes ;
 - `PUSH_PROVIDER` et, si FCM est activé, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_TOKEN_URI` et `PUSH_TIMEOUT`.
+- `BILLING_PROVIDER` et, avec Stripe, la clé secrète, le secret webhook, le Product Premium, les deux Prices, les trois URL de retour et les options de taxe/promotion/retry.
 
 `.env.example` inventorie les variables prises en charge tandis que `.env` reste ignoré. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides.
 
@@ -194,8 +198,8 @@ L’idempotence est garantie au niveau applicatif : rejouer la même clé pour l
 
 ### Access tokens
 
-- JWT signé explicitement en HS256 ;
-- durée par défaut : 15 minutes ;
+- JWT signé explicitement en HS256, typé `access`, avec issuer `histae-api` et audience `histae-app` ;
+- durée par défaut : 15 minutes, obligatoirement comprise entre 1 minute et 1 heure ;
 - sujet `sub` limité à l’UUID utilisateur ;
 - les rôles ne sont pas considérés comme fiables depuis le token.
 
@@ -211,10 +215,11 @@ L’idempotence est garantie au niveau applicatif : rejouer la même clé pour l
 
 ### Refresh tokens
 
-- Format public `jti:secret`.
+- Format public `jti:secret`, avec un secret aléatoire de 256 bits.
 - Seul le hash SHA-256 du token complet est persisté.
 - Rotation atomique sous verrou PostgreSQL.
 - Ancien token révoqué lors d’un refresh réussi.
+- Durée supérieure à celle de l’access token et plafonnée à 180 jours.
 - Déconnexion avec révocation du token ; un `device_id` optionnel permet de supprimer atomiquement l’enregistrement push de l’appareil concerné.
 - Durée par défaut : 4 320 heures, soit 180 jours.
 
@@ -290,7 +295,7 @@ Les écritures de choix juridiques :
 - contrainte PostgreSQL supplémentaire garantissant 18 ans ;
 - `sex` fermé à `male`, `female`, `other` ou `null` ;
 - bio : 2 000 octets maximum ;
-- photo : URL HTTP(S), 2 048 octets maximum.
+- photo : URL HTTPS sans identifiants intégrés, 2 048 octets maximum.
 
 Les CGU et la notice courantes sont requises. Un sexe non nul exige aussi le consentement sensible courant.
 
@@ -415,13 +420,35 @@ Le catalogue PostgreSQL expose les plans, prix mensuel/annuel en centimes, devis
 - Le quota n’est consommé qu’au second consentement, lorsque la continuation devient mutuelle.
 - Le quota débité appartient à l’initiateur de la continuation.
 
-L’API sait lire les droits, mais aucun paiement ni webhook ne met encore à jour les abonnements.
+Stripe alimente maintenant ces droits. `POST /api/users/me/subscription/checkout` crée une page Checkout hébergée
+mensuelle ou annuelle et exige une clé d’idempotence UUID v4. Le serveur choisit le `price_id` configuré : montant,
+devise, essai, Product et Customer ne sont jamais acceptés depuis le mobile. Une contrainte PostgreSQL autorise une
+seule session `creating` ou `open` par compte ; un retry identique retrouve la même session. L’essai du catalogue est
+accordé une seule fois et `billing_customer.trial_used_at` empêche sa réattribution après résiliation.
+
+`POST /api/users/me/subscription/portal` délègue à Stripe Customer Portal la mise à jour du moyen de paiement,
+le changement mensuel/annuel et l’annulation. `GET /api/users/me/subscription` expose au mobile la projection
+nécessaire à l’interface. `trialing`, `active` et `past_due` conservent l’accès dans la période courante ;
+`incomplete`, `incomplete_expired`, `paused`, `unpaid` et `canceled` retombent sur Free. Un événement fournisseur
+plus ancien ne peut pas écraser une projection plus récente.
+
+`POST /api/billing/stripe/webhook` utilise le corps HTTP brut, vérifie `Stripe-Signature`, le secret `whsec_*` et
+la cohérence test/live. L’Event ID est inséré dans `stripe_webhook_event` dans la même transaction que son effet,
+ce qui rend les retries sans danger. Les Product/Price reçus sont comparés aux identifiants configurés. Les
+événements d’abonnement, Checkout, facture et suppression de Customer sont pris en charge ; les factures sont
+projetées dans `billing_invoice`, les changements sont diffusés en SSE, et les échecs de paiement/fins d’essai
+peuvent produire une notification FCM sans donnée financière sensible.
+
+La route webhook est exclue de la petite limite globale mais possède sa propre limite de 300 requêtes/minute/IP.
+Un retry déjà enregistré est acquitté avant tout nouvel appel Stripe. Les projections d’abonnement et de facture
+ignorent les événements plus anciens, et les URL Checkout sont retirées de PostgreSQL lorsqu’une session se termine.
 
 La synthèse administrateur fournit provisoirement un **chiffre d’affaires estimé**. Pour la période choisie,
 elle compte les lignes Premium dont `user_subscription.updated_at` appartient à l’intervalle, puis multiplie ce
 nombre par le tarif mensuel Premium courant. Les périodes disponibles sont les 7 ou 30 derniers jours, le mois
 en cours, le mois précédent, l’année en cours et l’historique complet. Ce chiffre n’est pas un encaissement
-comptable : il ignore notamment les renouvellements non enregistrés, remboursements, taxes, commissions et charges.
+comptable : il ignore notamment les renouvellements, remboursements, taxes, commissions et charges. La table
+`billing_invoice` permet désormais une future métrique d’encaissements réels sans modifier ce contrat administrateur existant.
 
 ## 12. Matchs : modèle et machine d’état
 
@@ -581,7 +608,7 @@ idempotent puisse terminer les deux côtés sans déclarer prématurément la de
 - messages écrits ;
 - signalements soumis ;
 - blocages créés ;
-- abonnement.
+- abonnement et factures Stripe rattachées ;
 - décisions de découverte sortantes prises par l’utilisateur et provenant de ScyllaDB ; les choix entrants de tiers sont exclus de la réponse.
 
 L’export est journalisé avec `export_data`. Il reste accessible pendant un onboarding incomplet afin de ne pas conditionner l’exercice des droits à l’acceptation des CGU.
@@ -606,6 +633,12 @@ L’effacement ne se limite pas à mettre `deleted_at`.
 
 La suppression directe exige désormais deux étapes. `POST /api/users/me/deletion-token` remplace le jeton précédent et retourne un secret `uuid:secret` valable 10 minutes par défaut. Seul son SHA-256 est stocké. `DELETE /api/users/me` exige ce jeton, le consomme une seule fois, puis lance l’effacement inter-bases. Un jeton mal formé, inconnu, réutilisé ou expiré renvoie `401 invalid_or_expired_deletion_token`.
 
+Lorsque le compte possède un Customer Stripe, l’API le supprime avant ScyllaDB et PostgreSQL. Stripe annule alors
+ses abonnements et retire les moyens de paiement. Si cet appel ne peut pas être garanti, l’effacement échoue fermé
+avec `503 data_erasure_unavailable`. La projection, le mapping Customer et les sessions Checkout sont ensuite
+supprimés localement ; les factures déjà émises sont détachées de l’UUID utilisateur et conservées pour la
+traçabilité comptable.
+
 ### Suppressions immédiates
 
 - profil ;
@@ -618,6 +651,7 @@ La suppression directe exige désormais deux étapes. `POST /api/users/me/deleti
 - notifications ;
 - blocages entrants et sortants ;
 - abonnement ;
+- mapping Customer Stripe et sessions Checkout ;
 - compteurs de continuation ;
 - état individuel dans les matchs.
 - swipes entrants et sortants dans les deux vues ScyllaDB.
@@ -685,38 +719,43 @@ La procédure est décrite dans [`docs/legal-release-checklist.md`](docs/legal-r
 
 ## 19. Stockage PostgreSQL et ScyllaDB
 
-Le schéma canonique contient 24 tables :
+Le schéma canonique contient 28 tables :
 
 1. `user_account` ;
 2. `account_tombstone` ;
 3. `subscription_plan` ;
 4. `subscription_plan_feature` ;
 5. `user_subscription` ;
-6. `user_consent` ;
-7. `data_subject_request` ;
-8. `data_access_log` ;
-9. `otp_verification` ;
-10. `user_profile` ;
-11. `user_preferences` ;
-12. `user_presence` ;
-13. `trait` ;
-14. `user_trait` ;
-15. `match_init` ;
-16. `match_state` ;
-17. `continuation_usage` ;
-18. `chat_message` ;
-19. `refresh_tokens` ;
-20. `user_block` ;
-21. `user_report` ;
-22. `device_token` ;
-23. `notification` ;
-24. `account_deletion_token`.
+6. `billing_customer` ;
+7. `billing_checkout_session` ;
+8. `stripe_webhook_event` ;
+9. `billing_invoice` ;
+10. `user_consent` ;
+11. `data_subject_request` ;
+12. `data_access_log` ;
+13. `otp_verification` ;
+14. `user_profile` ;
+15. `user_preferences` ;
+16. `user_presence` ;
+17. `trait` ;
+18. `user_trait` ;
+19. `match_init` ;
+20. `match_state` ;
+21. `continuation_usage` ;
+22. `chat_message` ;
+23. `refresh_tokens` ;
+24. `user_block` ;
+25. `user_report` ;
+26. `device_token` ;
+27. `notification` ;
+28. `account_deletion_token`.
 
 Les relations utilisent largement `ON DELETE CASCADE` ou `SET NULL` selon le besoin métier. Les contraintes SQL doublent les validations critiques : rôles, statuts, types de consentement, sexe, préférences, majorité, prix et limites.
 
-Deux fonctions principales complètent le schéma :
+Trois fonctions principales complètent le schéma :
 
 - `fct_anonymize_user` pour l’effacement RGPD ;
+- `fct_cleanup_billing_identity` pour détacher les factures et retirer l’identité Stripe à l’anonymisation ;
 - `fct_check_user_age` avec trigger avant insertion/mise à jour du profil.
 
 Les index conservés couvrent :
@@ -734,6 +773,7 @@ Les index conservés couvrent :
 - signalements en attente ;
 - notifications non lues et expirées ;
 - expiration des jetons de suppression de compte.
+- idempotence des événements Stripe, session Checkout active unique et factures par utilisateur/date.
 
 La migration `008` retire neuf index redondants, remplacés ou sans requête correspondante : doublons du hash téléphone et du JTI, ancien index des messages, index simple du statut des signalements, index simple des consentements, ancien tri par dernier message, index des comptes actifs, index d’anonymisation différée et ancien index partiel des refresh tokens. Ce dernier est remplacé par `idx_refresh_tokens_expires(expires_at)`, aligné sur la purge globale réellement exécutée. La migration `010` retire ensuite l’ancien index partiel des OTP utilisables, devenu redondant avec la contrainte unique par téléphone.
 
@@ -759,6 +799,9 @@ Les migrations versionnées sont :
 | `009_otp_sms_delivery` | idempotence des demandes OTP, états de livraison Sweego et identifiants fournisseur |
 | `010_single_usable_otp` | reprise des doublons historiques, remplacement de l’ancien index partiel et contrainte d’un seul OTP utilisable par téléphone |
 | `011_mobile_client_contract` | idempotence des messages, index des non-lus, version d’application des appareils et jetons de suppression à usage unique |
+| `012_stripe_billing` | Customers Stripe, Checkout idempotent, projection d’abonnement, registre de factures, webhooks dédupliqués et nettoyage RGPD |
+| `013_preserve_stripe_trial_history` | conservation de la preuve d’essai lorsqu’un Customer Stripe est supprimé puis remplacé |
+| `014_billing_event_order` | ordre monotone des événements de facture Stripe et protection du registre contre les régressions |
 
 Le moteur de migration :
 
@@ -770,7 +813,7 @@ Le moteur de migration :
 
 `pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev` et un hôte PostgreSQL local.
 
-Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les onze migrations conduisent au même ensemble d’index.
+Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les quatorze migrations conduisent au même ensemble d’index.
 
 Le schéma Scylla suit un registre séparé `scylla_schema_migrations`. `pnpm run scylla:migrate` crée le keyspace
 avec `NetworkTopologyStrategy`, applique `scylla/001_discovery.cql`, enregistre son SHA-256 et refuse toute
@@ -879,12 +922,12 @@ test/
 
 Inventaire actuel :
 
-- 29 fichiers/suites unitaires, 152 cas ;
-- 3 suites e2e, 15 cas ;
-- 3 suites d’intégration, 33 cas dont 21 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
-- total complet : 35 fichiers/suites Jest et 200 cas.
+- 32 fichiers/suites unitaires, 181 cas ;
+- 4 suites e2e, 18 cas ;
+- 3 suites d’intégration, 39 cas dont 27 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
+- total complet : 39 fichiers/suites Jest et 238 cas.
 
-Le 23 août 2026, TypeScript, ESLint, le build et les 167 cas autonomes ont été validés localement. Les 33 tests
+Le 23 août 2026, TypeScript, ESLint, le build et les 199 cas autonomes ont été validés localement. Les 39 tests
 d’intégration réels PostgreSQL, ScyllaDB et Redis ont également réussi. Les suites restent exécutables séparément, sans flag d’activation.
 
 Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
@@ -904,10 +947,10 @@ Le dépôt ne contient volontairement plus de workflow CI. La validation complè
 5. `pnpm run test:unit` ;
 6. `pnpm run test:e2e` ;
 7. `pnpm run test:integration` avec les trois dépendances réelles ;
-8. smoke test manuel de la santé, de l’OTP réel, de l’idempotence, des jetons et du logout.
+8. smoke test manuel de la santé, de l’OTP réel, de Stripe Checkout en mode test, des webhooks, de l’idempotence, des jetons et du logout.
 
-Pour cette mise à jour, le lint, le typecheck, le build et les 167 cas indépendants de l’infrastructure ont réussi
-le 23 août 2026. Les 21 cas PostgreSQL, les 10 cas ScyllaDB/PostgreSQL et les 2 cas Redis ont également réussi.
+Pour cette mise à jour, le lint, le typecheck, le build et les 199 cas indépendants de l’infrastructure ont réussi
+le 23 août 2026. Les 27 cas PostgreSQL, les 10 cas ScyllaDB/PostgreSQL et les 2 cas Redis ont également réussi.
 
 Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
 
@@ -931,8 +974,7 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 
 ### Bloquants fonctionnels
 
-1. Aucun véritable stockage de photo : le profil accepte uniquement une URL HTTP(S), conformément à l’exclusion de cette livraison.
-2. Aucun paiement/webhook : les plans sont lisibles mais non alimentés commercialement.
+1. Aucun véritable stockage de photo : le profil accepte uniquement une URL HTTPS externe. Cela protège le transport mais ne supprime pas le risque de tracking par l’hébergeur ; un stockage Histae reste nécessaire avant la production.
 
 ### Bloquants conformité/organisation
 
@@ -963,7 +1005,8 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 - maintenance sur un jeu de données expiré complet ;
 - coupure réseau Redis réelle dans un environnement jetable ; le `503` et le partage inter-instances sont déjà couverts ;
 - panne réseau Scylla réelle dans un environnement jetable, la panne simulée et son contrat HTTP étant déjà couverts ;
-- suivi de livraison Sweego par webhook et paiements futurs.
+- suivi de livraison Sweego par webhook ;
+- test de bout en bout Stripe en sandbox avec la configuration finale du Dashboard, Test Clock et événements de remboursement.
 
 ## 28. Feuille de route recommandée
 
@@ -987,10 +1030,11 @@ Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scyll
 
 ### Avant monétisation
 
-1. Intégrer le fournisseur de paiement.
-2. Vérifier la signature et l’idempotence des webhooks.
-3. Modéliser remboursements, annulations et périodes de grâce.
-4. Ajouter une réconciliation planifiée entre paiement et `user_subscription`.
+1. Configurer Product, Prices, portail client et destination webhook dans le compte Stripe de production.
+2. Exécuter le parcours complet dans une sandbox Stripe, y compris SCA, paiement échoué, renouvellement et annulation.
+3. Définir la politique commerciale de relance/grâce et la comptabilisation des remboursements.
+4. Ajouter une réconciliation planifiée Stripe vers `user_subscription` et une alerte sur les webhooks durablement en échec.
+5. Vérifier les règles App Store/Google Play applicables à la vente de fonctionnalités numériques selon les pays distribués.
 
 ### Découverte produit
 
