@@ -7,6 +7,7 @@ type Environment = 'development' | 'test' | 'production';
 type MaintenanceMode = 'api' | 'worker' | 'disabled';
 type SmsProvider = 'disabled' | 'sweego';
 type PushProvider = 'disabled' | 'fcm';
+type BillingProvider = 'disabled' | 'stripe';
 
 type RedisConfig = {
   address: string;
@@ -24,6 +25,22 @@ export type PushConfig = {
   privateKey: string;
   tokenUri: string;
   timeoutMillis: number;
+};
+
+export type BillingConfig = {
+  provider: BillingProvider;
+  stripeSecretKey: string;
+  stripeWebhookSecret: string;
+  premiumProductId: string;
+  premiumMonthlyPriceId: string;
+  premiumAnnualPriceId: string;
+  checkoutSuccessUrl: string;
+  checkoutCancelUrl: string;
+  portalReturnUrl: string;
+  automaticTax: boolean;
+  allowPromotionCodes: boolean;
+  timeoutMillis: number;
+  maxNetworkRetries: number;
 };
 
 export type ScyllaConfig = {
@@ -74,6 +91,7 @@ export class ConfigService {
   readonly scylla: ScyllaConfig;
   readonly redis: RedisConfig;
   readonly push: PushConfig;
+  readonly billing: BillingConfig;
   readonly legal: {
     termsVersion: string;
     privacyVersion: string;
@@ -99,6 +117,8 @@ export class ConfigService {
     dataExport: LimitPolicy;
     report: LimitPolicy;
     swipe: LimitPolicy;
+    billing: LimitPolicy;
+    billingWebhook: LimitPolicy;
   };
 
   constructor() {
@@ -109,8 +129,14 @@ export class ConfigService {
     if (Buffer.byteLength(jwtSecret) < 32) throw new Error('config: JWT_SECRET must contain at least 32 bytes');
     const encryptionKey = required('PHONE_ENCRYPTION_KEY');
     const hashKey = required('PHONE_HASH_KEY');
-    parsePhoneKey(encryptionKey);
-    parsePhoneKey(hashKey);
+    const encryptionKeyBytes = parsePhoneKey(encryptionKey);
+    const hashKeyBytes = parsePhoneKey(hashKey);
+    const jwtSecretBytes = Buffer.from(jwtSecret, 'utf8');
+    if (encryptionKeyBytes.equals(hashKeyBytes)
+      || encryptionKeyBytes.equals(jwtSecretBytes)
+      || hashKeyBytes.equals(jwtSecretBytes)) {
+      throw new Error('config: JWT_SECRET, PHONE_ENCRYPTION_KEY, and PHONE_HASH_KEY must be distinct');
+    }
 
     this.postgres = {
       host: required('POSTGRES_HOST'),
@@ -126,6 +152,9 @@ export class ConfigService {
       idle_in_transaction_session_timeout: duration(envOr('POSTGRES_IDLE_TRANSACTION_TIMEOUT', '30s'), 'POSTGRES_IDLE_TRANSACTION_TIMEOUT'),
       application_name: 'histae-api',
     };
+    if (this.env === 'production' && !this.postgres.ssl) {
+      throw new Error('config: production PostgreSQL requires TLS');
+    }
     const scyllaUsername = envOr('SCYLLA_USERNAME', '');
     const scyllaPassword = process.env.SCYLLA_PASSWORD ?? '';
     if (!!scyllaUsername !== !!scyllaPassword) throw new Error('config: SCYLLA_USERNAME and SCYLLA_PASSWORD must be set together');
@@ -150,11 +179,15 @@ export class ConfigService {
     if (this.env === 'production' && this.scylla.replicationFactor < 3) {
       throw new Error('config: production ScyllaDB requires SCYLLA_REPLICATION_FACTOR >= 3');
     }
-    this.jwt = {
-      secret: jwtSecret,
-      accessTtlMs: duration(envOr('JWT_ACCESS_TTL', '15m'), 'JWT_ACCESS_TTL'),
-      refreshTtlMs: duration(envOr('JWT_REFRESH_TTL', '4320h'), 'JWT_REFRESH_TTL'),
-    };
+    const accessTtlMs = duration(envOr('JWT_ACCESS_TTL', '15m'), 'JWT_ACCESS_TTL');
+    const refreshTtlMs = duration(envOr('JWT_REFRESH_TTL', '4320h'), 'JWT_REFRESH_TTL');
+    if (accessTtlMs < 60_000 || accessTtlMs > 60 * 60_000) {
+      throw new Error('config: JWT_ACCESS_TTL must be between 1m and 1h');
+    }
+    if (refreshTtlMs < 60 * 60_000 || refreshTtlMs > 4_320 * 60 * 60_000 || refreshTtlMs <= accessTtlMs) {
+      throw new Error('config: JWT_REFRESH_TTL must be longer than JWT_ACCESS_TTL and no more than 4320h');
+    }
+    this.jwt = { secret: jwtSecret, accessTtlMs, refreshTtlMs };
     this.accountDeletionTokenTtlMs = duration(envOr('ACCOUNT_DELETION_TOKEN_TTL', '10m'), 'ACCOUNT_DELETION_TOKEN_TTL');
     if (this.accountDeletionTokenTtlMs < 60_000 || this.accountDeletionTokenTtlMs > 30 * 60_000) {
       throw new Error('config: ACCOUNT_DELETION_TOKEN_TTL must be between 1m and 30m');
@@ -249,6 +282,50 @@ export class ConfigService {
       timeoutMillis: duration(envOr('PUSH_TIMEOUT', '5s'), 'PUSH_TIMEOUT'),
     };
     if (this.push.timeoutMillis > 30_000) throw new Error('config: PUSH_TIMEOUT must not exceed 30s');
+    const billingProviderValue = billingProvider(envOr('BILLING_PROVIDER', this.env === 'production' ? 'stripe' : 'disabled'));
+    const stripeSecretKey = envOr('STRIPE_SECRET_KEY', '');
+    const stripeWebhookSecret = envOr('STRIPE_WEBHOOK_SECRET', '');
+    const premiumProductId = envOr('STRIPE_PREMIUM_PRODUCT_ID', '');
+    const premiumMonthlyPriceId = envOr('STRIPE_PREMIUM_MONTHLY_PRICE_ID', '');
+    const premiumAnnualPriceId = envOr('STRIPE_PREMIUM_ANNUAL_PRICE_ID', '');
+    const checkoutSuccessUrl = envOr('STRIPE_CHECKOUT_SUCCESS_URL', '');
+    const checkoutCancelUrl = envOr('STRIPE_CHECKOUT_CANCEL_URL', '');
+    const portalReturnUrl = envOr('STRIPE_PORTAL_RETURN_URL', '');
+    if (this.env === 'production' && billingProviderValue !== 'stripe') {
+      throw new Error('config: production requires BILLING_PROVIDER=stripe');
+    }
+    if (billingProviderValue === 'stripe') {
+      if (!/^sk_(test|live)_[A-Za-z0-9]+$/.test(stripeSecretKey)) throw new Error('config: STRIPE_SECRET_KEY must be a Stripe secret key');
+      if (this.env === 'production' && !stripeSecretKey.startsWith('sk_live_')) {
+        throw new Error('config: production requires a live Stripe secret key');
+      }
+      if (this.env !== 'production' && !stripeSecretKey.startsWith('sk_test_')) {
+        throw new Error('config: non-production environments require a Stripe test secret key');
+      }
+      if (!/^whsec_[A-Za-z0-9]+$/.test(stripeWebhookSecret)) throw new Error('config: STRIPE_WEBHOOK_SECRET must be a Stripe endpoint secret');
+      if (!/^prod_[A-Za-z0-9]+$/.test(premiumProductId)) throw new Error('config: STRIPE_PREMIUM_PRODUCT_ID must be a Stripe product ID');
+      if (!/^price_[A-Za-z0-9]+$/.test(premiumMonthlyPriceId) || !/^price_[A-Za-z0-9]+$/.test(premiumAnnualPriceId)
+        || premiumMonthlyPriceId === premiumAnnualPriceId) {
+        throw new Error('config: Stripe monthly and annual Price IDs must be distinct valid price IDs');
+      }
+    }
+    const stripeTimeoutMillis = duration(envOr('STRIPE_TIMEOUT', '10s'), 'STRIPE_TIMEOUT');
+    if (stripeTimeoutMillis > 30_000) throw new Error('config: STRIPE_TIMEOUT must not exceed 30s');
+    this.billing = {
+      provider: billingProviderValue,
+      stripeSecretKey,
+      stripeWebhookSecret,
+      premiumProductId,
+      premiumMonthlyPriceId,
+      premiumAnnualPriceId,
+      checkoutSuccessUrl: billingProviderValue === 'stripe' ? stripeReturnUrl(checkoutSuccessUrl, 'STRIPE_CHECKOUT_SUCCESS_URL', true) : '',
+      checkoutCancelUrl: billingProviderValue === 'stripe' ? stripeReturnUrl(checkoutCancelUrl, 'STRIPE_CHECKOUT_CANCEL_URL') : '',
+      portalReturnUrl: billingProviderValue === 'stripe' ? stripeReturnUrl(portalReturnUrl, 'STRIPE_PORTAL_RETURN_URL') : '',
+      automaticTax: optionalBoolean('STRIPE_AUTOMATIC_TAX', false),
+      allowPromotionCodes: optionalBoolean('STRIPE_ALLOW_PROMOTION_CODES', false),
+      timeoutMillis: stripeTimeoutMillis,
+      maxNetworkRetries: integer(envOr('STRIPE_MAX_NETWORK_RETRIES', '2'), 'STRIPE_MAX_NETWORK_RETRIES', 0, 5),
+    };
     this.rateLimit = {
       store,
       global: limit('RATE_LIMIT_GLOBAL', 100, '1m'),
@@ -259,6 +336,8 @@ export class ConfigService {
       dataExport: limit('RATE_LIMIT_DATA_EXPORT', 5, '1h'),
       report: limit('RATE_LIMIT_REPORT', 5, '1h'),
       swipe: limit('RATE_LIMIT_SWIPE', 120, '1m'),
+      billing: limit('RATE_LIMIT_BILLING', 10, '1m'),
+      billingWebhook: limit('RATE_LIMIT_BILLING_WEBHOOK', 300, '1m'),
     };
   }
 }
@@ -326,6 +405,11 @@ function smsProvider(value: string): SmsProvider {
   throw new Error('config: SMS_PROVIDER must be disabled or sweego');
 }
 
+function billingProvider(value: string): BillingProvider {
+  if (value === 'disabled' || value === 'stripe') return value;
+  throw new Error('config: BILLING_PROVIDER must be disabled or stripe');
+}
+
 function webOrigins(value: string, environment: Environment): string[] {
   if (!value.trim()) return [];
   const origins = value.split(',').map((item) => item.trim()).filter(Boolean);
@@ -360,6 +444,19 @@ function httpsUrl(value: string, name: string): string {
     const parsed = new URL(value);
     if (parsed.protocol !== 'https:') throw new Error('invalid protocol');
     return parsed.toString();
+  } catch {
+    throw new Error(`config: ${name} must be an absolute HTTPS URL`);
+  }
+}
+
+function stripeReturnUrl(value: string, name: string, checkoutSuccess = false): string {
+  if (checkoutSuccess && !value.includes('{CHECKOUT_SESSION_ID}')) {
+    throw new Error(`config: ${name} must contain the literal {CHECKOUT_SESSION_ID} placeholder`);
+  }
+  try {
+    const parsed = new URL(value.replace('{CHECKOUT_SESSION_ID}', 'cs_test_validation'));
+    if (parsed.protocol !== 'https:') throw new Error('invalid protocol');
+    return value;
   } catch {
     throw new Error(`config: ${name} must be an absolute HTTPS URL`);
   }

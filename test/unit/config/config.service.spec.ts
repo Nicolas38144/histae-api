@@ -94,6 +94,29 @@ describe('ConfigService SMS configuration', () => {
     expect(new ConfigService().corsOrigins).toEqual(['http://localhost:5173', 'https://admin.histae.test']);
   });
 
+  it('requires independent cryptographic keys', () => {
+    process.env = baseEnvironment({ PHONE_HASH_KEY: 'e'.repeat(32) });
+    expect(() => new ConfigService()).toThrow('config: JWT_SECRET, PHONE_ENCRYPTION_KEY, and PHONE_HASH_KEY must be distinct');
+
+    process.env = baseEnvironment({ PHONE_ENCRYPTION_KEY: '61'.repeat(32), PHONE_HASH_KEY: 'a'.repeat(32) });
+    expect(() => new ConfigService()).toThrow('config: JWT_SECRET, PHONE_ENCRYPTION_KEY, and PHONE_HASH_KEY must be distinct');
+  });
+
+  it.each(['59s', '61m'])('rejects the out-of-range access-token duration %s', (ttl) => {
+    process.env = baseEnvironment({ JWT_ACCESS_TTL: ttl });
+    expect(() => new ConfigService()).toThrow('config: JWT_ACCESS_TTL must be between 1m and 1h');
+  });
+
+  it.each(['15m', '4321h'])('rejects the unsafe refresh-token duration %s', (ttl) => {
+    process.env = baseEnvironment({ JWT_REFRESH_TTL: ttl });
+    expect(() => new ConfigService()).toThrow('config: JWT_REFRESH_TTL must be longer than JWT_ACCESS_TTL and no more than 4320h');
+  });
+
+  it('requires PostgreSQL TLS in production', () => {
+    process.env = productionEnvironment({ POSTGRES_SSLMODE: 'disable' });
+    expect(() => new ConfigService()).toThrow('config: production PostgreSQL requires TLS');
+  });
+
   it('requires HTTPS origins in production', () => {
     process.env = productionEnvironment({ CORS_ORIGINS: 'http://admin.histae.test' });
     expect(() => new ConfigService()).toThrow('config: CORS_ORIGINS');
@@ -131,6 +154,33 @@ describe('ConfigService SMS configuration', () => {
 
     expect(() => new ConfigService()).toThrow('config: PUSH_TIMEOUT must not exceed 30s');
   });
+
+  it('accepts a complete Stripe test configuration and preserves the Checkout placeholder', () => {
+    process.env = baseEnvironment(stripeEnvironment());
+
+    expect(new ConfigService().billing).toEqual(expect.objectContaining({
+      provider: 'stripe',
+      premiumProductId: 'prod_histaePremium',
+      premiumMonthlyPriceId: 'price_histaeMonthly',
+      premiumAnnualPriceId: 'price_histaeAnnual',
+      checkoutSuccessUrl: 'https://app.histae.test/billing/success?session_id={CHECKOUT_SESSION_ID}',
+      timeoutMillis: 10_000,
+      maxNetworkRetries: 2,
+    }));
+  });
+
+  it('requires Stripe identifiers, signed webhook secret, and HTTPS return URLs when enabled', () => {
+    process.env = baseEnvironment({ ...stripeEnvironment(), STRIPE_WEBHOOK_SECRET: '' });
+    expect(() => new ConfigService()).toThrow('config: STRIPE_WEBHOOK_SECRET');
+
+    process.env = baseEnvironment({ ...stripeEnvironment(), STRIPE_CHECKOUT_CANCEL_URL: 'http://app.histae.test/cancel' });
+    expect(() => new ConfigService()).toThrow('config: STRIPE_CHECKOUT_CANCEL_URL');
+  });
+
+  it('does not allow a live Stripe key outside production', () => {
+    process.env = baseEnvironment({ ...stripeEnvironment(), STRIPE_SECRET_KEY: 'sk_live_histaeSecret' });
+    expect(() => new ConfigService()).toThrow('config: non-production environments require a Stripe test secret key');
+  });
 });
 
 function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -156,6 +206,7 @@ function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 function productionEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return baseEnvironment({
     ENV: 'production',
+    POSTGRES_SSLMODE: 'require',
     SCYLLA_ENABLED: 'true',
     SCYLLA_TLS: 'true',
     SCYLLA_USERNAME: 'histae',
@@ -177,6 +228,22 @@ function productionEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
     LOCATION_CONSENT_VERSION: 'v1',
     LOCATION_CONSENT_URL: 'https://example.com/location',
     LEGAL_REVIEW_REFERENCE: 'test-review',
+    ...stripeEnvironment({ STRIPE_SECRET_KEY: 'sk_live_histaeSecret' }),
     ...overrides,
   });
+}
+
+function stripeEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    BILLING_PROVIDER: 'stripe',
+    STRIPE_SECRET_KEY: 'sk_test_histaeSecret',
+    STRIPE_WEBHOOK_SECRET: 'whsec_histaeWebhookSecret',
+    STRIPE_PREMIUM_PRODUCT_ID: 'prod_histaePremium',
+    STRIPE_PREMIUM_MONTHLY_PRICE_ID: 'price_histaeMonthly',
+    STRIPE_PREMIUM_ANNUAL_PRICE_ID: 'price_histaeAnnual',
+    STRIPE_CHECKOUT_SUCCESS_URL: 'https://app.histae.test/billing/success?session_id={CHECKOUT_SESSION_ID}',
+    STRIPE_CHECKOUT_CANCEL_URL: 'https://app.histae.test/billing/cancel',
+    STRIPE_PORTAL_RETURN_URL: 'https://app.histae.test/settings/subscription',
+    ...overrides,
+  };
 }
