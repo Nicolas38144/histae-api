@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { AppModule } from './app.module';
 import { ApiError } from './common/api-error';
 import { ApiExceptionFilter } from './common/api-exception.filter';
+import { requestPath } from './common/http/request-path';
 import { applicationConfig } from './config/config.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 
@@ -19,7 +20,7 @@ async function bootstrap(): Promise<void> {
     trustProxy: config.trustProxy,
     bodyLimit: 1 << 20,
     logger: false,
-  }));
+  }), { rawBody: true });
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableShutdownHooks();
   if (config.corsOrigins.length) {
@@ -59,7 +60,9 @@ async function bootstrap(): Promise<void> {
     request.id = requestId;
     requestStarts.set(request, process.hrtime.bigint());
     try {
-      await limits.enforce('global', request.ip, config.rateLimit.global, 'rate_limit_exceeded');
+      if (requestPath(request.url) !== '/api/billing/stripe/webhook') {
+        await limits.enforce('global', request.ip, config.rateLimit.global, 'rate_limit_exceeded');
+      }
     } catch (error) {
       sendHookError(reply, error);
     }
@@ -67,7 +70,7 @@ async function bootstrap(): Promise<void> {
   fastify.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStarts.get(request);
     const durationMs = startedAt ? Number(process.hrtime.bigint() - startedAt) / 1_000_000 : 0;
-    const details = `${request.method} ${request.url} ${reply.statusCode} request_id=${request.id} duration_ms=${durationMs.toFixed(1)}`;
+    const details = `${request.method} ${requestPath(request.url)} ${reply.statusCode} request_id=${request.id} duration_ms=${durationMs.toFixed(1)}`;
     if (reply.statusCode >= 500) logger.error(details);
     else if (reply.statusCode >= 400) logger.warn(details);
     // else logger.debug(details);

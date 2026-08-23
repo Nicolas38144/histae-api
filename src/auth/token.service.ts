@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ConfigService } from '../config/config.service';
 import type { NewRefreshToken, StoredRefreshToken } from './auth.models';
+
+export const ACCESS_TOKEN_ISSUER = 'histae-api';
+export const ACCESS_TOKEN_AUDIENCE = 'histae-app';
+export const ACCESS_TOKEN_TYPE = 'access';
 
 @Injectable()
 export class TokenService {
@@ -10,7 +14,7 @@ export class TokenService {
 
   newRefreshToken(): NewRefreshToken {
     const jti = randomUUID();
-    const secret = randomUUID();
+    const secret = randomBytes(32).toString('base64url');
     const createdAt = new Date();
     return {
       id: randomUUID(),
@@ -35,6 +39,14 @@ export class TokenService {
   }
 
   accessToken(userId: string): Promise<string> {
-    return this.jwt.signAsync({ sub: userId }, { algorithm: 'HS256', expiresIn: Math.floor(this.config.jwt.accessTtlMs / 1_000) });
+    return this.jwt.signAsync(
+      { sub: userId, typ: ACCESS_TOKEN_TYPE },
+      {
+        algorithm: 'HS256',
+        audience: ACCESS_TOKEN_AUDIENCE,
+        issuer: ACCESS_TOKEN_ISSUER,
+        expiresIn: Math.floor(this.config.jwt.accessTtlMs / 1_000),
+      },
+    );
   }
 }

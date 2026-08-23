@@ -22,13 +22,34 @@ function context(request: { headers: { authorization: string }; auth?: unknown }
 }
 
 describe('JwtActiveGuard legal onboarding enforcement', () => {
+  it('rejects a signed JWT that is not explicitly typed as an access token', async () => {
+    const request = { headers: { authorization: 'Bearer wrong-token-type' } };
+    const database = { query: jest.fn() };
+    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: userId, typ: 'refresh' }) };
+    const guard = new JwtActiveGuard(
+      jwt as never,
+      database as never,
+      { legal } as never,
+      { getAllAndOverride: jest.fn() } as never,
+    );
+
+    await expect(guard.canActivate(context(request))).rejects.toEqual(expect.objectContaining({
+      status: 401,
+      code: 'invalid_or_expired_access_token',
+    }));
+    expect(jwt.verifyAsync).toHaveBeenCalledWith('wrong-token-type', expect.objectContaining({
+      algorithms: ['HS256'], audience: 'histae-app', issuer: 'histae-api',
+    }));
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
   it('blocks an active user whose legal onboarding is incomplete', async () => {
     const request = { headers: { authorization: 'Bearer access-token' } };
     const database = { query: jest.fn().mockResolvedValue({ rows: [{
       user_id: userId, role: 'user', is_banned: false, onboarding_complete: false,
     }] }) };
     const guard = new JwtActiveGuard(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId }) } as never,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId, typ: 'access' }) } as never,
       database as never,
       { legal } as never,
       { getAllAndOverride: jest.fn().mockReturnValue(false) } as never,
@@ -48,7 +69,7 @@ describe('JwtActiveGuard legal onboarding enforcement', () => {
       headers: { authorization: 'Bearer access-token' },
     };
     const guard = new JwtActiveGuard(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId }) } as never,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId, typ: 'access' }) } as never,
       { query: jest.fn().mockResolvedValue({ rows: [{
         user_id: userId, role: 'user', is_banned: false, onboarding_complete: true,
       }] }) } as never,
@@ -63,7 +84,7 @@ describe('JwtActiveGuard legal onboarding enforcement', () => {
   it('keeps consent management, logout and account deletion accessible during onboarding', async () => {
     const request = { headers: { authorization: 'Bearer access-token' } };
     const guard = new JwtActiveGuard(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId }) } as never,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: userId, typ: 'access' }) } as never,
       { query: jest.fn().mockResolvedValue({ rows: [{
         user_id: userId, role: 'user', is_banned: false, onboarding_complete: false,
       }] }) } as never,

@@ -8,6 +8,7 @@ import { DatabaseService } from '../database/database.service';
 import { ConfigService } from '../config/config.service';
 import { ALLOW_INCOMPLETE_ONBOARDING_KEY } from './onboarding.decorator';
 import type { AuthenticatedRequest, ActiveAccount } from './auth.types';
+import { ACCESS_TOKEN_AUDIENCE, ACCESS_TOKEN_ISSUER, ACCESS_TOKEN_TYPE } from './token.service';
 
 @Injectable()
 export class JwtActiveGuard implements CanActivate {
@@ -24,13 +25,17 @@ export class JwtActiveGuard implements CanActivate {
     if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
       throw apiError(401, 'authentication_required', 'A valid Bearer Authorization header is required.');
     }
-    let payload: { sub?: unknown };
+    let payload: { sub?: unknown; typ?: unknown };
     try {
-      payload = await this.jwt.verifyAsync<{ sub?: unknown }>(parts[1], { algorithms: ['HS256'] });
+      payload = await this.jwt.verifyAsync<{ sub?: unknown; typ?: unknown }>(parts[1], {
+        algorithms: ['HS256'],
+        audience: ACCESS_TOKEN_AUDIENCE,
+        issuer: ACCESS_TOKEN_ISSUER,
+      });
     } catch {
       throw apiError(401, 'invalid_or_expired_access_token', 'The access token is invalid or expired.');
     }
-    if (typeof payload.sub !== 'string' || !isUUID(payload.sub, 'all')) {
+    if (payload.typ !== ACCESS_TOKEN_TYPE || typeof payload.sub !== 'string' || !isUUID(payload.sub, 'all')) {
       throw apiError(401, 'invalid_or_expired_access_token', 'The access token is invalid or expired.');
     }
     const account = await this.activeAccount(payload.sub);
