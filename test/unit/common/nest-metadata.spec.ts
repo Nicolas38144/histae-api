@@ -51,11 +51,12 @@ import { StripeGateway } from '../../../src/billing/stripe.gateway';
 import { ObjectStorageService } from '../../../src/storage/object-storage.service';
 import { PhotosRepository } from '../../../src/photos/photos.repository';
 import { PhotosService } from '../../../src/photos/photos.service';
+import { PhotosMaintenanceService } from '../../../src/photos/photos-maintenance.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
-  PhotosRepository, PhotosService,
+  PhotosRepository, PhotosService, PhotosMaintenanceService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,

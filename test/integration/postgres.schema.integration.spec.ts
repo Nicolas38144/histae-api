@@ -51,18 +51,30 @@ describe('PostgreSQL schema contract', () => {
       'data_subject_request', 'data_access_log', 'user_block', 'device_token', 'notification',
       'account_tombstone', 'account_deletion_token', 'billing_customer',
       'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
+      'user_photo',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
 
-    const photoConstraint = await pool.query<{ definition: string }>(`
-      SELECT pg_get_constraintdef(oid) AS definition
+    const photoConstraints = await pool.query<{ name: string }>(`
+      SELECT conname AS name
       FROM pg_constraint
-      WHERE conrelid = 'user_profile'::regclass
-        AND conname = 'chk_user_profile_photo_object_key'
+      WHERE conrelid = 'user_photo'::regclass
     `);
-    expect(photoConstraint.rows[0]?.definition).toContain('profile-photos/');
-    expect(photoConstraint.rows[0]?.definition).toContain('photo[.]webp');
+    expect(photoConstraints.rows.map((row) => row.name)).toEqual(
+      expect.arrayContaining([
+        'chk_user_photo_object_key',
+        'chk_user_photo_mime_type',
+        'chk_user_photo_size',
+        'chk_user_photo_ready_metadata',
+      ]),
+    );
+    const legacyPhotoColumn = await pool.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user_profile'
+        AND column_name = 'photo'
+    `);
+    expect(legacyPhotoColumn.rows).toHaveLength(0);
   });
 
   it('applies the consolidated baseline to an isolated empty schema', async () => {
@@ -72,18 +84,31 @@ describe('PostgreSQL schema contract', () => {
       await client.query('BEGIN');
       await client.query(`CREATE SCHEMA ${schema}`);
       await client.query(`SET LOCAL search_path TO ${schema}, public`);
-      const baseline = await loadMigration(migrations[0]);
-      await client.query(baseline.sql);
+      for (const migration of migrations) {
+        const loaded = await loadMigration(migration);
+        await client.query(loaded.sql);
+      }
 
-      const contract = await client.query<{ account: boolean; invoices: boolean; plans: number }>(`
+      const contract = await client.query<{
+        account: boolean;
+        invoices: boolean;
+        photos: boolean;
+        plans: number;
+      }>(`
         SELECT
           to_regclass($1) IS NOT NULL AS account,
           to_regclass($2) IS NOT NULL AS invoices,
+          to_regclass($3) IS NOT NULL AS photos,
           (SELECT count(*)::integer FROM subscription_plan) AS plans
-      `, [`${schema}.user_account`, `${schema}.billing_invoice`]);
+      `, [
+        `${schema}.user_account`,
+        `${schema}.billing_invoice`,
+        `${schema}.user_photo`,
+      ]);
       expect(contract.rows[0]).toEqual({
         account: true,
         invoices: true,
+        photos: true,
         plans: 2,
       });
     } finally {
@@ -131,6 +156,7 @@ describe('PostgreSQL schema contract', () => {
       'idx_user_subscription_provider_id', 'idx_billing_checkout_one_live_per_user',
       'idx_billing_checkout_expiry', 'idx_stripe_webhook_processed', 'idx_billing_invoice_user_created',
       'idx_billing_customer_active_stripe_id',
+      'uq_user_photo_ready', 'uq_user_photo_in_progress', 'idx_user_photo_cleanup',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -818,13 +844,19 @@ describe('PostgreSQL schema contract', () => {
     const adminId = randomUUID();
     const [firstUserId, secondUserId] = [userId, otherUserId].sort();
     const matchId = randomUUID();
+    const photoId = randomUUID();
     await insertAccounts(pool, userId, otherUserId);
     await pool.query(`
       INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
       VALUES ($1, 'admin', $2, $3)
     `, [adminId, `test-${adminId}`, Buffer.alloc(0)]);
-    await pool.query(`INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo)
-      VALUES ($1, 'Erase me', '1990-01-01', 'other', 'private bio', $2)`, [userId, `profile-photos/${userId}/photo.webp`]);
+    await pool.query(`INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
+      VALUES ($1, 'Erase me', '1990-01-01', 'other', 'private bio')`, [userId]);
+    await pool.query(`
+      INSERT INTO user_photo
+        (id, user_id, object_key, status, mime_type, size_bytes, width, height, sha256)
+      VALUES ($1, $2, $3, 'ready', 'image/webp', 100, 10, 10, $4)
+    `, [photoId, userId, `profile-photos/${userId}/${photoId}.webp`, Buffer.alloc(32, 1)]);
     await pool.query(`INSERT INTO user_preferences (user_id, min_age, max_age, max_distance_km, looking_for)
       VALUES ($1, 18, 99, 50, 'both')`, [userId]);
     await pool.query(`INSERT INTO user_presence (user_id, latitude, longitude) VALUES ($1, 48.85, 2.35)`, [userId]);
@@ -848,11 +880,12 @@ describe('PostgreSQL schema contract', () => {
         pool.query<{ phone_number_hash: string; phone_number_encrypted: Buffer; deleted_at: Date | null; anonymized_at: Date | null }>(
           'SELECT phone_number_hash, phone_number_encrypted, deleted_at, anonymized_at FROM user_account WHERE user_id = $1', [userId],
         ),
-        pool.query<{ profile: string | null; preferences: string | null; presence: string | null; blocks: number; state: number }>(`
+        pool.query<{ profile: string | null; preferences: string | null; presence: string | null; blocks: number; state: number; photos: number }>(`
           SELECT to_jsonb(profile)::text AS profile, to_jsonb(preferences)::text AS preferences,
             to_jsonb(presence)::text AS presence,
             (SELECT count(*)::integer FROM user_block WHERE blocker_id = $1 OR blocked_id = $1) AS blocks,
-            (SELECT count(*)::integer FROM match_state WHERE user_id = $1) AS state
+            (SELECT count(*)::integer FROM match_state WHERE user_id = $1) AS state,
+            (SELECT count(*)::integer FROM user_photo WHERE user_id = $1) AS photos
           FROM (SELECT 1) AS singleton
           LEFT JOIN user_profile profile ON profile.user_id = $1
           LEFT JOIN user_preferences preferences ON preferences.user_id = $1
@@ -871,7 +904,14 @@ describe('PostgreSQL schema contract', () => {
       expect(account.rows[0]?.phone_number_encrypted).toHaveLength(0);
       expect(account.rows[0]?.deleted_at).toBeInstanceOf(Date);
       expect(account.rows[0]?.anonymized_at).toBeInstanceOf(Date);
-      expect(removed.rows[0]).toEqual({ profile: null, preferences: null, presence: null, blocks: 0, state: 0 });
+      expect(removed.rows[0]).toEqual({
+        profile: null,
+        preferences: null,
+        presence: null,
+        blocks: 0,
+        state: 0,
+        photos: 0,
+      });
       expect(consent.rows[0]?.withdrawn_at).toBeInstanceOf(Date);
       expect(consent.rows[0]?.ip_address).toBeNull();
       expect(consent.rows[0]?.user_agent).toBeNull();
@@ -925,12 +965,23 @@ describe('PostgreSQL schema contract', () => {
     const otherId = randomUUID();
     const [firstUserId, secondUserId] = [viewerId, otherId].sort();
     const matchId = randomUUID();
+    const viewerPhotoId = randomUUID();
+    const otherPhotoId = randomUUID();
     await insertAccounts(pool, viewerId, otherId);
     await pool.query(`
-      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo) VALUES
-        ($1::uuid, 'Viewer', '1990-01-01', 'male', 'viewer bio', 'profile-photos/' || $1::uuid::text || '/photo.webp'),
-        ($2::uuid, 'Other', '1992-01-01', 'female', 'other bio', 'profile-photos/' || $2::uuid::text || '/photo.webp')
+      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio) VALUES
+        ($1::uuid, 'Viewer', '1990-01-01', 'male', 'viewer bio'),
+        ($2::uuid, 'Other', '1992-01-01', 'female', 'other bio')
     `, [viewerId, otherId]);
+    await pool.query(`
+      INSERT INTO user_photo
+        (id, user_id, object_key, status, mime_type, size_bytes, width, height, sha256)
+      VALUES
+        ($1, $3, 'profile-photos/' || $3::uuid::text || '/' || $1::uuid::text || '.webp',
+          'ready', 'image/webp', 100, 10, 10, $5),
+        ($2, $4, 'profile-photos/' || $4::uuid::text || '/' || $2::uuid::text || '.webp',
+          'ready', 'image/webp', 100, 10, 10, $5)
+    `, [viewerPhotoId, otherPhotoId, viewerId, otherId, Buffer.alloc(32, 1)]);
     const repository = new MatchesRepository(databaseFor(pool) as never);
     const match: MatchRow = {
       id: matchId,
@@ -961,7 +1012,7 @@ describe('PostgreSQL schema contract', () => {
       await pool.query('UPDATE match_state SET revealed = true WHERE match_id = $1', [matchId]);
       const revealed = await repository.listDetailedForUser(viewerId, 20, 0);
       expect(revealed[0]).toEqual(expect.objectContaining({
-        other_photo: `profile-photos/${otherId}/photo.webp`,
+        other_photo: `profile-photos/${otherId}/${otherPhotoId}.webp`,
         my_revealed: true,
         photos_revealed: true,
       }));

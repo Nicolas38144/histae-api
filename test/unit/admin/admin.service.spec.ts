@@ -8,7 +8,7 @@ describe('AdminService', () => {
     const repository = { listUsers: jest.fn().mockResolvedValue([{
       id: '11111111-1111-4111-8111-111111111111', role: 'user', is_banned: false, banned_at: null,
       created_at: new Date('2030-01-01T00:00:00.000Z'), firstname: 'Alice', birthdate: '1990-01-02',
-      sex: 'female', photo: 'profile-photos/11111111-1111-4111-8111-111111111111/photo.webp', plan: 'free', onboarding_complete: true, reports_received: 1,
+      sex: 'female', photo: 'profile-photos/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222.webp', plan: 'free', onboarding_complete: true, reports_received: 1,
       matches_count: 2, cursor_at: '2030-01-01T00:00:00.000Z',
     }]) };
     const service = new AdminService(repository as never, config as never, photos as never);

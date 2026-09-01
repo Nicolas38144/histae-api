@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import {
@@ -26,10 +27,15 @@ describe('PhotoProcessorService', () => {
       mimetype,
       body: await readFile(join(FIXTURES, filename)),
     });
-    const metadata = await sharp(result).metadata();
+    const metadata = await sharp(result.body).metadata();
 
-    expect(result.length).toBeLessThanOrEqual(MAX_STORED_PHOTO_BYTES);
+    expect(result.sizeBytes).toBe(result.body.length);
+    expect(result.sizeBytes).toBeLessThanOrEqual(MAX_STORED_PHOTO_BYTES);
+    expect(result.mimeType).toBe('image/webp');
+    expect(result.sha256).toEqual(createHash('sha256').update(result.body).digest());
     expect(metadata).toEqual(expect.objectContaining({ format: 'webp' }));
+    expect(result.width).toBe(metadata.width);
+    expect(result.height).toBe(metadata.height);
     expect(metadata.width).toBeLessThanOrEqual(2_048);
     expect(metadata.height).toBeLessThanOrEqual(2_048);
   }, 30_000);
