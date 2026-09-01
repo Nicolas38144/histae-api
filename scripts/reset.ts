@@ -40,6 +40,9 @@ async function reset(): Promise<void> {
       await client.query('DROP TABLE IF EXISTS schema_migrations CASCADE');
       await client.query(schemaSql);
       await client.query(insertSql);
+      for (let index = 1; index < migrationFiles.length; index += 1) {
+        await client.query(migrationFiles[index].sql);
+      }
       await client.query('CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
       for (let index = 0; index < migrations.length; index += 1) {
         await client.query('INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)', [

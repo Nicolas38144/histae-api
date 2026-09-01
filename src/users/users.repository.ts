@@ -8,9 +8,12 @@ export class UsersRepository {
 
   async findProfile(userId: string): Promise<ProfileRow | undefined> {
     const result = await this.database.query<ProfileRow>(`
-      SELECT profile.user_id, profile.firstname, profile.birthdate, profile.sex, profile.bio, profile.photo
+      SELECT profile.user_id, profile.firstname, profile.birthdate, profile.sex, profile.bio,
+        photo.object_key AS photo
       FROM user_profile AS profile
       JOIN user_account AS account ON account.user_id = profile.user_id
+      LEFT JOIN user_photo AS photo
+        ON photo.user_id = profile.user_id AND photo.status = 'ready'
       WHERE profile.user_id = $1 AND account.deleted_at IS NULL
     `, [userId]);
     return result.rows[0];

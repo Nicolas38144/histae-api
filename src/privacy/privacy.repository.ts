@@ -83,7 +83,14 @@ export class PrivacyRepository {
       `, [userId])).rows[0];
       // A single PostgreSQL client executes one query at a time. Keeping these
       // reads sequential also preserves their shared transactional snapshot.
-      const profile = await client.query('SELECT firstname, birthdate, sex, bio, photo FROM user_profile WHERE user_id = $1', [userId]);
+      const profile = await client.query(`
+        SELECT profile.firstname, profile.birthdate, profile.sex, profile.bio,
+          photo.object_key AS photo
+        FROM user_profile AS profile
+        LEFT JOIN user_photo AS photo
+          ON photo.user_id = profile.user_id AND photo.status = 'ready'
+        WHERE profile.user_id = $1
+      `, [userId]);
       const preferences = await client.query('SELECT min_age, max_age, max_distance_km, looking_for FROM user_preferences WHERE user_id = $1', [userId]);
       const traits = await client.query(`SELECT trait.id, trait.name FROM trait JOIN user_trait ON user_trait.trait_id = trait.id WHERE user_trait.user_id = $1 ORDER BY trait.name`, [userId]);
       const consents = await client.query(`SELECT consent_type, granted, document_version, granted_at, withdrawn_at FROM user_consent WHERE user_id = $1 ORDER BY event_sequence`, [userId]);

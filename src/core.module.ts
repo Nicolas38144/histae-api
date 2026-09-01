@@ -9,6 +9,7 @@ import { ObjectStorageService } from './storage/object-storage.service';
 import { PhotoProcessorService } from './photos/photo-processor.service';
 import { PhotosRepository } from './photos/photos.repository';
 import { PhotosService } from './photos/photos.service';
+import { PhotosMaintenanceService } from './photos/photos-maintenance.service';
 
 @Global()
 @Module({
@@ -23,10 +24,12 @@ import { PhotosService } from './photos/photos.service';
     PhotoProcessorService,
     PhotosRepository,
     PhotosService,
+    PhotosMaintenanceService,
   ],
   exports: [
     ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService,
     ObjectStorageService, PhotoProcessorService, PhotosRepository, PhotosService,
+    PhotosMaintenanceService,
   ],
 })
 export class CoreModule {}

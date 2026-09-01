@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import sharp, { type Sharp } from 'sharp';
@@ -42,10 +43,18 @@ export class PhotoTooLargeError extends Error {
 }
 
 export type UploadedPhoto = { filename: string; mimetype: string; body: Buffer };
+export type ProcessedPhoto = {
+  body: Buffer;
+  mimeType: 'image/webp';
+  sizeBytes: number;
+  width: number;
+  height: number;
+  sha256: Buffer;
+};
 
 @Injectable()
 export class PhotoProcessorService {
-  async toWebp(upload: UploadedPhoto): Promise<Buffer> {
+  async toWebp(upload: UploadedPhoto): Promise<ProcessedPhoto> {
     if (!upload.body.length) throw new InvalidPhotoError();
     if (upload.body.length > MAX_PHOTO_UPLOAD_BYTES) throw new PhotoTooLargeError();
 
@@ -59,9 +68,17 @@ export class PhotoProcessorService {
     if (detectedFormat !== expectedFormat) throw new InvalidPhotoError('The photo contents do not match its extension.');
 
     try {
-      return expectedFormat === 'heif'
+      const encoded = expectedFormat === 'heif'
         ? await convertHeif(upload.body)
         : await convertSharp(upload.body, expectedFormat);
+      return {
+        body: encoded.data,
+        mimeType: 'image/webp',
+        sizeBytes: encoded.data.length,
+        width: encoded.width,
+        height: encoded.height,
+        sha256: createHash('sha256').update(encoded.data).digest(),
+      };
     } catch (error) {
       if (error instanceof InvalidPhotoError || error instanceof PhotoTooLargeError) throw error;
       throw new InvalidPhotoError('The photo could not be decoded.');
@@ -69,7 +86,7 @@ export class PhotoProcessorService {
   }
 }
 
-async function convertSharp(input: Buffer, expectedFormat: PhotoFormat): Promise<Buffer> {
+async function convertSharp(input: Buffer, expectedFormat: PhotoFormat): Promise<EncodedWebp> {
   const image = sharp(input, { failOn: 'error', limitInputPixels: MAX_PHOTO_PIXELS, animated: false, sequentialRead: true });
   const metadata = await image.metadata();
   if (metadata.format !== expectedFormat || !metadata.width || !metadata.height
@@ -79,7 +96,7 @@ async function convertSharp(input: Buffer, expectedFormat: PhotoFormat): Promise
   return encodeWebp(image.rotate());
 }
 
-async function convertHeif(input: Buffer): Promise<Buffer> {
+async function convertHeif(input: Buffer): Promise<EncodedWebp> {
   const metadata = await sharp(input, { failOn: 'error', limitInputPixels: false, animated: false }).metadata();
   if (metadata.format !== 'heif' || !metadata.width || !metadata.height || (metadata.pages ?? 1) !== 1) {
     throw new InvalidPhotoError();
@@ -144,7 +161,9 @@ const HEIF_DECODER_WORKER = `
     .catch(() => parentPort.postMessage({ error: true }));
 `;
 
-async function encodeWebp(image: Sharp): Promise<Buffer> {
+type EncodedWebp = { data: Buffer; width: number; height: number };
+
+async function encodeWebp(image: Sharp): Promise<EncodedWebp> {
   const attempts = [
     { edge: MAX_PHOTO_EDGE, quality: 82 },
     { edge: 1_800, quality: 74 },
@@ -159,7 +178,9 @@ async function encodeWebp(image: Sharp): Promise<Buffer> {
       .webp({ quality: attempt.quality, effort: 4, smartSubsample: true })
       .toBuffer({ resolveWithObject: true });
     if (result.info.format !== 'webp') throw new InvalidPhotoError();
-    if (result.data.length <= MAX_STORED_PHOTO_BYTES) return result.data;
+    if (result.data.length <= MAX_STORED_PHOTO_BYTES) {
+      return { data: result.data, width: result.info.width, height: result.info.height };
+    }
   }
   throw new PhotoTooLargeError();
 }

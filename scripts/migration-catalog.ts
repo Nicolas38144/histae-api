@@ -25,6 +25,9 @@ export const LEGACY_MIGRATION_VERSIONS = [
 export const migrations = [{
   version: CONSOLIDATED_BASELINE_VERSION,
   filenames: ['schema_postgres.sql', 'insert_postgres.sql'],
+}, {
+  version: '002_user_photo_lifecycle',
+  filenames: ['002_user_photo_lifecycle.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

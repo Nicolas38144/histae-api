@@ -91,7 +91,7 @@ export class MatchesRepository {
         other_profile.sex AS other_sex,
         other_profile.bio AS other_bio,
         CASE WHEN COALESCE(my_state.revealed, false) AND COALESCE(other_state.revealed, false)
-          THEN other_profile.photo ELSE NULL END AS other_photo,
+          THEN other_photo.object_key ELSE NULL END AS other_photo,
         COALESCE(other_traits.names, ARRAY[]::text[]) AS other_traits,
         COALESCE(my_state.revealed, false) AS my_revealed,
         COALESCE(my_state.revealed, false) AND COALESCE(other_state.revealed, false) AS photos_revealed,
@@ -107,6 +107,8 @@ export class MatchesRepository {
       FROM match_init AS match_record
       JOIN user_profile AS other_profile
         ON other_profile.user_id = CASE WHEN match_record.user1_id = $1 THEN match_record.user2_id ELSE match_record.user1_id END
+      LEFT JOIN user_photo AS other_photo
+        ON other_photo.user_id = other_profile.user_id AND other_photo.status = 'ready'
       LEFT JOIN match_state AS my_state
         ON my_state.match_id = match_record.id AND my_state.user_id = $1
       LEFT JOIN match_state AS other_state

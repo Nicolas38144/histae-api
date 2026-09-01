@@ -63,7 +63,8 @@ export class AdminRepository {
     return this.database.transaction(async (client) => {
       const account = (await client.query<AdminUserRow & { banned_reason: string | null }>(`
         SELECT account.user_id AS id, account.role, account.is_banned, account.banned_at, account.banned_reason,
-          account.created_at, profile.firstname, profile.birthdate, profile.sex, profile.photo,
+          account.created_at, profile.firstname, profile.birthdate, profile.sex,
+          photo.object_key AS photo,
           COALESCE(subscription.plan, 'free') AS plan,
           (
             account.role <> 'user' OR (
@@ -80,6 +81,8 @@ export class AdminRepository {
           to_char(account.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
         FROM user_account AS account
         LEFT JOIN user_profile AS profile ON profile.user_id = account.user_id
+        LEFT JOIN user_photo AS photo
+          ON photo.user_id = profile.user_id AND photo.status = 'ready'
         LEFT JOIN user_subscription AS subscription ON subscription.user_id = account.user_id
         WHERE account.user_id = $1 AND account.deleted_at IS NULL
       `, [targetId, termsVersion, privacyVersion])).rows[0];

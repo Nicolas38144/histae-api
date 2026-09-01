@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { applicationConfig } from '../src/config/config.service';
 import { MatchMaintenanceService } from '../src/matches/match-maintenance.service';
 import { PrivacyMaintenanceService } from '../src/privacy/privacy-maintenance.service';
+import { PhotosMaintenanceService } from '../src/photos/photos-maintenance.service';
 
 async function run(): Promise<void> {
   const config = applicationConfig();
@@ -13,11 +14,16 @@ async function run(): Promise<void> {
   }
   const context = await NestFactory.createApplicationContext(AppModule, { logger: ['error', 'warn', 'log'] });
   try {
-    const [matches, privacy] = await Promise.all([
+    const [matches, privacy, photos] = await Promise.all([
       context.get(MatchMaintenanceService).runOnce(),
       context.get(PrivacyMaintenanceService).runOnce(),
+      context.get(PhotosMaintenanceService).runOnce(),
     ]);
-    new Logger('Maintenance').log(JSON.stringify({ matches: matches ?? null, privacy: privacy ?? null }));
+    new Logger('Maintenance').log(JSON.stringify({
+      matches: matches ?? null,
+      privacy: privacy ?? null,
+      photos,
+    }));
   } finally {
     await context.close();
   }
