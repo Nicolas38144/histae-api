@@ -84,6 +84,11 @@ Les photos de profil sont reçues via `multipart/form-data`. Seules les extensio
 retire les métadonnées, puis renvoie une URL signée valable cinq minutes.
 L’upload est limité par défaut à dix tentatives par heure et par utilisateur.
 
+Chaque WebP reçoit une clé versionnée `profile-photos/<user_uuid>/<photo_uuid>.webp`. PostgreSQL conserve dans
+`user_photo` son état (`pending`, `processing`, `ready` ou `deleting`), son type, sa taille, ses dimensions et son SHA-256,
+mais jamais d’URL. Une activation atomique rend au plus une photo visible par profil. Si un appel S3 devient
+incertain, la maintenance supprime ensuite l’objet orphelin ou reprend une suppression échouée.
+
 ## Authentification OTP
 
 L’authentification combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte
@@ -99,13 +104,13 @@ numéros acceptés utilisent actuellement le format français E.164, par exemple
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL ou les futures migrations incrémentales. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont `002_user_photo_lifecycle`. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
 | `pnpm run db:reset-scylla` | Vide les décisions de découverte du ScyllaDB local. |
 | `pnpm run seed:swipes` | Génère les swipes de développement via l’API. |
 | `pnpm run fixtures:photos` | Régénère les fixtures JPG, JPEG, PNG, WebP et la copie HEIF de test. |
-| `pnpm run maintenance:run` | Exécute une passe de maintenance. |
+| `pnpm run maintenance:run` | Exécute une passe de maintenance, y compris la réconciliation des objets photo. |
 
 Les commandes de réinitialisation refusent les environnements et cibles non locaux.
 

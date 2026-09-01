@@ -78,8 +78,8 @@ Toutes ces routes sont authentifiées.
 | --- | --- | --- | --- |
 | GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `photo` est absente ou contient une URL privée signée valable cinq minutes. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
 | PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max. La photo n’est pas acceptée par cette route. |
-| PUT | `/users/me/photo` | `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
-| DELETE | `/users/me/photo` | — | `204`, supprime l’objet privé puis efface sa clé du profil. |
+| PUT | `/users/me/photo` | `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées sous une clé versionnée. Retourne `409 photo_update_in_progress` si une conversion est déjà active, ou `409 photo_update_conflict` si l’activation n’est plus possible. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
+| DELETE | `/users/me/photo` | — | `204`. La photo `ready` passe d’abord à `deleting`, devient immédiatement invisible, puis l’objet privé et sa ligne technique sont supprimés. Un échec S3 retourne `503 photo_storage_unavailable` et reste traçable pour la maintenance. |
 | GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
@@ -184,4 +184,5 @@ créé que par deux likes réciproques.
 | GET | `/health/ready` | `200 { "status": "ready" }` si PostgreSQL, le bucket objet, ScyllaDB activée et Redis requis répondent ; sinon `503`. |
 
 Les erreurs photo spécifiques sont `400 invalid_photo`, `413 photo_too_large`, `404 profile_not_found`,
-`429 photo_rate_limit_exceeded` et `503 photo_storage_unavailable`.
+`409 photo_update_in_progress`, `409 photo_update_conflict`, `429 photo_rate_limit_exceeded` et
+`503 photo_storage_unavailable`.

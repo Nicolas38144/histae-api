@@ -22,8 +22,9 @@ Le socle fonctionnel principal est implémenté :
 - health checks, migrations contrôlées et tests réels des stockages.
 
 Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
-consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. Le check-up complet est
-dans `docs/security-checkup.md`.
+consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. La migration
+`002_user_photo_lifecycle` a ensuite remplacé la clé provisoire du profil par un registre d’objets versionnés,
+réconciliable après une panne PostgreSQL/S3. Le check-up complet est dans `docs/security-checkup.md`.
 
 ## 2. Architecture
 
@@ -149,11 +150,16 @@ Le flux SSE annonce les créations/mises à jour de match, invalidations, messag
 `.png`, `.heic`, `.heif` et `.webp`. L’entrée comme le WebP produit sont limitées à **500 000 octets**.
 
 Le processeur vérifie extension, MIME, signature binaire, pixels et dimensions, borne le décodage HEIC, applique
-l’orientation, réduit à 2 048 px maximum et retire les métadonnées. Seul le WebP final est conservé sous :
+l’orientation, réduit à 2 048 px maximum et retire les métadonnées. Chaque WebP final reçoit une clé immuable :
 
 ```text
-profile-photos/<user_uuid>/photo.webp
+profile-photos/<user_uuid>/<photo_uuid>.webp
 ```
+
+La table `user_photo` conserve l’état `pending | processing | ready | deleting`, la clé privée, le MIME, la taille,
+les dimensions et le SHA-256. Les contraintes garantissent au plus une photo `ready` et une conversion en cours
+par utilisateur. L’upload active la nouvelle version dans une transaction courte, puis supprime l’ancienne. Une
+écriture S3 incertaine ou une suppression échouée reste enregistrée et sera reprise par la maintenance.
 
 PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
 générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
@@ -180,9 +186,12 @@ Les quinze anciens fichiers incrémentaux ont été fusionnés dans la baseline 
 Le moteur compose le schéma et les inserts canoniques, calcule un checksum SHA-256, acquiert un verrou consultatif
 et applique la baseline dans une transaction.
 
+La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
+colonne provisoire `user_profile.photo`. Une base neuve applique donc la baseline puis cette migration.
+
 La compatibilité est sans perte :
 
-- une base neuve applique cette unique baseline ;
+- une base neuve applique la baseline puis toutes les migrations incrémentales ;
 - une base possédant les quinze anciennes versions est vérifiée structurellement puis reçoit la marque de baseline,
   sans rejouer le schéma et sans supprimer son historique ;
 - une historique ancienne partielle est refusée avec une erreur explicite ;
@@ -202,7 +211,8 @@ activé et le bucket objet. La fermeture Nest libère les pools/clients.
 
 La maintenance peut fonctionner dans l’API, dans un worker séparé ou être désactivée. Elle expire notamment les
 présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
-signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`.
+signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`. Elle réconcilie
+aussi les conversions photo abandonnées et les objets dont la suppression S3 doit être retentée.
 
 En local, les Compose sont séparés pour ScyllaDB, Redis et SeaweedFS. Le Compose objet lie l’API S3 à
 `127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de

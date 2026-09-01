@@ -3,6 +3,10 @@
 Ce dossier couvre chacune des extensions acceptées par l’API : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif` et
 `.webp`. Toutes les fixtures restent sous la limite d’entrée de 500 000 octets.
 
+Les tests convertissent chaque fixture en WebP, puis vérifient la limite de sortie, les dimensions persistées et
+le SHA-256 enregistré dans `user_photo`. Ces fichiers couvrent l’entrée du processeur, pas des objets destinés au
+bucket de développement.
+
 `sample.jpg`, `sample.jpeg`, `sample.png` et `sample.webp` sont générés localement depuis un SVG synthétique par
 `pnpm run fixtures:photos`. `sample.heif` est une copie du conteneur HEIF/HEVC de `sample.heic`, avec l’extension
 alternative que l’API doit aussi reconnaître.

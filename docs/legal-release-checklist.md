@@ -9,7 +9,7 @@ Avant chaque nouvelle version juridique :
 - valider que les consentements sensibles et de localisation sont facultatifs, séparés, non précochés, compréhensibles et retirables aussi facilement qu’ils sont donnés ;
 - vérifier les procédures de réponse sous un mois, de contrôle d’identité proportionné, de protection des tiers dans l’export et de refus motivé ;
 - valider la matrice [`retention-policy.md`](retention-policy.md), y compris les sauvegardes et sous-traitants ;
-- documenter l’hébergeur objet de production, sa région, les transferts éventuels, le chiffrement, les habilitations, les sauvegardes et la purge des photos remplacées ou supprimées ;
+- documenter l’hébergeur objet de production, sa région, les transferts éventuels, le chiffrement, les habilitations, les sauvegardes, la purge des photos remplacées ou supprimées et le suivi des reprises `user_photo` en échec ;
 - intégrer `sharp`/libvips, `heic-decode`/libheif-js et le SDK AWS v3 à l’inventaire des composants et vérifier leurs licences et mises à jour de sécurité avant livraison ;
 - enregistrer l’approbation dans un système durable (ticket signé, procès-verbal ou registre DPO) et placer son identifiant dans `LEGAL_REVIEW_REFERENCE` ;
 - incrémenter toute version de texte modifiée afin que l’application mobile la représente à l’utilisateur.

@@ -21,7 +21,7 @@ directement corrigeables trouvés pendant la revue ont été traités.
 | Entrées | Satisfaisant | DTO stricts, whitelist avec rejet des champs inconnus, limites métier, UUID et dates validés. |
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
 | Limites de débit | Satisfaisant | Redis obligatoire en production, clés HMAC, échec fermé, `Retry-After`, limite globale et limites sensibles dédiées. |
-| Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, URL courte signée seulement au besoin. |
+| Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, clés versionnées, cycle de vie PostgreSQL réconciliable et URL courte signée seulement au besoin. |
 | Données sensibles | Satisfaisant avec dépendances infra | Téléphone HMAC + AES-256-GCM, logs HTTP sans query string, export/effacement inter-bases et politique de rétention. |
 | Dépendances | Satisfaisant au contrôle | Audits pnpm complet et production : aucune vulnérabilité connue le 1er septembre 2026. |
 
@@ -40,6 +40,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - Le parseur des refresh tokens impose désormais un UUID v4 canonique et exactement 43 caractères base64url.
 - Les appels S3 réseau sont annulés après 10 secondes. Le fallback mémoire du rate limiter purge périodiquement
   ses entrées expirées.
+- La table `user_photo` ne rend visible que l’état `ready`, impose la cohérence des métadonnées WebP et conserve
+  les états `processing`/`deleting` après une issue S3 incertaine. La maintenance effectue des suppressions
+  idempotentes et évite ainsi l’écrasement ou l’oubli silencieux d’un objet lors d’un remplacement.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -73,8 +76,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 37 suites, 216 cas réussis ;
+- tests unitaires : 38 suites, 225 cas réussis ;
 - tests e2e Fastify : 8 suites, 53 cas réussis ;
 - intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 40 cas réussis ;
-- migration consolidée : historique legacy complet reconnu sur `histae-dev`, puis baseline appliquée avec succès dans un schéma temporaire vide et intégralement annulée.
+- migrations PostgreSQL : `002_user_photo_lifecycle` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migration incrémentale appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
 - état Docker local : SeaweedFS, Redis et ScyllaDB déclarés `healthy`; configuration Compose objet valide.
