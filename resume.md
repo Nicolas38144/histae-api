@@ -1,1097 +1,272 @@
-# Histae API — résumé technique et fonctionnel détaillé
+# Histae API — résumé du projet
 
-Mise à jour : 23 août 2026.
+Mise à jour : 1er septembre 2026.
 
-## 1. Vision du projet
+Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
+de test : consulter respectivement `routes.md` et `test.md` pour ces inventaires détaillés.
 
-Histae API est le backend TypeScript d’une application mobile de rencontres. Il centralise les contrats HTTP et les règles métier tout en mettant l’accent sur l’architecture, la sécurité, la traçabilité et la conformité RGPD.
+## 1. État actuel
 
-La version actuelle fournit :
+Histae API est un backend NestJS 11/Fastify 5 en TypeScript strict pour l’application mobile de rencontres Histae.
+Le socle fonctionnel principal est implémenté :
 
-- l’authentification et les sessions ;
-- l’onboarding juridique de l’utilisateur ;
-- le profil, les préférences, les traits et la localisation ;
-- les plans d’abonnement et le quota de continuation ;
-- la souscription Premium Stripe, Checkout hébergé, portail client et webhooks ;
-- le cycle de vie des matchs ;
-- la messagerie ;
-- le contrat mobile enrichi, le temps réel SSE et les notifications push ;
-- les signalements et actions de modération ;
-- les blocages entre utilisateurs ;
-- l’export des données et les demandes d’exercice des droits ;
-- l’effacement et l’anonymisation ;
-- les politiques de rétention ;
-- les migrations, la maintenance, la documentation OpenAPI et les sondes d’exploitation.
-- le feed de découverte, les décisions de swipe et la création de matchs par likes réciproques avec ScyllaDB.
+- authentification par OTP SMS et rotation des sessions ;
+- onboarding, profil, préférences, traits et consentements ;
+- découverte distribuée, swipes et création de match par like réciproque ;
+- cycle de vie des matchs, révélation mutuelle, continuation et messagerie ;
+- blocage, signalement, modération et audit des accès administratifs ;
+- appareils, push sans contenu privé et événements SSE ;
+- abonnement Premium et projection Stripe ;
+- demandes RGPD, export, effacement et maintenance de rétention ;
+- photos privées normalisées en WebP dans un stockage objet compatible S3 ;
+- health checks, migrations contrôlées et tests réels des stockages.
 
-Un ensemble fonctionnel reste volontairement incomplet :
+Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
+consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. Le check-up complet est
+dans `docs/security-checkup.md`.
 
-1. le stockage et l’envoi réels des photos : le profil accepte encore une URL HTTPS externe, conformément à l’exclusion demandée pour cette livraison.
+## 2. Architecture
 
-## 2. État global
+### Stack
 
-Les sept refactors prioritaires précédemment identifiés ont été traités :
+- Node.js 22+, pnpm 11.22.0, TypeScript strict ;
+- NestJS 11 sur Fastify 5 ;
+- PostgreSQL via `pg` ;
+- ScyllaDB via `cassandra-driver` ;
+- Redis pour le rate limiting et le relais Pub/Sub SSE ;
+- SDK AWS v3 pour un stockage objet S3-compatible ;
+- Sharp et `heic-decode` pour les photos ;
+- Sweego pour les OTP, FCM pour le push, Stripe pour la facturation ;
+- Jest pour les tests unitaires, e2e et d’intégration.
 
-1. transitions de match et messagerie rendues atomiques ;
-2. types métier fermés et validation stricte de la date de naissance ;
-3. consentements, demandes RGPD, blocages, export et effacement ;
-4. migrations, pool PostgreSQL, maintenance et observabilité fiabilisés ;
-5. pagination par curseur et réponses OpenAPI explicites ;
-6. ESLint, typecheck et tests renforcés ;
-7. documentation et politique de rétention formalisées.
+### Responsabilité des stockages
 
-Le contrat nécessaire à l’application Flutter utilisateur couvre désormais les priorités P0 et P1 demandées, à l’exception volontaire du véritable système de photo : bootstrap de session, traits courants, matchs enrichis, dernier message et non-lus, idempotence des messages, lecture groupée, statut de découverte, appareils, push FCM optionnel, flux SSE multi-instance et suppression de compte protégée par un jeton dédié à usage unique.
+PostgreSQL est l’autorité transactionnelle pour les comptes, profils, consentements, préférences, traits,
+abonnements, matchs, messages, signalements, appareils, notifications, audit et workflows RGPD.
 
-Le typecheck strict, les tests isolés et une suite de dix scénarios contre le Scylla local couvrent la nouvelle
-découverte. Cette suite valide les deux vues, les LWT, les likes simultanés, le feed, la réparation du miroir,
-l’effacement croisé, la confidentialité de l’export, un TTL court par écriture et le mapping métier `503`.
-PostgreSQL utilise uniquement `histae-dev`; Scylla utilise `histae_discovery` avec uniquement des UUID temporaires,
-un nettoyage ciblé et sans `DROP`, `TRUNCATE` ni `ALTER TABLE`.
+ScyllaDB ne stocke que les décisions de découverte, dans deux tables orientées requêtes : actions sortantes et
+décisions reçues. Les profils ne sont jamais dupliqués dans Scylla. Un TTL limite naturellement la rétention.
 
-## 3. Stack technique
+Redis porte les compteurs de débit partagés et le bus d’événements temps réel inter-instances. En production, son
+indisponibilité fait échouer fermement la protection avec `503`, au lieu de laisser passer les requêtes.
 
-| Élément | Choix actuel |
-| --- | --- |
-| Langage | TypeScript strict |
-| Framework | NestJS 11 |
-| Serveur HTTP | Fastify 5 via `@nestjs/platform-fastify` |
-| Base principale | PostgreSQL |
-| Base de décisions de découverte | ScyllaDB 2026.2, via `cassandra-driver` 4.9 |
-| Rate limiting distribué | Redis 7.4 local et production ; mémoire uniquement en repli explicite |
-| Temps réel mobile | Server-Sent Events, relayés entre instances par Redis Pub/Sub |
-| Notifications push | Firebase Cloud Messaging HTTP v1, fournisseur désactivable |
-| Paiement | Stripe Billing, Checkout hébergé, Customer Portal et webhooks signés |
-| Authentification | JWT HS256 + refresh tokens rotatifs |
-| Validation | `class-validator` et `class-transformer` |
-| Documentation | `@nestjs/swagger`, Swagger UI et document OpenAPI JSON |
-| Tests | Jest 30, `ts-jest`, Fastify injection et PostgreSQL réel |
-| Qualité | ESLint 10, `typescript-eslint`, `tsc --noEmit` |
-| Package manager | pnpm avec lockfile |
+Le stockage objet ne contient que les photos privées. SeaweedFS `weed mini` est le choix local pour une machine,
+pas une dépendance applicative : changer de fournisseur revient à modifier les six variables `OBJECT_STORAGE_*`.
 
-Le préfixe applicatif historique `/api` est conservé. Les exceptions sont `/health/live`, `/health/ready`, `/docs` et `/docs-json`.
+### Organisation des sources
 
-## 4. Organisation du code
+Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `photos`, `plans`,
+`privacy`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
+`database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
-Le code est découpé par domaine. Chaque domaine suit autant que possible la même séparation :
+La convention est : contrôleur pour HTTP, DTO pour la validation stricte des entrées, service pour les règles métier, repository
+ou store pour SQL/CQL et mapper/model pour les représentations publiques.
 
-- `controller` : contrat HTTP, guards, DTO et statut de réponse ;
-- `dto` : validation des entrées et description des réponses Swagger ;
-- `service` : règles métier et traduction en erreurs API ;
-- `repository` : SQL, transactions et verrous PostgreSQL ;
-- `models` : unions fermées et structures internes ;
-- `mapper` : conversion des lignes SQL vers la représentation publique.
+## 3. Contrat HTTP et sécurité
 
-Les principaux modules sont :
+Les routes métier sont sous `/api`. Les seules exceptions sont `/health/live` et `/health/ready`. L’API
+n’embarque ni OpenAPI ni Swagger ; le contrat HTTP est maintenu dans `routes.md`.
 
-| Module | Responsabilités |
-| --- | --- |
-| `auth` | OTP, comptes, JWT, refresh tokens, guards et rôles |
-| `users` | profil, préférences, localisation et choix juridiques |
-| `privacy` | demandes RGPD, export, blocages, journaux d’accès et rétention |
-| `matches` | création, liste, révélation, continuation, quota, messages et maintenance |
-| `reports` | signalements utilisateur et traitement administrateur |
-| `traits` | catalogue et attribution de traits |
-| `plans` | plans Free/Premium et fonctionnalités commerciales |
-| `billing` | client Stripe, Checkout/portail, projection des abonnements, factures et webhooks |
-| `discovery` | éligibilité et distance PostgreSQL, exclusions et swipes Scylla, likes réciproques et création de match |
-| `mobile` | appareils, flux SSE, notifications persistées et livraison FCM |
-| `common` | erreurs, validation HTTP, pagination et DTO génériques |
-| `config` | validation centralisée de l’environnement |
-| `database` | pool et transactions PostgreSQL |
-| `redis` | connexion partagée, compteur atomique, Pub/Sub et readiness Redis |
-| `ratelimit` | limites mémoire ou Redis |
-
-`CoreModule` est global et fournit une instance partagée de `ConfigService`, `DatabaseService`, `ScyllaService`,
-`RedisService` et `RateLimitService`. La configuration n’est plus instanciée séparément dans `main.ts` et dans Nest, ce qui
-évite les divergences de valeurs.
-
-## 5. Contrat HTTP commun
-
-### Validation
-
-- Les corps, paramètres d’URL et query strings sont transformés en DTO.
-- Les champs non documentés sont refusés.
-- Les champs obligatoires absents ou invalides produisent une erreur stable.
-- Fastify limite le corps JSON à 1 Mio.
-- La date de naissance accepte uniquement une date calendrier stricte `YYYY-MM-DD`.
-- La date est normalisée et revalidée pour refuser les dates impossibles telles que `2000-02-30`.
-
-### Erreurs
-
-Toutes les erreurs publiques suivent cette enveloppe :
+Les corps JSON sont limités à 1 Mio. Les DTO utilisent une whitelist stricte et rejettent les champs inconnus.
+Les erreurs publiques suivent toujours :
 
 ```json
 {
   "error": {
-    "code": "stable_machine_code",
+    "code": "stable_code",
     "message": "Human-readable message"
   }
 }
 ```
 
-Les erreurs inattendues et les erreurs serveur sont journalisées côté API, mais leur stack n’est jamais renvoyée au client.
+Les réponses portent un `X-Request-ID`, `Cache-Control: no-store` et des en-têtes défensifs centralisés. Un UUID
+client n’est conservé que s’il est v4. HSTS est ajouté en production. Les logs HTTP enregistrent méthode, chemin
+sans query string, statut, identifiant et durée, jamais les recherches ou motifs présents dans l’URL.
 
-### Identifiant de requête
+`TRUST_PROXY=false` est le défaut. En production, `true` est interdit : il faut lister exactement les IP/CIDR des
+proxies autorisés, sinon une adresse transmise par le client pourrait fausser les journaux et limites par IP.
 
-- Un `X-Request-ID` UUID valide fourni par le client est conservé.
-- Sinon, l’API génère un UUID.
-- L’identifiant est renvoyé dans la réponse et inclus dans les logs HTTP.
-- La durée en millisecondes, la méthode, le chemin sans query string et le statut sont journalisés ; les recherches et justifications ne passent jamais dans les logs HTTP.
+### Authentification et autorisation
 
-## 6. Configuration et démarrage sécurisé
+- Access token JWT HS256, typé `access`, avec issuer `histae-api` et audience `histae-app`.
+- Le rôle, le bannissement, la suppression et l’état juridique sont relus dans PostgreSQL à chaque requête ;
+  aucune autorité n’est accordée à un rôle fourni par le client ou resté dans un ancien token.
+- Refresh token au format `UUIDv4:secret-base64url`, secret aléatoire de 256 bits, hash SHA-256 en base, rotation
+  et révocation transactionnelles.
+- OTP à six chiffres stocké sous forme de HMAC, à usage unique, activé seulement après acceptation du SMS par le
+  fournisseur et protégé par idempotence.
+- Numéro limité actuellement au format français E.164. Le clair n’est ni persisté ni journalisé : HMAC-SHA-256
+  pour l’index et AES-256-GCM avec nonce/tag pour la valeur récupérable.
+- Les administrateurs ont des contrôles de rôle en base. Les accès aux détails personnels et conversations
+  exigent un motif et créent une trace dans `data_access_log`.
 
-`ENV` est obligatoire et doit valoir `development`, `test` ou `production`. Une valeur absente ou approximative échoue au démarrage.
+Le rate limiting est global par IP et renforcé sur OTP, refresh, feed, swipe, message, export, signalement, photo,
+facturation et webhook Stripe. Les clés de compteurs sont HMACées. Le fallback mémoire non-production purge ses
+entrées expirées.
 
-### Secrets et paramètres essentiels
+### Consentements et confidentialité
 
-- `JWT_SECRET` : au moins 32 octets ;
-- `PHONE_ENCRYPTION_KEY` : clé AES-256-GCM ;
-- `PHONE_HASH_KEY` : clé HMAC-SHA-256 ;
-- ces trois clés doivent être distinctes ;
-- paramètres PostgreSQL, avec TLS obligatoire en production ;
-- versions et URL des quatre documents juridiques ;
-- `LEGAL_REVIEW_REFERENCE` en production ;
-- Redis avec TLS et mot de passe en production pour le rate limiting partagé ;
-- ScyllaDB activée en production, avec TLS, authentification et facteur de réplication explicite ;
-- `SMS_PROVIDER`, `SWEEGO_API_KEY`, `SWEEGO_API_URL`, `SWEEGO_SMS_SENDER_ID`, `SWEEGO_SMS_REGION`, `SWEEGO_TIMEOUT` et `OTP_TTL` pour la livraison des OTP.
-- `ACCOUNT_DELETION_TOKEN_TTL` pour la confirmation de suppression, avec une valeur autorisée de 1 à 30 minutes ;
-- `PUSH_PROVIDER` et, si FCM est activé, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_TOKEN_URI` et `PUSH_TIMEOUT`.
-- `BILLING_PROVIDER` et, avec Stripe, la clé secrète, le secret webhook, le Product Premium, les deux Prices, les trois URL de retour et les options de taxe/promotion/retry.
+Les quatre choix juridiques sont :
 
-`.env.example` inventorie les variables prises en charge tandis que `.env` reste ignoré. Les clés `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et `SWEEGO_API_KEY` y restent vides.
+- acceptation des CGU ;
+- accusé de présentation de la notice de confidentialité ;
+- consentement aux données sensibles ;
+- consentement de localisation.
 
-### Pool PostgreSQL
+Il n’existe pas de consentement marketing. Les deux premiers choix et leurs versions courantes conditionnent les
+routes utilisateur normales. Le sexe et les préférences nécessitent le consentement sensible ; la présence exige
+celui de localisation. Leur retrait efface immédiatement les données correspondantes.
 
-Les valeurs par défaut sont :
+L’export RGPD contient les données de l’utilisateur dans PostgreSQL et uniquement ses décisions Scylla sortantes :
+les décisions entrantes de tiers restent secrètes. L’effacement supprime d’abord l’identité Stripe et la photo,
+efface les données Scylla, puis anonymise PostgreSQL. Les factures requises pour la comptabilité sont détachées du
+compte. Un tombstone temporaire n’est gardé que pour empêcher un compte banni de contourner la sûreté par effacement.
 
-- maximum de 20 connexions ;
-- connexion : 5 secondes ;
-- connexion inactive : 30 secondes ;
-- requête SQL : 15 secondes ;
-- transaction inactive : 30 secondes.
+## 4. Règles métier essentielles
 
-Ces valeurs sont configurables avec `POSTGRES_POOL_MAX`, `POSTGRES_CONNECT_TIMEOUT`, `POSTGRES_IDLE_TIMEOUT`, `POSTGRES_STATEMENT_TIMEOUT` et `POSTGRES_IDLE_TRANSACTION_TIMEOUT`.
+### Profil et onboarding
 
-### Arrêt propre
+La date de naissance est une date calendrier stricte `YYYY-MM-DD`; les dates impossibles sont refusées et le
+contrôle des 18 ans existe dans l’application comme dans PostgreSQL. Les valeurs de sexe/préférence viennent de
+types fermés et ne sont acceptées qu’avec le consentement requis.
 
-Nest active les shutdown hooks. À l’arrêt :
+### Découverte et matchs
 
-- le pool PostgreSQL est fermé ;
-- le client ScyllaDB est arrêté ;
-- la connexion Redis et ses abonnements Pub/Sub sont quittés proprement ;
-- les timers de maintenance embarqués sont annulés.
+Le feed combine les candidats relationnels PostgreSQL avec les décisions Scylla déjà prises. Les écritures CQL
+sont immuables pendant leur TTL. Les likes réciproques créent un seul match grâce à la concurrence Scylla et à
+l’unicité/transaction PostgreSQL.
 
-## 7. Authentification et sécurité des comptes
+Un match est actif pendant 24 heures, peut ensuite attendre la continuation, puis devient confirmé ou expiré.
+La continuation et le quota Free sont atomiques. Les messages exigent une participation valide, respectent l’état
+du match et utilisent un UUID v4 d’idempotence ; rejouer la même mutation retourne le même message.
 
-### Téléphone
+Le push ne contient jamais le texte d’un message. Il transporte uniquement des identifiants de resynchronisation.
+Le flux SSE annonce les créations/mises à jour de match, invalidations, messages, lectures et abonnements.
 
-- Le numéro est normalisé au format E.164 et limité actuellement à la France (`+33` suivi de neuf chiffres sans zéro national).
-- Il est chiffré avec AES-256-GCM pour les cas nécessitant sa récupération.
-- Un HMAC-SHA-256 déterministe est stocké pour l’unicité et les recherches.
-- Le numéro en clair n’est pas persisté.
+### Photos privées
 
-### OTP
+`PUT /api/users/me/photo` accepte un unique champ multipart `photo`. Les extensions admises sont `.jpg`, `.jpeg`,
+`.png`, `.heic`, `.heif` et `.webp`. L’entrée comme le WebP produit sont limitées à **500 000 octets**.
 
-`POST /api/auth/otp/send` livre désormais un SMS transactionnel réel avec Sweego. La requête exige un en-tête `Idempotency-Key` UUID v4. L’API persiste d’abord le hash du code avec l’état `pending`, appelle Sweego avec un délai maximal, puis rend le code utilisable seulement après une réponse HTTP `200` contenant les identifiants de transaction et de message attendus. Une demande restée `pending` au-delà du timeout fournisseur et de cinq secondes de grâce est marquée `failed` lors de son prochain retry. Les états `pending`, `sent` et `failed`, l’identifiant de campagne et les identifiants fournisseur restent traçables sans persister le code en clair.
-
-L’idempotence est garantie au niveau applicatif : rejouer la même clé pour le même numéro ne déclenche pas un second appel, tandis qu’une réutilisation pour un autre numéro renvoie `409`. L’activation d’un OTP acquiert un verrou transactionnel dérivé du hash téléphone ; un index PostgreSQL unique impose en complément un seul code `sent` non utilisé par téléphone. Aucun système distribué ne peut rendre atomiques une transaction PostgreSQL et un appel HTTP externe : si Sweego accepte un SMS mais que sa réponse est perdue, le code reste volontairement inutilisable et un retry avec une nouvelle clé peut produire un second SMS. Un suivi de livraison par webhook reste donc souhaitable pour l’observabilité opérationnelle.
-
-### Access tokens
-
-- JWT signé explicitement en HS256, typé `access`, avec issuer `histae-api` et audience `histae-app` ;
-- durée par défaut : 15 minutes, obligatoirement comprise entre 1 minute et 1 heure ;
-- sujet `sub` limité à l’UUID utilisateur ;
-- les rôles ne sont pas considérés comme fiables depuis le token.
-
-À chaque requête authentifiée, le guard relit PostgreSQL pour vérifier :
-
-- que le compte existe ;
-- qu’il n’est pas supprimé ;
-- qu’il n’est pas banni ;
-- que son rôle actuel permet éventuellement l’accès admin ;
-- que l’onboarding juridique est complet pour une route utilisateur normale.
-
-`GET /api/auth/me` fournit au mobile un bootstrap minimal `{ user_id, onboarding_complete }`, y compris pendant l’onboarding. Il n’expose volontairement aucun rôle : l’application Flutter est destinée aux utilisateurs, tandis que le dashboard administratif conserve `GET /api/admin/me`.
-
-### Refresh tokens
-
-- Format public `jti:secret`, avec un secret aléatoire de 256 bits.
-- Seul le hash SHA-256 du token complet est persisté.
-- Rotation atomique sous verrou PostgreSQL.
-- Ancien token révoqué lors d’un refresh réussi.
-- Durée supérieure à celle de l’access token et plafonnée à 180 jours.
-- Déconnexion avec révocation du token ; un `device_id` optionnel permet de supprimer atomiquement l’enregistrement push de l’appareil concerné.
-- Durée par défaut : 4 320 heures, soit 180 jours.
-
-### Rôles
-
-Les rôles fermés sont `user`, `admin` et `superadmin`.
-
-- La vérification d’un OTP crée un compte `user` lorsque le téléphone n’est pas encore connu.
-- Le client ne peut pas fournir son rôle et l’API n’expose aucune route de création de compte privilégié.
-
-### Tombstone de sécurité
-
-Lorsqu’un compte banni est effacé, son HMAC de téléphone est placé dans `account_tombstone` pendant trois ans. Cela limite le contournement immédiat d’une sanction sans conserver le profil ni le téléphone chiffré. Un compte non banni effacé ne produit pas de tombstone.
-
-## 8. Onboarding et choix juridiques
-
-Histae ne fait aucun marketing et ne possède aucun consentement « actualités et offres ».
-
-Les quatre choix reconnus sont :
-
-1. `terms_of_service_acceptance` — acceptation contractuelle des CGU ;
-2. `privacy_notice_acknowledgement` — accusé de présentation de la notice de confidentialité ;
-3. `sensitive_data_consent` — consentement explicite aux données sensibles concernées ;
-4. `location_consent` — consentement au traitement de la localisation.
-
-Les quatre documents ont chacun :
-
-- une version configurée ;
-- une URL absolue configurée ;
-- une preuve d’événement en base ;
-- une date PostgreSQL ;
-- une séquence globale monotone ;
-- éventuellement IP et user-agent pour la preuve technique.
-
-En production, les URL doivent utiliser HTTPS. Les versions, les URL et `LEGAL_REVIEW_REFERENCE` sont obligatoires.
-
-### Traduction côté mobile
-
-1. Après la création de session, le mobile appelle `GET /api/auth/me`, puis `GET /api/users/me/consents` si l’onboarding n’est pas terminé.
-2. L’état de consentement contient les quatre choix, leur état, l’éventuelle `document_version` acceptée, `required_document_version`, `document_url`, `onboarding_complete` et `required_actions`.
-3. Le mobile affiche séparément les CGU et la notice, sans case précochée.
-4. Les choix sont envoyés par `PUT /api/users/me/consents`.
-5. Tant que les deux documents obligatoires ne sont pas courants, les routes utilisateur normales répondent `403 onboarding_incomplete`.
-6. Les routes indispensables restent accessibles : consultation/mise à jour des choix, déconnexion, demandes RGPD, export et suppression du compte.
-7. Le consentement sensible est demandé juste avant de renseigner les données concernées.
-8. Le consentement de localisation est demandé au moment de l’activation, en plus de l’autorisation native iOS/Android.
-
-L’acceptation des CGU et l’accusé de présentation ne sont pas modélisés comme des consentements librement retirables par `granted=false`. L’utilisateur peut les refuser pendant l’inscription ou supprimer son compte. Les consentements sensible et de localisation peuvent être retirés.
-
-### Effets du retrait
-
-- Retrait sensible : suppression du sexe et des préférences concernées.
-- Retrait de localisation : suppression immédiate de la ligne de présence.
-- Les événements retirés restent conservés selon la politique de preuve, sans redevenir actifs.
-
-### Concurrence
-
-Les écritures de choix juridiques :
-
-- verrouillent le compte utilisateur ;
-- utilisent l’horloge PostgreSQL ;
-- ordonnent les événements par `event_sequence` ;
-- garantissent un seul événement actif par utilisateur et type ;
-- sont idempotentes lorsqu’un retry mobile répète exactement le choix courant.
-
-## 9. Profil, préférences, traits et localisation
-
-### Profil
-
-- `firstname` obligatoire, non vide, maximum 100 octets ;
-- `birthdate` obligatoire au format `YYYY-MM-DD` ;
-- majorité calculée en calendrier UTC ;
-- contrainte PostgreSQL supplémentaire garantissant 18 ans ;
-- `sex` fermé à `male`, `female`, `other` ou `null` ;
-- bio : 2 000 octets maximum ;
-- photo : URL HTTPS sans identifiants intégrés, 2 048 octets maximum.
-
-Les CGU et la notice courantes sont requises. Un sexe non nul exige aussi le consentement sensible courant.
-
-### Préférences
-
-- âge minimum : au moins 18 ;
-- âge maximum : au plus 99 et supérieur ou égal au minimum ;
-- distance : entier entre 1 et 500 km ;
-- `looking_for` : `male`, `female`, `both` ou `other` ;
-- consentement sensible courant obligatoire.
-
-### Traits
-
-- catalogue administrable ;
-- lecture des traits attribués au compte courant par `GET /api/users/me/traits` ;
-- nom non vide, 100 octets maximum ;
-- attribution utilisateur idempotente ;
-- suppression d’une attribution idempotente ;
-- unicité du nom et UUID des traits.
-
-### Localisation
-
-- latitude entre -90 et 90 ;
-- longitude entre -180 et 180 ;
-- consentement de localisation courant obligatoire ;
-- marquée obsolète après une heure ;
-- supprimée après 24 heures ;
-- supprimée immédiatement au retrait du consentement ou à l’effacement du compte.
-
-## 10. Découverte, feed et swipes
-
-La découverte utilise une architecture hybride. PostgreSQL reste la source canonique des informations qui
-doivent être cohérentes transactionnellement : compte actif, profil, préférences, consentements, présence,
-blocages et matchs. ScyllaDB conserve les décisions à fort volume et répond aux exclusions du feed et à la
-recherche du like réciproque. Le feed dépend donc réellement des deux bases, sans dupliquer les profils dans
-Scylla ni introduire une synchronisation fragile de données personnelles.
-
-### Conditions de disponibilité
-
-Un utilisateur est prêt pour la découverte uniquement s’il possède :
-
-- un compte actif et non banni ;
-- un profil avec `sex` renseigné ;
-- des préférences complètes ;
-- la version courante de `sensitive_data_consent` ;
-- la version courante de `location_consent` ;
-- une présence fraîche, mise à jour depuis moins d’une heure.
-
-Une tentative avant cet état renvoie `409 discovery_not_ready`. Une cible supprimée, bannie, incomplète,
-bloquée dans l’un ou l’autre sens, ou déjà liée par un match est présentée comme indisponible avec
-`404 discovery_candidate_not_found`.
-
-Le mobile peut vérifier ces prérequis sans consommer une page du feed avec `GET /api/users/me/discovery-status`. La réponse expose `ready`, l’échéance de présence et les actions manquantes parmi `profile`, `sex`, `preferences`, `sensitive_data_consent`, `location_consent` et `fresh_presence`.
-
-### Construction du feed
-
-`GET /api/feed` accepte `limit` de 1 à 100 et un curseur opaque. PostgreSQL :
-
-1. charge les critères du demandeur ;
-2. applique une boîte géographique avant le calcul exact de Haversine ;
-3. applique dans les deux sens les âges acceptés, le sexe recherché et la distance maximale ;
-4. impose aux candidats des consentements courants et une présence fraîche ;
-5. exclut les blocages et les matchs existants ;
-6. ordonne par distance exacte puis UUID.
-
-Scylla exclut ensuite les cibles pour lesquelles le demandeur a déjà enregistré `like` ou `pass`. L’API
-sur-échantillonne les lots PostgreSQL afin de remplir la page malgré ces exclusions. Le curseur conserve la
-distance exacte pour éviter sauts et doublons ; la réponse publique arrondit la distance au dixième de
-kilomètre. Le profil de feed expose le prénom, l’âge calculé, le sexe, la bio, la distance et les traits. Il
-n’expose ni la date de naissance exacte ni la photo, cohérent avec la révélation mutuelle des photos.
-
-### Écriture d’un swipe et création du match
-
-`POST /api/swipes` accepte exactement `like` ou `pass`. Une décision est immuable pendant sa durée de
-conservation. La table acteur est écrite avec `IF NOT EXISTS`, puis la vue cible est écrite/réparée avec le TTL
-restant. Un retry identique est idempotent ; une tentative de remplacer `pass` par `like`, ou inversement,
-renvoie `409 swipe_already_recorded`.
-
-Après un `like`, le service lit la partition acteur de l’autre utilisateur. Si elle contient aussi un `like`,
-le match est créé dans une transaction PostgreSQL. La contrainte unique sur la paire ordonnée absorbe deux
-requêtes réciproques concurrentes : les deux appels peuvent observer le même match, mais une seule ligne est
-créée. Le repository de match revérifie les blocages au moment de l’écriture afin de fermer la course entre le
-contrôle d’éligibilité et la création.
-
-### Modèle Scylla orienté requêtes
-
-Le keyspace `histae_discovery` contient :
-
-- `swipes_by_actor_bucket ((actor_id, bucket), target_id)` pour l’exclusion du feed, l’idempotence, la
-  réciprocité sortante et l’export ;
-- `swipes_by_target_bucket ((target_id, bucket), actor_id)` pour retrouver un like réciproque et effacer
-  complètement les références croisées. Ces choix entrants restent internes et ne sont jamais exposés à la cible.
-
-Les UUID sont répartis dans 32 buckets déterministes. Cela borne la taille des partitions sans index secondaire
-ni `ALLOW FILTERING`. Les deux tables imposent un TTL fixe d’un an avec
-`default_time_to_live = 31536000` et utilisent TWCS par fenêtres de quatorze jours. Le runtime n’accepte plus
-de TTL configurable qui pourrait produire des durées divergentes. Si l’écriture de la seconde vue échoue après la première, le client reçoit `503` ;
-le retry relit la décision canonique et répare la vue cible. Les lectures/écritures utilisent `LOCAL_QUORUM` et
-les LWT `LOCAL_SERIAL`.
-
-### Effacement et disponibilité
-
-L’export portable inclut uniquement les actions sortantes décidées par l’utilisateur. Les actions entrantes
-servent en interne à la réciprocité et à l’effacement, mais ne sont jamais révélées à la cible. L’effacement lit les deux sens, supprime chaque
-miroir chez les autres utilisateurs, puis supprime les 32 partitions propres dans les deux tables. Les
-opérations sont idempotentes et bornées en concurrence. Si Scylla est indisponible, le service ne prétend pas
-avoir terminé un export ou un effacement complet : il renvoie respectivement `503 data_export_unavailable` ou
-`503 data_erasure_unavailable`.
-
-`SCYLLA_ENABLED=false` garde le développement sans Scylla possible, mais les routes de découverte répondent
-alors `503 discovery_unavailable`. La production refuse de démarrer sans Scylla activée, TLS et identifiants.
-La sonde de readiness interroge Scylla lorsqu’elle est activée.
-
-## 11. Plans et quota de continuation
-
-Le catalogue PostgreSQL expose les plans, prix mensuel/annuel en centimes, devise, essai, limite hebdomadaire et fonctionnalités JSON.
-
-- L’absence de `user_subscription` équivaut au plan Free.
-- Un abonnement expiré retombe sur Free.
-- Une limite `NULL` représente un quota illimité.
-- `continuation_usage` comptabilise l’usage par semaine UTC.
-- Le quota n’est consommé qu’au second consentement, lorsque la continuation devient mutuelle.
-- Le quota débité appartient à l’initiateur de la continuation.
-
-Stripe alimente maintenant ces droits. `POST /api/users/me/subscription/checkout` crée une page Checkout hébergée
-mensuelle ou annuelle et exige une clé d’idempotence UUID v4. Le serveur choisit le `price_id` configuré : montant,
-devise, essai, Product et Customer ne sont jamais acceptés depuis le mobile. Une contrainte PostgreSQL autorise une
-seule session `creating` ou `open` par compte ; un retry identique retrouve la même session. L’essai du catalogue est
-accordé une seule fois et `billing_customer.trial_used_at` empêche sa réattribution après résiliation.
-
-`POST /api/users/me/subscription/portal` délègue à Stripe Customer Portal la mise à jour du moyen de paiement,
-le changement mensuel/annuel et l’annulation. `GET /api/users/me/subscription` expose au mobile la projection
-nécessaire à l’interface. `trialing`, `active` et `past_due` conservent l’accès dans la période courante ;
-`incomplete`, `incomplete_expired`, `paused`, `unpaid` et `canceled` retombent sur Free. Un événement fournisseur
-plus ancien ne peut pas écraser une projection plus récente.
-
-`POST /api/billing/stripe/webhook` utilise le corps HTTP brut, vérifie `Stripe-Signature`, le secret `whsec_*` et
-la cohérence test/live. L’Event ID est inséré dans `stripe_webhook_event` dans la même transaction que son effet,
-ce qui rend les retries sans danger. Les Product/Price reçus sont comparés aux identifiants configurés. Les
-événements d’abonnement, Checkout, facture et suppression de Customer sont pris en charge ; les factures sont
-projetées dans `billing_invoice`, les changements sont diffusés en SSE, et les échecs de paiement/fins d’essai
-peuvent produire une notification FCM sans donnée financière sensible.
-
-La route webhook est exclue de la petite limite globale mais possède sa propre limite de 300 requêtes/minute/IP.
-Un retry déjà enregistré est acquitté avant tout nouvel appel Stripe. Les projections d’abonnement et de facture
-ignorent les événements plus anciens, et les URL Checkout sont retirées de PostgreSQL lorsqu’une session se termine.
-
-La synthèse administrateur fournit provisoirement un **chiffre d’affaires estimé**. Pour la période choisie,
-elle compte les lignes Premium dont `user_subscription.updated_at` appartient à l’intervalle, puis multiplie ce
-nombre par le tarif mensuel Premium courant. Les périodes disponibles sont les 7 ou 30 derniers jours, le mois
-en cours, le mois précédent, l’année en cours et l’historique complet. Ce chiffre n’est pas un encaissement
-comptable : il ignore notamment les renouvellements, remboursements, taxes, commissions et charges. La table
-`billing_invoice` permet désormais une future métrique d’encaissements réels sans modifier ce contrat administrateur existant.
-
-## 12. Matchs : modèle et machine d’état
-
-Les statuts fermés sont :
-
-- `active` ;
-- `awaiting_continuation` ;
-- `confirmed` ;
-- `expired` ;
-- `ended`.
-
-### Cycle normal
+Le processeur vérifie extension, MIME, signature binaire, pixels et dimensions, borne le décodage HEIC, applique
+l’orientation, réduit à 2 048 px maximum et retire les métadonnées. Seul le WebP final est conservé sous :
 
 ```text
-création
-   │
-   ▼
-active pendant 24 h
-   │ échéance
-   ▼
-awaiting_continuation pendant 24 h
-   ├── deux consentements ──► confirmed
-   └── échéance ─────────────► expired ──► purge après 30 jours
+profile-photos/<user_uuid>/photo.webp
 ```
 
-Un blocage ou un effacement transforme un match en `ended` et programme sa purge sous trente jours.
+PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
+générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
+admin audité. Les collections admin et blocages renvoient toujours `photo: null`. Les appels S3 réseau sont bornés
+à dix secondes.
 
-### Atomicité
+## 5. Facturation
 
-La disponibilité n’est plus vérifiée dans une requête séparée de l’écriture. Les opérations importantes verrouillent le match avec `FOR UPDATE`, lisent l’heure PostgreSQL, appliquent l’éventuelle transition, puis écrivent dans la même transaction.
+Stripe Checkout accepte uniquement la période mensuelle ou annuelle ; les Product/Price IDs et tarifs viennent de
+la configuration et du catalogue serveur. Les créations sont idempotentes et une seule session live est admise.
 
-Cela concerne :
+Le webhook utilise le corps brut et la signature Stripe, une limite dédiée, une table de déduplication et l’ordre
+temporel des événements pour empêcher un événement ancien d’écraser un état plus récent. PostgreSQL garde la
+projection d’abonnement et le registre des factures, mais l’estimation admin ne doit pas être présentée comme une
+comptabilité de trésorerie.
 
-- révélation des photos ;
-- lecture des messages ;
-- création d’un message ;
-- ouverture/expiration de la fenêtre de continuation ;
-- premier et second consentements de continuation ;
-- consommation du quota.
+## 6. PostgreSQL et migrations
 
-Cette structure évite qu’un message soit inséré après l’expiration observée par une autre transaction ou que le quota soit consommé deux fois.
+Le schéma canonique est `db/schema_postgres.sql`. Les catalogues de plans/traits et le seed conditionnel des 400
+profils de développement sont dans `db/insert_postgres.sql`. `db/drop_postgres.sql` n’est utilisé que par le reset
+local protégé.
 
-### Révélation
+Les quinze anciens fichiers incrémentaux ont été fusionnés dans la baseline logique `001_baseline_20260901`.
+Le moteur compose le schéma et les inserts canoniques, calcule un checksum SHA-256, acquiert un verrou consultatif
+et applique la baseline dans une transaction.
 
-Chaque participant possède une ligne `match_state`. La photo n’est considérée comme révélée que si les deux lignes ont `revealed=true`. Ce consentement est distinct de la continuation.
+La compatibilité est sans perte :
 
-La liste utilisateur `GET /api/matches/me` est directement exploitable par le mobile. Elle joint l’autre profil, son âge calculé, ses traits, les états de révélation et de continuation du demandeur, le compteur de messages non lus et le dernier message. La photo de l’autre utilisateur reste `null` tant que les deux participants n’ont pas révélé la leur. La route administrative conserve son contrat séparé et n’est pas utilisée par Flutter.
+- une base neuve applique cette unique baseline ;
+- une base possédant les quinze anciennes versions est vérifiée structurellement puis reçoit la marque de baseline,
+  sans rejouer le schéma et sans supprimer son historique ;
+- une historique ancienne partielle est refusée avec une erreur explicite ;
+- une baseline déjà enregistrée dont le checksum change est refusée.
 
-### Messagerie
+Après déploiement de la baseline, toute évolution persistante doit reprendre sous forme de migration incrémentale.
+`pnpm run db:reset` reste séparé et refuse toute cible autre que `ENV=development`, PostgreSQL local et la base
+`histae-dev`.
 
-- réservée aux participants ;
-- disponible pour les états autorisés ;
-- contenu non vide, 2 000 caractères maximum ;
-- en-tête `Idempotency-Key` UUID v4 obligatoire ; une répétition identique rejoue le même message sans nouvelle notification, tandis qu’une réutilisation différente renvoie `409` ;
-- message horodaté avec `clock_timestamp()` ;
-- `last_message_at` mis à jour dans la même transaction ;
-- seul le destinataire peut marquer le message comme lu ;
-- lecture groupée par `read_through_message_id`, en complément de l’ancienne lecture unitaire ;
-- un match expiré refuse atomiquement l’insertion.
+Scylla garde son registre `scylla_schema_migrations` et son unique fichier `scylla/001_discovery.cql`. Le reset
+Scylla ne touche que les tables de swipes du keyspace local autorisé et conserve le schéma/historique.
 
-### Temps réel et push mobile
+## 7. Exploitation
 
-`GET /api/users/me/events` ouvre un flux SSE authentifié. Il commence par `connected`, maintient la connexion avec un heartbeat toutes les 25 secondes et diffuse les invalidations de matchs, créations/mises à jour de match, créations de message et accusés de lecture. Redis Pub/Sub relaie ces événements entre instances ; le mode mémoire reste disponible quand Redis est explicitement désactivé en environnement local.
+`/health/live` indique que le processus répond. `/health/ready` vérifie PostgreSQL, Scylla quand activé, Redis quand
+activé et le bucket objet. La fermeture Nest libère les pools/clients.
 
-Les appareils iOS et Android sont enregistrés par utilisateur sans jamais réexposer leur jeton fournisseur. FCM HTTP v1 est optionnel et utilise un jeton OAuth de compte de service mis en cache. Une notification de nouveau match ou message est persistée puis envoyée au destinataire ; son payload ne contient que des identifiants, jamais le contenu privé du message. Les jetons signalés `UNREGISTERED` sont supprimés automatiquement. Une panne de livraison ne fait pas échouer la mutation métier déjà validée.
+La maintenance peut fonctionner dans l’API, dans un worker séparé ou être désactivée. Elle expire notamment les
+présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
+signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`.
 
-### Blocage
+En local, les Compose sont séparés pour ScyllaDB, Redis et SeaweedFS. Le Compose objet lie l’API S3 à
+`127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de
+production.
 
-- Un utilisateur ne peut pas se bloquer lui-même.
-- Le blocage est idempotent.
-- Les matchs actifs, en attente ou confirmés de la paire deviennent `ended`.
-- Les listes de matchs masquent toute paire bloquée dans un sens ou dans l’autre.
-- Une transaction empêche la création d’un nouveau match tant que le blocage existe.
+## 8. Validation et documents de référence
 
-## 13. Pagination
-
-Les listes à fort volume utilisent une pagination keyset :
-
-- feed, par distance exacte et UUID ;
-- matchs ;
-- messages ;
-- signalements administrateur.
-
-Chaque réponse renvoie `next_cursor`, qui vaut une chaîne opaque ou `null`. Le client transmet cette valeur dans `cursor` pour la page suivante.
-
-Le curseur contient en interne :
-
-- l’horodatage SQL exact ;
-- l’UUID de départage.
-
-Pour les messages, la précision PostgreSQL à six décimales est conservée sous forme textuelle. Cette précaution évite les lignes sautées lorsque plusieurs messages sont créés dans la même milliseconde et que le pilote Node tronque les microsecondes dans un objet `Date`.
-
-`offset` reste accepté pour compatibilité avec les anciens clients, mais il est documenté comme déprécié et doit valoir zéro lorsqu’un curseur est fourni.
-
-Les index dédiés suivent exactement les ordres de tri utilisés.
-
-## 14. Signalements et administration
-
-Les motifs fermés sont :
-
-- `inappropriate_content` ;
-- `fake_profile` ;
-- `harassment` ;
-- `spam` ;
-- `other`.
-
-Les statuts sont `pending`, `reviewed` et `dismissed`.
-
-Règles :
-
-- auto-signalement interdit ;
-- cible active obligatoire ;
-- si un match est fourni, il doit relier le déclarant et la cible ;
-- description limitée à 2 000 octets ;
-- un seul signalement en attente par déclarant/cible/match ;
-- rate limit dédié ;
-- changement de statut administrateur transactionnel ;
-- chaque revue écrit `admin_review_report` dans `data_access_log`.
-
-## 15. Droits RGPD et export
-
-### Types de demande
-
-`data_subject_request` accepte :
-
-- `access` ;
-- `erasure` ;
-- `portability` ;
-- `rectification` ;
-- `restriction` ;
-- `objection`.
-
-### Statuts et transitions
-
-- création en `pending` ;
-- passage possible à `in_progress` ou `rejected` ;
-- depuis `in_progress`, passage à `completed` ou `rejected` ;
-- transitions terminales non rejouables ;
-- une seule demande ouverte par utilisateur et type ;
-- traitement administrateur journalisé avec rôle, administrateur, motif et date.
-
-Terminer une demande `erasure` appelle la fonction PostgreSQL d’anonymisation dans la même transaction.
-Avant l’anonymisation PostgreSQL, le callback d’effacement supprime toutes les références de swipe dans
-Scylla. Un échec Scylla annule la transaction PostgreSQL et laisse la demande en cours, afin qu’un retry
-idempotent puisse terminer les deux côtés sans déclarer prématurément la demande accomplie.
-
-### Export portable
-
-`GET /api/users/me/data-export` assemble transactionnellement :
-
-- compte technique ;
-- profil ;
-- préférences ;
-- traits ;
-- historique des choix juridiques ;
-- matchs ;
-- messages écrits ;
-- signalements soumis ;
-- blocages créés ;
-- abonnement et factures Stripe rattachées ;
-- décisions de découverte sortantes prises par l’utilisateur et provenant de ScyllaDB ; les choix entrants de tiers sont exclus de la réponse.
-
-L’export est journalisé avec `export_data`. Il reste accessible pendant un onboarding incomplet afin de ne pas conditionner l’exercice des droits à l’acceptation des CGU.
-
-### Journal des accès
-
-`data_access_log` peut tracer notamment :
-
-- consultation de profil, matchs et messages ;
-- export ;
-- bannissement/débannissement ;
-- revue d’un signalement ;
-- traitement d’une demande RGPD ;
-- anonymisation système ;
-- export de portabilité.
-
-Les journaux sont réservés à l’administration et limités à 500 lignes par consultation.
-
-## 16. Effacement et anonymisation
-
-L’effacement ne se limite pas à mettre `deleted_at`.
-
-La suppression directe exige désormais deux étapes. `POST /api/users/me/deletion-token` remplace le jeton précédent et retourne un secret `uuid:secret` valable 10 minutes par défaut. Seul son SHA-256 est stocké. `DELETE /api/users/me` exige ce jeton, le consomme une seule fois, puis lance l’effacement inter-bases. Un jeton mal formé, inconnu, réutilisé ou expiré renvoie `401 invalid_or_expired_deletion_token`.
-
-Lorsque le compte possède un Customer Stripe, l’API le supprime avant ScyllaDB et PostgreSQL. Stripe annule alors
-ses abonnements et retire les moyens de paiement. Si cet appel ne peut pas être garanti, l’effacement échoue fermé
-avec `503 data_erasure_unavailable`. La projection, le mapping Customer et les sessions Checkout sont ensuite
-supprimés localement ; les factures déjà émises sont détachées de l’UUID utilisateur et conservées pour la
-traçabilité comptable.
-
-### Suppressions immédiates
-
-- profil ;
-- préférences ;
-- traits utilisateur ;
-- localisation ;
-- refresh tokens ;
-- jeton de confirmation de suppression ;
-- tokens d’appareil ;
-- notifications ;
-- blocages entrants et sortants ;
-- abonnement ;
-- mapping Customer Stripe et sessions Checkout ;
-- compteurs de continuation ;
-- état individuel dans les matchs.
-- swipes entrants et sortants dans les deux vues ScyllaDB.
-
-### Anonymisation et retrait
-
-- téléphone chiffré vidé ;
-- HMAC remplacé par une valeur aléatoire `anon_*` ;
-- bannissement et informations administratives retirés du compte ;
-- `deleted_at` et `anonymized_at` renseignés ;
-- consentements retirés ;
-- IP et user-agent des preuves supprimés ;
-- contenu des messages écrits remplacé par `[Message supprimé]`.
-
-### Relations résiduelles
-
-- matchs clôturés en `ended` ;
-- purge programmée sous trente jours ;
-- signalements et preuves nécessaires suivent leur propre durée de conservation ;
-- UUID technique pseudonyme conservé tant qu’une relation encore légitime le référence.
-
-L’objectif est d’effacer les données de profil et d’authentification immédiatement tout en préservant temporairement l’intégrité, la sécurité des autres utilisateurs et la preuve des opérations légitimes.
-
-## 17. Politiques de rétention
-
-| Donnée | Politique actuelle |
-| --- | --- |
-| Position | obsolète après 1 h, supprimée après 24 h |
-| OTP | supprimé après `expires_at` |
-| Refresh token | supprimé après expiration, révocation ou effacement |
-| Jeton de suppression de compte | usage unique ; 10 min par défaut, purge après `expires_at` |
-| Notification | supprimée après `expires_at`, 90 jours par défaut |
-| Preuve de choix retiré | 5 ans après retrait |
-| Demande RGPD clôturée/rejetée | 5 ans après clôture |
-| Journal d’accès | 1 an |
-| Signalement résolu | 3 ans |
-| Match expiré ou terminé | purge après 30 jours |
-| Tombstone de compte banni | 3 ans |
-| Décision de swipe | TTL Scylla fixe de 1 an, TWCS 14 jours, effacement immédiat avec le compte |
-
-Les suppressions sont exécutées par lots de 1 000 lignes, jusqu’à 100 lots par passage, afin de limiter la taille des transactions et les pics de verrouillage.
-
-La matrice détaillée, les finalités et les points à faire approuver figurent dans [`docs/retention-policy.md`](docs/retention-policy.md).
-
-## 18. Validation juridique
-
-Le code garantit que la production ne démarre pas sans :
-
-- les quatre versions juridiques ;
-- les quatre URL HTTPS ;
-- une valeur `LEGAL_REVIEW_REFERENCE`.
-
-Ce mécanisme est un verrou de déploiement, pas une certification. Une valeur inventée ne constitue pas une validation juridique. Une approbation réelle par un juriste ou DPO doit préciser l’auteur, la date, le périmètre, les textes, les finalités, les durées, les destinataires et l’analyse d’impact éventuelle.
-
-Les points encore à faire valider comprennent notamment :
-
-- la qualification exacte des données `sex` et `looking_for` ;
-- les durées de trois ans pour signalements et tombstones ;
-- les transferts, sous-traitants et sauvegardes ;
-- la rédaction mobile des consentements ;
-- la politique de comptes inactifs ;
-- la nécessité et le contenu de l’AIPD.
-
-La procédure est décrite dans [`docs/legal-release-checklist.md`](docs/legal-release-checklist.md).
-
-## 19. Stockage PostgreSQL et ScyllaDB
-
-Le schéma canonique contient 28 tables :
-
-1. `user_account` ;
-2. `account_tombstone` ;
-3. `subscription_plan` ;
-4. `subscription_plan_feature` ;
-5. `user_subscription` ;
-6. `billing_customer` ;
-7. `billing_checkout_session` ;
-8. `stripe_webhook_event` ;
-9. `billing_invoice` ;
-10. `user_consent` ;
-11. `data_subject_request` ;
-12. `data_access_log` ;
-13. `otp_verification` ;
-14. `user_profile` ;
-15. `user_preferences` ;
-16. `user_presence` ;
-17. `trait` ;
-18. `user_trait` ;
-19. `match_init` ;
-20. `match_state` ;
-21. `continuation_usage` ;
-22. `chat_message` ;
-23. `refresh_tokens` ;
-24. `user_block` ;
-25. `user_report` ;
-26. `device_token` ;
-27. `notification` ;
-28. `account_deletion_token`.
-
-Les relations utilisent largement `ON DELETE CASCADE` ou `SET NULL` selon le besoin métier. Les contraintes SQL doublent les validations critiques : rôles, statuts, types de consentement, sexe, préférences, majorité, prix et limites.
-
-Trois fonctions principales complètent le schéma :
-
-- `fct_anonymize_user` pour l’effacement RGPD ;
-- `fct_cleanup_billing_identity` pour détacher les factures et retirer l’identité Stripe à l’anonymisation ;
-- `fct_check_user_age` avec trigger avant insertion/mise à jour du profil.
-
-Les index conservés couvrent :
-
-- recherche par téléphone HMAC via la contrainte unique, sans index B-tree dupliqué ;
-- consentements actifs et ordre des événements ;
-- demandes ouvertes ;
-- journaux d’accès ;
-- recherche géographique ;
-- participants et échéances des matchs ;
-- pagination des matchs/messages/signalements ;
-- idempotence des messages par expéditeur et recherche des messages non lus ;
-- refresh tokens par utilisateur, par JTI unique et par date d’expiration ;
-- blocages ;
-- signalements en attente ;
-- notifications non lues et expirées ;
-- expiration des jetons de suppression de compte.
-- idempotence des événements Stripe, session Checkout active unique et factures par utilisateur/date.
-
-La migration `008` retire neuf index redondants, remplacés ou sans requête correspondante : doublons du hash téléphone et du JTI, ancien index des messages, index simple du statut des signalements, index simple des consentements, ancien tri par dernier message, index des comptes actifs, index d’anonymisation différée et ancien index partiel des refresh tokens. Ce dernier est remplacé par `idx_refresh_tokens_expires(expires_at)`, aligné sur la purge globale réellement exécutée. La migration `010` retire ensuite l’ancien index partiel des OTP utilisables, devenu redondant avec la contrainte unique par téléphone.
-
-ScyllaDB n’utilise volontairement aucun index secondaire. Les deux tables CQL sont dénormalisées selon leurs
-requêtes exactes, réparties en 32 partitions logiques par utilisateur et nettoyées par TTL. Les profils et
-autres données de référence ne sont pas copiés dans Scylla : cela réduit les conflits de cohérence, limite les
-données à effacer et permet à PostgreSQL de rester l’autorité pour les règles relationnelles.
-
-## 20. Migrations
-
-Les migrations versionnées sont :
-
-| Version | Rôle principal |
-| --- | --- |
-| `001_api_contract` | contrat PostgreSQL initial compatible avec l’API |
-| `002_privacy_and_schema_parity` | alignement du schéma et premières structures privacy |
-| `003_legal_choice_semantics` | sémantique des quatre choix juridiques, sans marketing |
-| `004_consent_event_order` | ordre monotone et concurrence des événements |
-| `005_strict_profile_age` | majorité calendrier stricte |
-| `006_privacy_workflows` | demandes RGPD, accès, blocages, tombstones et anonymisation étendue |
-| `007_keyset_pagination_indexes` | index des paginations par curseur |
-| `008_index_cleanup` | suppression de neuf index redondants ou obsolètes et indexation directe de l’expiration des refresh tokens |
-| `009_otp_sms_delivery` | idempotence des demandes OTP, états de livraison Sweego et identifiants fournisseur |
-| `010_single_usable_otp` | reprise des doublons historiques, remplacement de l’ancien index partiel et contrainte d’un seul OTP utilisable par téléphone |
-| `011_mobile_client_contract` | idempotence des messages, index des non-lus, version d’application des appareils et jetons de suppression à usage unique |
-| `012_stripe_billing` | Customers Stripe, Checkout idempotent, projection d’abonnement, registre de factures, webhooks dédupliqués et nettoyage RGPD |
-| `013_preserve_stripe_trial_history` | conservation de la preuve d’essai lorsqu’un Customer Stripe est supprimé puis remplacé |
-| `014_billing_event_order` | ordre monotone des événements de facture Stripe et protection du registre contre les régressions |
-
-Le moteur de migration :
-
-- acquiert un verrou consultatif de session ;
-- applique chaque fichier dans une transaction ;
-- enregistre version, checksum SHA-256 et date ;
-- refuse un checksum modifié pour une migration déjà appliquée ;
-- permet des exécutions répétées sans réappliquer les migrations.
-
-`pnpm run db:reset` est distinct : il reconstruit le schéma canonique et les catalogues uniquement avec `ENV=development`, la base `histae-dev` et un hôte PostgreSQL local.
-
-Les deux chemins sont maintenus en parité : le reset canonique produit directement le schéma final et les quatorze migrations conduisent au même ensemble d’index.
-
-Le schéma Scylla suit un registre séparé `scylla_schema_migrations`. `pnpm run scylla:migrate` crée le keyspace
-avec `NetworkTopologyStrategy`, applique `scylla/001_discovery.cql`, enregistre son SHA-256 et refuse toute
-modification silencieuse d’un fichier déjà appliqué. `docker-compose.scylla.yml` fournit un nœud local de
-développement ; le facteur de réplication vaut 1 localement et 3 par défaut en production.
-
-`pnpm run db:reset-scylla` vide uniquement les deux vues applicatives de swipes par `TRUNCATE`. La commande
-conserve le keyspace, les tables, leurs TTL/TWCS et `scylla_schema_migrations`. Elle refuse tout environnement autre que `development`, tout keyspace
-autre que `histae_discovery`, Scylla désactivé et tout contact point non local.
-
-## 21. Maintenance
-
-Deux familles de maintenance existent :
-
-### Matchs
-
-- ouverture des fenêtres de continuation arrivées à échéance ;
-- expiration de la seconde fenêtre ;
-- purge des matchs expirés ou terminés.
-
-### Vie privée
-
-- obsolescence et suppression de position ;
-- OTP, refresh tokens, notifications et jetons de suppression expirés ;
-- preuves de consentement retirées ;
-- demandes RGPD ;
-- journaux d’accès ;
-- signalements résolus ;
-- tombstones expirés.
-
-Chaque famille utilise un verrou consultatif transactionnel PostgreSQL. Deux workers concurrents ne traitent donc pas le même cycle en parallèle.
-
-Modes :
-
-- `api` : timers embarqués, pratique en développement ;
-- `worker` : exécution ponctuelle par `pnpm run maintenance:run` ;
-- `disabled` : aucune maintenance embarquée.
-
-En production, la recommandation est :
-
-- API avec `MAINTENANCE_MODE=disabled` ;
-- CronJob ou ordonnanceur avec `MAINTENANCE_MODE=worker`.
-
-Le worker réel a été exécuté avec succès contre la base PostgreSQL locale de développement.
-
-## 22. Rate limiting
-
-Limites par défaut :
-
-| Périmètre | Limite |
-| --- | --- |
-| Global par IP | 100 requêtes par minute |
-| Envoi/vérification OTP | 5 par heure, à la fois par IP et numéro pseudonymisé |
-| Rotation de refresh token | 30 par 15 minutes et IP |
-| Feed | 60 par minute et utilisateur |
-| Envoi de message | 60 par minute et utilisateur |
-| Export RGPD | 5 par heure et utilisateur |
-| Signalement | 5 par heure et utilisateur |
-| Swipe | 120 par minute et utilisateur |
-
-Le développement local utilise maintenant Redis comme la production. Le script Lua incrémente et pose
-l’expiration atomiquement, ce qui partage exactement les limites entre plusieurs instances de l’API. Les IP,
-UUID et numéros ne sont jamais utilisés tels quels dans les clés : un HMAC-SHA-256 produit une clé
-pseudonymisée. Le client désactive la file hors ligne, borne les reconnexions et impose un timeout court aux
-commandes. Une indisponibilité retourne `503 rate_limit_unavailable` au lieu de désactiver silencieusement la
-protection. Le Compose local n’active ni sauvegarde ni AOF, limite Redis à 128 Mio, utilise `noeviction` et ne
-publie le port que sur la boucle locale. `ENV=production` impose en plus TLS et un mot de passe.
-
-## 23. Santé, OpenAPI et observabilité
-
-### Santé
-
-- `GET /health/live` : processus disponible ;
-- `GET /health/ready` : vérification PostgreSQL, Scylla lorsqu’elle est activée et Redis lorsqu’il protège l’API ; `503` si une dépendance requise est indisponible.
-
-### OpenAPI
-
-- Swagger UI : `/docs` ;
-- JSON : `/docs-json` ;
-- activé par défaut en développement/test ;
-- désactivé par défaut en production ;
-- DTO d’entrée et de réponse explicites pour auth, utilisateurs, consentements, matchs, messages, privacy, signalements, traits, plans et santé.
-
-Un test d’intégration démarre le graphe Nest complet et génère réellement le document OpenAPI afin de détecter les imports de DTO ou métadonnées supprimés au runtime.
-
-### Logs
-
-- erreurs serveur avec stack côté serveur ;
-- requêtes 4xx en warning ;
-- requêtes 5xx en error ;
-- request ID et durée ;
-- logs du worker avec compteurs de lignes traitées.
-
-Une plateforme de métriques/alertes n’est pas encore intégrée.
-
-## 24. Tests
-
-Tous les tests sont sous `test` :
-
-```text
-test/
-├── unit/
-├── e2e/
-└── integration/
-```
-
-Inventaire actuel :
-
-- 32 fichiers/suites unitaires, 181 cas ;
-- 8 suites e2e, 51 cas ;
-- 3 suites d’intégration, 39 cas dont 27 PostgreSQL/OpenAPI, 10 hybrides ScyllaDB/PostgreSQL et 2 Redis ;
-- total complet : 43 fichiers/suites Jest et 271 cas.
-
-Le 23 août 2026, TypeScript, ESLint, le build et les 232 cas autonomes ont été validés localement. Les 39 tests
-d’intégration réels PostgreSQL, ScyllaDB et Redis ont également réussi. Les suites restent exécutables séparément, sans flag d’activation.
-
-Le test de structure échoue si un futur fichier `.spec.*` ou `.test.*` est créé hors de `test`.
-
-L’audit n’a détecté aucun test obsolète. Les tests proches ne sont pas des doublons inutiles : ils vérifient séparément le service, le contrat HTTP, la transaction repository ou PostgreSQL réel.
-
-L’inventaire complet, test par test, les prérequis et les commandes se trouvent dans [`test.md`](test.md).
-
-## 25. Validation locale
-
-Le dépôt ne contient volontairement plus de workflow CI. La validation complète est exécutée localement dans cet ordre :
-
-1. `pnpm install --frozen-lockfile` ;
-2. `pnpm run db:migrate` sur une base vide ;
-3. `pnpm run lint` ;
-4. `pnpm run typecheck` ;
-5. `pnpm run test:unit` ;
-6. `pnpm run test:e2e` ;
-7. `pnpm run test:integration` avec les trois dépendances réelles ;
-8. smoke test manuel de la santé, de l’OTP réel, de Stripe Checkout en mode test, des webhooks, de l’idempotence, des jetons et du logout.
-
-Pour cette mise à jour, le lint, le typecheck, le build et les 232 cas indépendants de l’infrastructure ont réussi
-le 23 août 2026. Les 27 cas PostgreSQL, les 10 cas ScyllaDB/PostgreSQL et les 2 cas Redis ont également réussi.
-
-Les intégrations ciblent uniquement `histae-dev`, Redis DB 15 et les UUID Scylla temporaires documentés dans `test.md`.
-
-## 26. Ce qui va particulièrement bien
-
-- Le découpage controller/service/repository est cohérent et lisible.
-- Les règles sensibles sont doublées entre application et PostgreSQL lorsque pertinent.
-- Le modèle de consentement ne confond plus contrat, information et consentements facultatifs.
-- La concurrence des consentements et des matchs est traitée transactionnellement.
-- La concurrence des likes réciproques est absorbée par LWT Scylla et l’unicité transactionnelle PostgreSQL.
-- L’effacement couvre réellement les tables de profil, de session et de personnalisation.
-- L’export et l’effacement traversent désormais les deux bases sans annoncer un résultat partiel comme complet.
-- La pagination évite les problèmes classiques d’offset et même la perte de précision des timestamps.
-- Les migrations sont reproductibles et protégées contre les modifications silencieuses.
-- L’exploitation possède maintenant health checks, shutdown propre et worker séparé.
-- La validation locale couvre de vraies instances PostgreSQL, ScyllaDB et Redis.
-- Le parcours OTP réel a été validé de bout en bout avec Sweego, idempotence et rotation des jetons.
-- Les métadonnées d’injection Nest sont protégées par un test de non-régression dédié.
-
-## 27. Limites et risques encore ouverts
-
-### Bloquants fonctionnels
-
-1. Aucun véritable stockage de photo : le profil accepte uniquement une URL HTTPS externe. Cela protège le transport mais ne supprime pas le risque de tracking par l’hébergeur ; un stockage Histae reste nécessaire avant la production.
-
-### Bloquants conformité/organisation
-
-1. Validation juridique/DPO réelle encore nécessaire.
-2. AIPD à décider et probablement à formaliser compte tenu de la géolocalisation et des données sensibles.
-3. Politique des comptes inactifs non définie.
-4. Politique de sauvegarde, purge dans les backups et restauration non documentée techniquement.
-5. Sous-traitants et transferts à documenter.
-
-### Bloquants exploitation
-
-1. Remplacer le Redis Docker local par un Redis managé ou hautement disponible dans l’environnement cible.
-2. Mettre en place métriques, dashboards et alertes.
-3. Tester sauvegarde et restauration PostgreSQL.
-4. Définir et tester sauvegarde/restauration, réparation et montée de version du cluster Scylla.
-5. Ajouter tests de charge et dimensionnement du pool PostgreSQL, du cluster Scylla et du feed hybride.
-6. Effectuer un audit de sécurité externe et des tests d’intrusion.
-7. Mettre en place une rotation opérationnelle des clés/secrets.
-
-### Couverture de test à étendre
-
-- concurrence du second consentement de continuation ;
-- refresh token avec PostgreSQL réel ;
-- retrait des consentements et effacement immédiat associé ;
-- tombstone d’un compte banni ;
-- pagination réelle des matchs et signalements ;
-- maintenance sur un jeu de données expiré complet ;
-- coupure réseau Redis réelle dans un environnement jetable ; le `503` et le partage inter-instances sont déjà couverts ;
-- panne réseau Scylla réelle dans un environnement jetable, la panne simulée et son contrat HTTP étant déjà couverts ;
-- suivi de livraison Sweego par webhook ;
-- test de bout en bout Stripe en sandbox avec la configuration finale du Dashboard, Test Clock et événements de remboursement.
-
-## 28. Feuille de route recommandée
-
-### Avant bêta interne
-
-1. Valider le Sender ID Sweego, effectuer un envoi canari réel et ajouter le suivi de livraison opérationnel.
-2. Implémenter le stockage photo réel, sa validation, sa suppression et ses URL signées.
-3. Déployer Redis managé et l’ordonnanceur de maintenance dans l’environnement cible.
-4. Ajouter métriques et alertes minimales.
-5. Tester la restauration d’une sauvegarde.
-6. Préparer un cluster Scylla jetable pour les essais de panne sans toucher au keyspace de développement.
-
-### Avant bêta publique
-
-1. Obtenir la validation juridique/DPO et finaliser l’AIPD.
-2. Finaliser les textes et écrans mobiles avec les URL/version API.
-3. Réaliser l’audit de sécurité externe.
-4. Exécuter tests de charge et ajuster pool/timeouts.
-5. Définir les comptes inactifs et les sauvegardes.
-
-### Avant monétisation
-
-1. Configurer Product, Prices, portail client et destination webhook dans le compte Stripe de production.
-2. Exécuter le parcours complet dans une sandbox Stripe, y compris SCA, paiement échoué, renouvellement et annulation.
-3. Définir la politique commerciale de relance/grâce et la comptabilisation des remboursements.
-4. Ajouter une réconciliation planifiée Stripe vers `user_subscription` et une alerte sur les webhooks durablement en échec.
-5. Vérifier les règles App Store/Google Play applicables à la vente de fonctionnalités numériques selon les pays distribués.
-
-### Découverte produit
-
-1. Mesurer le taux d’exclusion Scylla, le nombre de lots PostgreSQL par page et les latences p50/p95/p99.
-2. Ajouter anti-automatisation, détection de rafales et limites différenciées selon le plan si le produit le demande.
-3. Décider si `pass` et `like` doivent avoir des TTL distincts après validation produit et juridique.
-4. Ajouter éventuellement une table d’événements/outbox pour analytique, sans l’utiliser comme source de vérité du match.
-5. Revoir l’algorithme de ranking au-delà de la distance seulement après disposer de métriques et de retours utilisateurs.
-
-## 29. Commandes principales
+Commandes autonomes :
 
 ```powershell
-# Installation
-pnpm install
-
-# Migration
-pnpm run db:migrate
-docker compose -f docker-compose.scylla.yml up -d
-$env:SCYLLA_ENABLED = 'true'
-pnpm run scylla:migrate
-
-# Effacement des seules données Scylla de développement
-pnpm run db:reset-scylla
-
-# Développement
-pnpm run start:dev
-
-# Qualité
 pnpm run lint
 pnpm run typecheck
 pnpm run build
-
-# Tests
 pnpm run test:unit
 pnpm run test:e2e
-pnpm run test:integration
-
-# Maintenance planifiée
-$env:MAINTENANCE_MODE = 'worker'
-pnpm run maintenance:run
-
-# Reset destructif, uniquement en développement local
-pnpm run db:reset
+pnpm test
 ```
 
-## 30. Documentation de référence
+Avec PostgreSQL, ScyllaDB et Redis locaux :
 
-- [`README.md`](README.md) : installation, configuration et démarrage ;
-- [`routes.md`](routes.md) : contrat détaillé des routes ;
-- [`test.md`](test.md) : inventaire et rôle de chaque test ;
-- [`docs/retention-policy.md`](docs/retention-policy.md) : matrice de conservation ;
-- [`docs/legal-release-checklist.md`](docs/legal-release-checklist.md) : validation juridique avant production ;
-- `/docs` et `/docs-json` : documentation OpenAPI générée lorsque celle-ci est activée.
+```powershell
+pnpm run test:integration
+```
 
-## 31. Conclusion
+L’inventaire, les prérequis et les derniers résultats se trouvent dans `test.md`. Les autres références sont :
 
-Histae API possède désormais un socle backend sérieux : architecture modulaire, contraintes métier explicites,
-concurrence transactionnelle, découverte hybride PostgreSQL/Scylla, modèle de consentement adapté au mobile,
-effacement inter-bases, rétention automatisée, migrations reproductibles, pagination stable, documentation
-OpenAPI et tests réels PostgreSQL.
+- `routes.md` : contrat HTTP exhaustif ;
+- `.env.example` : variables et valeurs locales documentées ;
+- `docs/security-checkup.md` : portée, corrections et risques résiduels de sécurité ;
+- `docs/retention-policy.md` : durées et opérations de purge ;
+- `docs/legal-release-checklist.md` : décisions juridiques à obtenir avant mise en production ;
+- `AGENTS.md` : invariants de travail pour les futures modifications.
 
-Le principal risque n’est plus la structure interne du code, mais l’exploitation des briques externes : validation réelle du canal SMS, paiement, supervision, sauvegardes, audit de sécurité et validation juridique. La prochaine phase doit donc privilégier ces dépendances de production et étendre les contrats e2e, plutôt que réécrire le socle déjà en place.
+## 9. Ce qu’il reste à faire
+
+### Priorité production
+
+1. Choisir l’architecture cible et tester sauvegarde/restauration de PostgreSQL et du stockage objet, ainsi que
+   réplication, réparation et montée de version ScyllaDB. Prévoir Redis hautement disponible.
+2. Déployer une chaîne TLS complète avec reverse proxy/WAF, IP/CIDR de confiance précis, protection DDoS,
+   gestionnaire de secrets et procédures de rotation/révocation.
+3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
+   accès personnels ou actions de sûreté.
+4. Ajouter métriques, tableaux de bord et alertes sur latences, erreurs, pools, rate limits, OTP, Stripe, S3,
+   Scylla et retard de maintenance. Planifier réellement le worker de maintenance.
+5. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
+   puis gérer explicitement la perte de réponse réseau.
+6. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.
+
+### Validation à étendre
+
+1. Pentest externe authentifié et tests d’abus/charge, notamment OTP, autorisations objet, multipart/HEIC,
+   concurrence de swipes/continuations, webhooks et URLs signées.
+2. Tests PostgreSQL réels supplémentaires sur refresh token, tombstones, retraits de consentement, quota Free
+   concurrent, pagination matchs/signalements et maintenance avec données expirées.
+3. Tests de panne/reprise Redis, Scylla, S3, Sweego et Stripe, plus un parcours Stripe sandbox complet.
+4. Intégrer audit de dépendances, secret scanning et SAST récurrents quand la chaîne CI/CD sera décidée.
+
+### Décisions produit, juridique et exploitation
+
+Finaliser avec le DPO/juriste l’AIPD, les durées des comptes inactifs, les sous-traitants/transferts, la gestion des
+sauvegardes lors d’un effacement et les textes/versionnements de production. Ces choix ne doivent pas être inventés
+dans le code.
+
+À court terme, le meilleur prochain lot côté API est le suivi Sweego et l’observabilité. Le socle métier n’a pas
+besoin d’une nouvelle réécriture générale ; les risques principaux sont désormais l’authentification admin et les
+garanties opérationnelles des services externes.

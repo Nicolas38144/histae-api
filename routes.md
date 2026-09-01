@@ -1,22 +1,21 @@
 # Histae API — routes existantes
 
-Mise à jour : 23 août 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
-
-## Documentation OpenAPI
-
-Lorsque `OPENAPI_ENABLED=true` (par défaut en développement et en test), l’interface Swagger est disponible à `GET /docs` et son document machine à `GET /docs-json`. Ces routes ne sont pas préfixées par `/api` et sont désactivées par défaut en production.
+Mise à jour : 1er septembre 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
 
 ## Conventions
 
+- Ce fichier est la référence du contrat HTTP ; l’API n’expose ni document OpenAPI ni interface Swagger.
 - Les requêtes avec corps utilisent JSON. Les champs non documentés sont refusés.
 - Taille maximale d’un corps JSON : **1 Mio**.
+- L’upload photo est la seule entrée multipart : un fichier de **500 000 octets maximum** dans le champ `photo`.
 - Les erreurs suivent le format `{ "error": { "code", "message" } }`.
 - Une route « authentifiée » requiert `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
 - Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, `POST /auth/logout`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
 - Une route « admin » accepte les rôles `admin` et `superadmin`.
 - `limit` est un entier de 1 à 100 (20 par défaut). Les listes volumineuses renvoient `next_cursor`; passez-le ensuite dans `cursor`. `offset` reste accepté pour compatibilité, mais est déprécié et doit valoir `0` avec un curseur.
 - Un rate limit global par IP est actif et partagé dans Redis entre les instances de l’API. Les clés Redis sont pseudonymisées par HMAC. En cas de dépassement : `429 rate_limit_exceeded` avec l’en-tête `Retry-After` ; Redis indisponible produit `503 rate_limit_unavailable`.
-- `X-Request-ID` est renvoyé dans chaque réponse. Un UUID valide fourni par le client est conservé.
+- `X-Request-ID` est renvoyé dans chaque réponse. Un UUID v4 fourni par le client est conservé ; toute autre valeur est remplacée.
+- Toutes les réponses désactivent le cache et portent des en-têtes défensifs contre le MIME sniffing, l’intégration en frame, les referrers et les permissions navigateur. HSTS est ajouté en production.
 
 ## Authentification
 
@@ -64,8 +63,8 @@ Toutes ces routes exigent un compte `admin` ou `superadmin`. Les consultations d
 | GET | `/admin/me` | — | `200 { "user_id", "role" }`. Sert à vérifier le rôle après l’authentification OTP. |
 | GET | `/admin/metrics` | `revenue_period` optionnel, mêmes valeurs que `/admin/revenue` (défaut : `month_to_date`) | Synthèse initiale des comptes, files de modération, matchs, messages et abonnements, avec le CA estimé de la période initiale. Les indicateurs ne contiennent aucune donnée personnelle. |
 | GET | `/admin/revenue` | `revenue_period=last_7_days\|last_30_days\|month_to_date\|previous_month\|year_to_date\|all_time` (défaut : `month_to_date`) | Recalcule uniquement le CA estimé : nombre d’abonnements Premium mis à jour sur la période × tarif mensuel Premium courant. Cette estimation n’est ni un registre d’encaissements ni un bénéfice comptable. |
-| GET | `/admin/users` | `status=active\|banned`, `role=user\|admin\|superadmin`, `search` optionnels ; `limit`, `cursor` (`offset` déprécié) | `200 { "users": [...], "next_cursor" }`. La recherche porte sur le prénom ou un UUID exact. Aucun téléphone n’est retourné. |
-| GET | `/admin/users/:id` | UUID ; `reason` obligatoire (3 à 500 caractères) | Détail administratif : compte, profil, préférences, traits, dernier état de consentement et fraîcheur de présence sans coordonnées. L’accès est journalisé. |
+| GET | `/admin/users` | `status=active\|banned`, `role=user\|admin\|superadmin`, `search` optionnels ; `limit`, `cursor` (`offset` déprécié) | `200 { "users": [...], "next_cursor" }`. La recherche porte sur le prénom ou un UUID exact. Aucun téléphone n’est retourné et `photo` vaut toujours `null` dans cette collection. |
+| GET | `/admin/users/:id` | UUID ; `reason` obligatoire (3 à 500 caractères) | Détail administratif : compte, profil, préférences, traits, dernier état de consentement et fraîcheur de présence sans coordonnées. L’accès est journalisé avant qu’une éventuelle URL photo signée soit produite. |
 | PATCH | `/admin/users/:id/status` | `{ "is_banned", "reason"?: "…" }`. Le motif est obligatoire pour bannir. | Bannit ou débannit le compte. Un bannissement révoque immédiatement tous ses refresh tokens. Un admin ne peut agir que sur un rôle `user`; un superadmin ne peut agir ni sur lui-même ni sur un autre superadmin. |
 | GET | `/admin/matches/:id/messages` | UUID ; `reason` obligatoire ; `limit`, `cursor` (`offset` déprécié) | Conversation paginée pour modération. L’accès est journalisé pour les deux participants. |
 
@@ -77,13 +76,15 @@ Toutes ces routes sont authentifiées.
 
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
-| GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
-| PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null", "photo"?: "https://…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max ; URL photo HTTPS sans identifiants intégrés : 2 048 octets max. |
+| GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `photo` est absente ou contient une URL privée signée valable cinq minutes. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
+| PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max. La photo n’est pas acceptée par cette route. |
+| PUT | `/users/me/photo` | `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
+| DELETE | `/users/me/photo` | — | `204`, supprime l’objet privé puis efface sa clé du profil. |
 | GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
 | POST | `/users/me/deletion-token` | — | `201 { "confirmation_token", "expires_at" }`. Remplace tout jeton précédent par un secret dédié, hashé en base, à usage unique et valable 10 minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1 à 30 min). |
-| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, supprime le Customer Stripe et annule ses abonnements, puis efface profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, projection d’abonnement et swipes Scylla entrants/sortants ; les factures sont détachées du compte pour leur conservation comptable. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si Stripe ou Scylla ne permet pas un effacement complet : `503 data_erasure_unavailable`. |
+| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, supprime le Customer Stripe et la photo privée, puis efface profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, projection d’abonnement et swipes Scylla entrants/sortants ; les factures sont détachées du compte pour leur conservation comptable. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si un stockage externe indispensable ne permet pas un effacement complet : `503 data_erasure_unavailable`. |
 | GET | `/users/me/continuation-quota` | — | `200` avec le plan effectif, l’usage et, pour un plan limité, `weekly_limit` et `remaining`. |
 
 ### Appareils, push et temps réel
@@ -113,7 +114,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | POST | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | `{ "type": "access\|erasure\|portability\|rectification\|restriction\|objection" }` | `201` avec la demande. Une seule demande ouverte par utilisateur et par type. |
 | GET | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | — | `200 { "requests": [...] }`. |
 | GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, la projection d’abonnement, les factures Stripe rattachées et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
-| GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. |
+| GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. `photo` vaut toujours `null` : bloquer un compte n’accorde aucun accès à sa photo privée. |
 | POST | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. Clôt immédiatement les matchs entre les deux comptes et empêche leur recréation. |
 | DELETE | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. |
 | GET | `/admin/data-subject-requests` | Admin | `status` optionnel | Liste de traitement, 500 résultats maximum. |
@@ -180,4 +181,7 @@ créé que par deux likes réciproques.
 | Méthode | Route | Résultat |
 | --- | --- | --- |
 | GET | `/health/live` | `200 { "status": "ok" }` si le processus répond. |
-| GET | `/health/ready` | `200 { "status": "ready" }` si PostgreSQL, ScyllaDB activée et Redis requis répondent ; sinon `503`. |
+| GET | `/health/ready` | `200 { "status": "ready" }` si PostgreSQL, le bucket objet, ScyllaDB activée et Redis requis répondent ; sinon `503`. |
+
+Les erreurs photo spécifiques sont `400 invalid_photo`, `413 photo_too_large`, `404 profile_not_found`,
+`429 photo_rate_limit_exceeded` et `503 photo_storage_unavailable`.

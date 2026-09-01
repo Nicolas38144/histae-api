@@ -1,12 +1,13 @@
 # Politique de conservation technique
 
-Mise à jour : 16 août 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
+Mise à jour : 1er septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
 
 | Données | Finalité | Déclencheur et durée | Traitement automatique |
 | --- | --- | --- | --- |
 | Compte, profil, préférences, traits | Fourniture du service | Vie du compte ; effacement à la suppression ou au retrait du consentement sensible pour les champs concernés | Suppression des tables de profil ; compte technique anonymisé et désactivé |
+| Photo de profil privée | Présentation du profil après révélation mutuelle | Jusqu’au remplacement, à la suppression de la photo ou à l’effacement du compte | Objet WebP supprimé du stockage compatible S3 et clé privée retirée de PostgreSQL ; aucune URL signée persistée |
 | Position précise | Découverte locale demandée par l’utilisateur | Fraîche pendant 1 h, supprimée après 24 h ; immédiatement supprimée au retrait du consentement de localisation | `PrivacyMaintenanceService` et transaction de retrait |
 | Décisions de swipe (`like`/`pass`) | Exclure les profils déjà évalués et détecter un intérêt réciproque | 1 an fixe (`default_time_to_live = 31536000`) ou effacement immédiat du compte | TTL uniforme sur les deux vues ScyllaDB, avec TWCS par fenêtres de 14 jours ; suppression croisée des partitions acteur/cible lors de l’effacement |
 | OTP | Authentification | Jusqu’à `expires_at` ou consommation | Suppression par lots après expiration |
@@ -44,6 +45,7 @@ communique que les décisions prises par cet utilisateur, jamais l’identité n
 4. Confirmer les destinataires, sous-traitants, transferts, sauvegardes et délais de restauration/purge dans les sauvegardes.
 5. Valider la rédaction exacte des CGU, de la notice de confidentialité et des écrans de consentement mobile.
 6. Confirmer la durée d’un an des décisions `like` et `pass`, ou définir deux durées distinctes si la finalité le justifie.
+7. Choisir la cible objet de production, sa région, son chiffrement, sa redondance et le délai d’effacement des copies et sauvegardes ; SeaweedFS `weed mini` reste limité au développement local.
 
 ## Exécution
 
