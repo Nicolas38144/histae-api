@@ -8,10 +8,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- =========================================
 -- USER ACCOUNT (AUTH / SECURITY)
 -- RGPD :
---   - phone_number_encrypted : chiffrement AES-256 via pgcrypto (Art. 25 — Privacy by design)
---     Chiffrement applicatif : pgp_sym_encrypt(phone_number, app_secret_key)
---     Déchiffrement         : pgp_sym_decrypt(phone_number_encrypted, app_secret_key)
---   - phone_number_hash      : SHA-256 pour lookup/unicité sans stocker le clair
+--   - phone_number_encrypted : AES-256-GCM applicatif avec nonce et tag d'authentification
+--   - phone_number_hash      : HMAC-SHA-256 applicatif pour lookup/unicité sans stocker le clair
 --   - deleted_at             : soft delete RGPD (Art. 17 — droit à l'effacement)
 --   - anonymized_at          : date d'anonymisation effective
 -- Durée de conservation : comptes actifs indéfiniment ; données anonymisées 30 jours après suppression
@@ -19,8 +17,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE user_account (
   user_id               UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   role                  TEXT        NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin', 'superadmin')),
-  phone_number_hash      TEXT        UNIQUE NOT NULL,           -- SHA-256 du numéro, pour lookup
-  phone_number_encrypted BYTEA      NOT NULL,                  -- pgp_sym_encrypt(phone, key) — jamais en clair
+  phone_number_hash      TEXT        UNIQUE NOT NULL,           -- HMAC-SHA-256 applicatif du numéro
+  phone_number_encrypted BYTEA      NOT NULL,                  -- AES-256-GCM applicatif, jamais en clair
   is_banned             BOOLEAN     NOT NULL DEFAULT false,
   banned_at             TIMESTAMPTZ,
   banned_reason         TEXT,
@@ -307,8 +305,13 @@ CREATE TABLE user_profile (
   birthdate   DATE  NOT NULL,
   sex         TEXT  CHECK (sex IN ('male', 'female', 'other')),         -- Art. 9 — requiert consentement
   bio         TEXT,
-  photo       TEXT                                                       -- URL de la photo de profil
+  photo       TEXT,
+  CONSTRAINT chk_user_profile_photo_object_key CHECK (
+    photo IS NULL OR photo ~ '^profile-photos/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/photo[.]webp$'
+  )
 );
+
+COMMENT ON COLUMN user_profile.photo IS 'Private S3 object key for the normalized WebP profile photo; never a public URL.';
 
 
 -- =========================================

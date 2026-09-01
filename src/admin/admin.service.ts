@@ -6,12 +6,17 @@ import { ConfigService } from '../config/config.service';
 import { toPublicMessage, type PublicMessage } from '../matches/matches.mapper';
 import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail, AdminUserRow, AdminUserStatus, RevenuePeriod } from './admin.models';
 import { AdminRepository } from './admin.repository';
+import { PhotosService } from '../photos/photos.service';
 
 type AdminRole = 'admin' | 'superadmin';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly admin: AdminRepository, private readonly config: ConfigService) {}
+  constructor(
+    private readonly admin: AdminRepository,
+    private readonly config: ConfigService,
+    private readonly photos: PhotosService,
+  ) {}
 
   async listUsers(
     status: AdminUserStatus | undefined,
@@ -28,7 +33,10 @@ export class AdminService {
       this.config.legal.termsVersion, this.config.legal.privacyVersion,
     );
     const page = cursorPage(rows, limit, (row) => row.cursor_at);
-    return { items: page.items.map(toAdminUser), next_cursor: page.next_cursor };
+    return {
+      items: page.items.map((row) => toAdminUser(row, null)),
+      next_cursor: page.next_cursor,
+    };
   }
 
   async userDetail(targetId: string, adminId: string, adminRole: AdminRole, rawReason: string): Promise<AdminUserDetail> {
@@ -37,7 +45,7 @@ export class AdminService {
       targetId, adminId, adminRole, reason, this.config.legal.termsVersion, this.config.legal.privacyVersion,
     );
     if (!user) throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
-    return user;
+    return { ...user, photo: await this.photos.urlForKey(user.photo) };
   }
 
   async updateBanStatus(
@@ -78,7 +86,7 @@ export class AdminService {
   }
 }
 
-function toAdminUser(row: AdminUserRow): AdminUser {
+function toAdminUser(row: AdminUserRow, photoUrl: string | null): AdminUser {
   return {
     user_id: row.id,
     role: row.role,
@@ -88,7 +96,7 @@ function toAdminUser(row: AdminUserRow): AdminUser {
     firstname: row.firstname,
     birthdate: row.birthdate === null ? null : row.birthdate instanceof Date ? row.birthdate.toISOString().slice(0, 10) : String(row.birthdate).slice(0, 10),
     sex: row.sex,
-    photo: row.photo,
+    photo: photoUrl,
     plan: row.plan,
     onboarding_complete: row.onboarding_complete,
     reports_received: row.reports_received,

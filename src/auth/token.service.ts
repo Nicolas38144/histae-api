@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { isUUID } from 'class-validator';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ConfigService } from '../config/config.service';
 import type { NewRefreshToken, StoredRefreshToken } from './auth.models';
@@ -28,7 +29,7 @@ export class TokenService {
 
   parseRefreshToken(value: string): { jti: string; hash: string } | undefined {
     const parts = value.split(':');
-    if (parts.length !== 2 || !parts[1] || !/^[0-9a-f-]{36}$/i.test(parts[0])) return undefined;
+    if (parts.length !== 2 || !isUUID(parts[0], '4') || !/^[A-Za-z0-9_-]{43}$/.test(parts[1])) return undefined;
     return { jti: parts[0], hash: createHash('sha256').update(parts[1]).digest('hex') };
   }
 

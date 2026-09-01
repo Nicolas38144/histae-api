@@ -1,9 +1,7 @@
 import { Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
-import { MessageResponseDto } from '../common/dto/responses.dto';
 import type { PublicMessage } from '../matches/matches.mapper';
 import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail } from './admin.models';
 import { AdminService } from './admin.service';
@@ -17,30 +15,21 @@ import {
   ListAdminUsersDto,
   UpdateAdminUserStatusDto,
 } from './dto/admin.dto';
-import {
-  AdminMessagePageResponseDto,
-  AdminMetricsResponseDto,
-  AdminRevenueResponseDto,
-  AdminSessionResponseDto,
-  AdminUserDetailResponseDto,
-  AdminUserPageResponseDto,
-} from './dto/admin.responses';
 
 @Controller('api/admin')
 @UseGuards(JwtActiveGuard, AdminGuard)
-@ApiTags('Administration')
-@ApiBearerAuth()
+
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
 
   @Get('me')
-  @ApiOkResponse({ type: AdminSessionResponseDto })
+
   me(@Req() request: AuthenticatedRequest): { user_id: string; role: 'admin' | 'superadmin' } {
     return { user_id: userId(request), role: request.auth!.account.role as 'admin' | 'superadmin' };
   }
 
   @Get('metrics')
-  @ApiOkResponse({ type: AdminMetricsResponseDto })
+
   metrics(
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminMetricsQueryDto,
   ): Promise<AdminMetrics> {
@@ -48,7 +37,7 @@ export class AdminController {
   }
 
   @Get('revenue')
-  @ApiOkResponse({ type: AdminRevenueResponseDto })
+
   revenue(
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminRevenueQueryDto,
   ): Promise<AdminRevenue> {
@@ -56,7 +45,7 @@ export class AdminController {
   }
 
   @Get('users')
-  @ApiOkResponse({ type: AdminUserPageResponseDto })
+
   async users(
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: ListAdminUsersDto,
   ): Promise<{ users: AdminUser[]; next_cursor: string | null }> {
@@ -65,7 +54,7 @@ export class AdminController {
   }
 
   @Get('users/:id')
-  @ApiOkResponse({ type: AdminUserDetailResponseDto })
+
   user(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: AdminUserIdParamDto,
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminAccessQueryDto,
@@ -75,7 +64,7 @@ export class AdminController {
   }
 
   @Patch('users/:id/status')
-  @ApiOkResponse({ type: MessageResponseDto })
+
   async updateUserStatus(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: AdminUserIdParamDto,
     @ValidatedBody({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) body: UpdateAdminUserStatusDto,
@@ -86,7 +75,7 @@ export class AdminController {
   }
 
   @Get('matches/:id/messages')
-  @ApiOkResponse({ type: AdminMessagePageResponseDto })
+
   async messages(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: AdminMatchIdParamDto,
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminMessageQueryDto,

@@ -150,7 +150,7 @@ export class PrivacyRepository {
 
   async blockedUsers(blockerId: string): Promise<BlockedUser[]> {
     return (await this.database.query<BlockedUser>(`
-      SELECT block.blocked_id AS user_id, profile.firstname, profile.photo, block.created_at AS blocked_at
+      SELECT block.blocked_id AS user_id, profile.firstname, NULL::text AS photo, block.created_at AS blocked_at
       FROM user_block AS block
       LEFT JOIN user_profile AS profile ON profile.user_id = block.blocked_id
       WHERE block.blocker_id = $1

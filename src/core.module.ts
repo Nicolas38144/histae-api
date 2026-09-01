@@ -5,6 +5,10 @@ import { RateLimitService } from './ratelimit/rate-limit.service';
 import { HealthController } from './health.controller';
 import { ScyllaService } from './scylla/scylla.service';
 import { RedisService } from './redis/redis.service';
+import { ObjectStorageService } from './storage/object-storage.service';
+import { PhotoProcessorService } from './photos/photo-processor.service';
+import { PhotosRepository } from './photos/photos.repository';
+import { PhotosService } from './photos/photos.service';
 
 @Global()
 @Module({
@@ -15,7 +19,14 @@ import { RedisService } from './redis/redis.service';
     ScyllaService,
     RedisService,
     RateLimitService,
+    ObjectStorageService,
+    PhotoProcessorService,
+    PhotosRepository,
+    PhotosService,
   ],
-  exports: [ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService],
+  exports: [
+    ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService,
+    ObjectStorageService, PhotoProcessorService, PhotosRepository, PhotosService,
+  ],
 })
 export class CoreModule {}

@@ -20,6 +20,10 @@ dotenv.config();
 const TEST_KEYSPACE = 'histae_discovery';
 const TEST_CONTACT_POINTS = (process.env.SCYLLA_CONTACT_POINTS ?? '127.0.0.1').split(',').map((value) => value.trim());
 const LEGAL_VERSION = 'scylla-integration-v1';
+const photos = {
+  urlForKey: async (key: string | null): Promise<string | null> => key,
+  deleteForAccount: jest.fn().mockResolvedValue(undefined),
+};
 
 assertDevelopmentTargets();
 
@@ -69,13 +73,14 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     discovery = new DiscoveryService(
       new DiscoveryRepository(database as never),
       store,
-      new MatchesService(new MatchesRepository(database as never)),
+      new MatchesService(new MatchesRepository(database as never), photos as never),
       legalConfig() as never,
     );
     privacy = new PrivacyService(
       new PrivacyRepository(database as never),
       store,
       { deleteCustomerForAccount: jest.fn().mockResolvedValue(undefined) } as never,
+      photos as never,
     );
   });
 
@@ -236,7 +241,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     const service = new DiscoveryService(
       new DiscoveryRepository(databaseFor(pool) as never),
       unavailableStore as never,
-      new MatchesService(new MatchesRepository(databaseFor(pool) as never)),
+      new MatchesService(new MatchesRepository(databaseFor(pool) as never), photos as never),
       legalConfig() as never,
     );
 

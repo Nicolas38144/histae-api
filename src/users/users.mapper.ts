@@ -9,7 +9,7 @@ export type PublicProfile = {
   photo?: string;
 };
 
-export function toPublicProfile(row: ProfileRow): PublicProfile {
+export function toPublicProfile(row: ProfileRow, photoUrl: string | null): PublicProfile {
   const profile: PublicProfile = {
     user_id: row.user_id,
     firstname: row.firstname,
@@ -17,6 +17,6 @@ export function toPublicProfile(row: ProfileRow): PublicProfile {
   };
   if (row.sex !== null) profile.sex = row.sex;
   if (row.bio !== null) profile.bio = row.bio;
-  if (row.photo !== null) profile.photo = row.photo;
+  if (photoUrl !== null) profile.photo = photoUrl;
   return profile;
 }

@@ -2,19 +2,15 @@ import { Controller, Get, Headers, HttpCode, HttpStatus, Patch, Post, Req, UseGu
 import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
-import { ApiBearerAuth, ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { ContinuationQuota } from './matches.service';
 import { MatchesService } from './matches.service';
 import { AdminMatchPaginationDto, MatchIdParamDto, MatchMessageParamDto, MatchPaginationDto, ReadMessagesDto, SendMessageDto, UserIdParamDto } from './dto/matches.dto';
 import type { PublicMatch, PublicMessage, PublicUserMatch } from './matches.mapper';
-import { ChatMessageResponseDto, ContinuationQuotaResponseDto, ContinuationResponseDto, MatchPageResponseDto, MessagePageResponseDto, ReadMessagesResponseDto, RevealResponseDto, UserMatchPageResponseDto } from './dto/matches.responses';
-import { MessageResponseDto } from '../common/dto/responses.dto';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
 
 @Controller('api')
-@ApiTags('Matches')
-@ApiBearerAuth()
+
 export class MatchesController {
   constructor(
     private readonly matches: MatchesService,
@@ -24,7 +20,7 @@ export class MatchesController {
 
   @Get('matches/me')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: UserMatchPageResponseDto })
+
   async myMatches(
     @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: MatchPaginationDto,
     @Req() request: AuthenticatedRequest,
@@ -35,7 +31,7 @@ export class MatchesController {
 
   @Get('matches/:userId')
   @UseGuards(JwtActiveGuard, AdminGuard)
-  @ApiOkResponse({ type: MatchPageResponseDto })
+
   async userMatches(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: UserIdParamDto,
     @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: AdminMatchPaginationDto,
@@ -49,7 +45,7 @@ export class MatchesController {
 
   @Patch('matches/:id/reveal')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: RevealResponseDto })
+
   async reveal(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @Req() request: AuthenticatedRequest,
@@ -60,7 +56,7 @@ export class MatchesController {
 
   @Patch('matches/:id/continue')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: ContinuationResponseDto })
+
   async continue(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @Req() request: AuthenticatedRequest,
@@ -71,7 +67,7 @@ export class MatchesController {
 
   @Get('matches/:id/messages')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: MessagePageResponseDto })
+
   async getMessages(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @ValidatedQuery({ code: 'invalid_pagination', message: 'Pagination parameters are invalid.' }) query: MatchPaginationDto,
@@ -84,8 +80,7 @@ export class MatchesController {
   @Post('matches/:id/messages')
   @UseGuards(JwtActiveGuard)
   @HttpCode(HttpStatus.CREATED)
-  @ApiCreatedResponse({ type: ChatMessageResponseDto })
-  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'UUID v4 reused only for retries of the same logical message.' })
+
   async sendMessage(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @ValidatedBody({ code: 'invalid_message_payload', message: 'The message request body is invalid.' }) body: SendMessageDto,
@@ -98,7 +93,7 @@ export class MatchesController {
 
   @Patch('matches/:id/messages/read')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: ReadMessagesResponseDto })
+
   async markReadThrough(
     @ValidatedParams({ code: 'invalid_match_id', message: 'The match ID must be a valid UUID.' }) params: MatchIdParamDto,
     @ValidatedBody({ code: 'invalid_read_payload', message: 'The read request body is invalid.' }) body: ReadMessagesDto,
@@ -110,7 +105,7 @@ export class MatchesController {
 
   @Patch('matches/:id/messages/:msgId/read')
   @UseGuards(JwtActiveGuard)
-  @ApiOkResponse({ type: MessageResponseDto })
+
   async markAsRead(
     @ValidatedParams({ code: 'invalid_message_id', message: 'The message ID must be a valid UUID.' }) params: MatchMessageParamDto,
     @Req() request: AuthenticatedRequest,
@@ -122,13 +117,12 @@ export class MatchesController {
 
 @Controller('api/users/me')
 @UseGuards(JwtActiveGuard)
-@ApiTags('Users')
-@ApiBearerAuth()
+
 export class ContinuationController {
   constructor(private readonly matches: MatchesService) {}
 
   @Get('continuation-quota')
-  @ApiOkResponse({ type: ContinuationQuotaResponseDto })
+
   quota(@Req() request: AuthenticatedRequest): Promise<ContinuationQuota> {
     return this.matches.getContinuationAllowance(userId(request));
   }

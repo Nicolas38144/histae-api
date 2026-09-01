@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../../src/app.module';
 import { AuthRepository } from '../../src/auth/auth.repository';
 import { AdminRepository } from '../../src/admin/admin.repository';
@@ -16,6 +15,7 @@ import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { UsersRepository } from '../../src/users/users.repository';
 import { BillingRepository } from '../../src/billing/billing.repository';
+import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
 process.env.MAINTENANCE_MODE = 'disabled';
@@ -54,6 +54,42 @@ describe('PostgreSQL schema contract', () => {
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
+
+    const photoConstraint = await pool.query<{ definition: string }>(`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'user_profile'::regclass
+        AND conname = 'chk_user_profile_photo_object_key'
+    `);
+    expect(photoConstraint.rows[0]?.definition).toContain('profile-photos/');
+    expect(photoConstraint.rows[0]?.definition).toContain('photo[.]webp');
+  });
+
+  it('applies the consolidated baseline to an isolated empty schema', async () => {
+    const client = await pool.connect();
+    const schema = `migration_check_${randomUUID().replaceAll('-', '')}`;
+    try {
+      await client.query('BEGIN');
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET LOCAL search_path TO ${schema}, public`);
+      const baseline = await loadMigration(migrations[0]);
+      await client.query(baseline.sql);
+
+      const contract = await client.query<{ account: boolean; invoices: boolean; plans: number }>(`
+        SELECT
+          to_regclass($1) IS NOT NULL AS account,
+          to_regclass($2) IS NOT NULL AS invoices,
+          (SELECT count(*)::integer FROM subscription_plan) AS plans
+      `, [`${schema}.user_account`, `${schema}.billing_invoice`]);
+      expect(contract.rows[0]).toEqual({
+        account: true,
+        invoices: true,
+        plans: 2,
+      });
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 
   it('calculates the Premium revenue estimate from the catalog price and selected period', async () => {
@@ -259,52 +295,17 @@ describe('PostgreSQL schema contract', () => {
     }
   });
 
-  it('boots the complete Nest graph and emits request and response OpenAPI schemas', async () => {
+  it('boots the complete Nest graph without exposing documentation routes', async () => {
     process.env.MAINTENANCE_MODE = 'disabled';
     const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), { logger: false });
     try {
       await app.init();
-      const document = SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('test').setVersion('test').build());
-      expect(document.paths['/api/users/me/consents']?.put?.requestBody).toEqual(expect.objectContaining({
-        content: expect.objectContaining({
-          'application/json': expect.objectContaining({ schema: { $ref: '#/components/schemas/UpdateConsentsDto' } }),
-        }),
-      }));
-      expect(document.paths['/api/matches/me']?.get?.responses?.['200']).toEqual(expect.objectContaining({
-        content: expect.objectContaining({
-          'application/json': expect.objectContaining({ schema: { $ref: '#/components/schemas/UserMatchPageResponseDto' } }),
-        }),
-      }));
-      expect(document.paths['/api/feed']?.get?.responses?.['200']).toBeDefined();
-      expect(document.paths['/api/swipes']?.post?.requestBody).toBeDefined();
-      expect(document.paths['/api/auth/otp/send']?.post?.parameters).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
-      ]));
-      expect(document.paths['/api/matches/{id}/messages']?.post?.parameters).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
-      ]));
-      expect(document.paths['/api/auth/me']?.get).toBeDefined();
-      expect(document.paths['/api/users/me/traits']?.get).toBeDefined();
-      expect(document.paths['/api/users/me/discovery-status']?.get).toBeDefined();
-      expect(document.paths['/api/users/me/deletion-token']?.post).toBeDefined();
-      expect(document.paths['/api/users/me/devices']?.post).toBeDefined();
-      expect(document.paths['/api/users/me/events']?.get).toBeDefined();
-      expect(document.paths['/api/users/me/subscription']?.get).toBeDefined();
-      expect(document.paths['/api/users/me/subscription/checkout']?.post?.parameters).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: true }),
-      ]));
-      expect(document.paths['/api/users/me/subscription/portal']?.post).toBeDefined();
-      expect(document.paths['/api/billing/stripe/webhook']?.post).toBeDefined();
-      expect(document.paths['/api/fake-match']).toBeUndefined();
-      expect(document.components?.schemas).toEqual(expect.objectContaining({
-        ConsentStateResponseDto: expect.any(Object),
-        FeedResponseDto: expect.any(Object),
-        SwipeResponseDto: expect.any(Object),
-        PortableDataResponseDto: expect.any(Object),
-        ReportPageResponseDto: expect.any(Object),
-        SubscriptionResponseDto: expect.any(Object),
-        CheckoutSessionResponseDto: expect.any(Object),
-      }));
+      const [html, json] = await Promise.all([
+        app.inject({ method: 'GET', url: '/docs' }),
+        app.inject({ method: 'GET', url: '/docs-json' }),
+      ]);
+      expect(html.statusCode).toBe(404);
+      expect(json.statusCode).toBe(404);
     } finally {
       await app.close();
     }
@@ -708,7 +709,10 @@ describe('PostgreSQL schema contract', () => {
         ($2, $4, $5, 'middle', '2026-08-16T12:00:00.123800Z'),
         ($3, $4, $5, 'oldest', '2026-08-16T12:00:00.123700Z')
     `, [randomUUID(), randomUUID(), randomUUID(), matchId, firstUserId]);
-    const service = new MatchesService(new MatchesRepository(databaseFor(pool) as never));
+    const service = new MatchesService(
+      new MatchesRepository(databaseFor(pool) as never),
+      { urlForKey: async (key: string | null): Promise<string | null> => key } as never,
+    );
 
     try {
       const firstPage = await service.getMessages(matchId, firstUserId, 1, 0);
@@ -820,7 +824,7 @@ describe('PostgreSQL schema contract', () => {
       VALUES ($1, 'admin', $2, $3)
     `, [adminId, `test-${adminId}`, Buffer.alloc(0)]);
     await pool.query(`INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo)
-      VALUES ($1, 'Erase me', '1990-01-01', 'other', 'private bio', 'https://example.test/photo.jpg')`, [userId]);
+      VALUES ($1, 'Erase me', '1990-01-01', 'other', 'private bio', $2)`, [userId, `profile-photos/${userId}/photo.webp`]);
     await pool.query(`INSERT INTO user_preferences (user_id, min_age, max_age, max_distance_km, looking_for)
       VALUES ($1, 18, 99, 50, 'both')`, [userId]);
     await pool.query(`INSERT INTO user_presence (user_id, latitude, longitude) VALUES ($1, 48.85, 2.35)`, [userId]);
@@ -924,8 +928,8 @@ describe('PostgreSQL schema contract', () => {
     await insertAccounts(pool, viewerId, otherId);
     await pool.query(`
       INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo) VALUES
-        ($1, 'Viewer', '1990-01-01', 'male', 'viewer bio', 'https://example.test/viewer.jpg'),
-        ($2, 'Other', '1992-01-01', 'female', 'other bio', 'https://example.test/other.jpg')
+        ($1::uuid, 'Viewer', '1990-01-01', 'male', 'viewer bio', 'profile-photos/' || $1::uuid::text || '/photo.webp'),
+        ($2::uuid, 'Other', '1992-01-01', 'female', 'other bio', 'profile-photos/' || $2::uuid::text || '/photo.webp')
     `, [viewerId, otherId]);
     const repository = new MatchesRepository(databaseFor(pool) as never);
     const match: MatchRow = {
@@ -957,7 +961,7 @@ describe('PostgreSQL schema contract', () => {
       await pool.query('UPDATE match_state SET revealed = true WHERE match_id = $1', [matchId]);
       const revealed = await repository.listDetailedForUser(viewerId, 20, 0);
       expect(revealed[0]).toEqual(expect.objectContaining({
-        other_photo: 'https://example.test/other.jpg',
+        other_photo: `profile-photos/${otherId}/photo.webp`,
         my_revealed: true,
         photos_revealed: true,
       }));

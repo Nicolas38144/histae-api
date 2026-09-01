@@ -1,13 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import * as dotenv from 'dotenv';
 import { parsePhoneKey } from '../crypto/phone-crypto';
+import {
+  billingProvider, commaSeparated, duration, envOr, httpsUrl, identifier, integer,
+  legalUrl, limit, maintenanceMode, objectStorageBucket, objectStorageEndpoint,
+  objectStorageRegion, optionalBoolean, parseEnvironment, required, smsProvider,
+  smsRegion, smsSenderId, stripeReturnUrl, trustProxy, webOrigins,
+  type BillingProvider, type Environment, type LimitPolicy, type MaintenanceMode, type SmsProvider,
+} from './config.parsers';
 
-export type LimitPolicy = { max: number; windowMs: number };
-type Environment = 'development' | 'test' | 'production';
-type MaintenanceMode = 'api' | 'worker' | 'disabled';
-type SmsProvider = 'disabled' | 'sweego';
+export { parseEnvironment } from './config.parsers';
+export type { LimitPolicy } from './config.parsers';
+
 type PushProvider = 'disabled' | 'fcm';
-type BillingProvider = 'disabled' | 'stripe';
 
 type RedisConfig = {
   address: string;
@@ -41,6 +46,15 @@ export type BillingConfig = {
   allowPromotionCodes: boolean;
   timeoutMillis: number;
   maxNetworkRetries: number;
+};
+
+export type ObjectStorageConfig = {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKey: string;
+  secretKey: string;
+  forcePathStyle: boolean;
 };
 
 export type ScyllaConfig = {
@@ -92,6 +106,7 @@ export class ConfigService {
   readonly redis: RedisConfig;
   readonly push: PushConfig;
   readonly billing: BillingConfig;
+  readonly objectStorage: ObjectStorageConfig;
   readonly legal: {
     termsVersion: string;
     privacyVersion: string;
@@ -103,9 +118,8 @@ export class ConfigService {
     locationConsentUrl: string;
     reviewReference: string;
   };
-  readonly trustProxy: boolean;
+  readonly trustProxy: boolean | string[];
   readonly corsOrigins: string[];
-  readonly openApiEnabled: boolean;
   readonly maintenanceMode: MaintenanceMode;
   readonly rateLimit: {
     store: 'memory' | 'redis';
@@ -116,6 +130,7 @@ export class ConfigService {
     message: LimitPolicy;
     dataExport: LimitPolicy;
     report: LimitPolicy;
+    photo: LimitPolicy;
     swipe: LimitPolicy;
     billing: LimitPolicy;
     billingWebhook: LimitPolicy;
@@ -155,6 +170,19 @@ export class ConfigService {
     if (this.env === 'production' && !this.postgres.ssl) {
       throw new Error('config: production PostgreSQL requires TLS');
     }
+    const objectStorageAccessKey = envOr('OBJECT_STORAGE_ACCESS_KEY', this.env === 'production' ? '' : 'histae-dev');
+    const objectStorageSecretKey = envOr('OBJECT_STORAGE_SECRET_KEY', this.env === 'production' ? '' : 'histae-dev-secret-change-me');
+    if (!objectStorageAccessKey || !objectStorageSecretKey) {
+      throw new Error('config: OBJECT_STORAGE_ACCESS_KEY and OBJECT_STORAGE_SECRET_KEY are required');
+    }
+    this.objectStorage = {
+      endpoint: objectStorageEndpoint(envOr('OBJECT_STORAGE_ENDPOINT', 'http://127.0.0.1:8333'), this.env),
+      region: objectStorageRegion(envOr('OBJECT_STORAGE_REGION', 'us-east-1')),
+      bucket: objectStorageBucket(envOr('OBJECT_STORAGE_BUCKET', 'histae-photos')),
+      accessKey: objectStorageAccessKey,
+      secretKey: objectStorageSecretKey,
+      forcePathStyle: optionalBoolean('OBJECT_STORAGE_FORCE_PATH_STYLE', true),
+    };
     const scyllaUsername = envOr('SCYLLA_USERNAME', '');
     const scyllaPassword = process.env.SCYLLA_PASSWORD ?? '';
     if (!!scyllaUsername !== !!scyllaPassword) throw new Error('config: SCYLLA_USERNAME and SCYLLA_PASSWORD must be set together');
@@ -240,9 +268,8 @@ export class ConfigService {
       locationConsentUrl: legalUrl(locationConsentUrl || `${fallbackLegalBase}/location`, 'LOCATION_CONSENT_URL', this.env),
       reviewReference: legalReviewReference || 'not-reviewed-for-production',
     };
-    this.trustProxy = boolean(envOr('TRUST_PROXY', 'false'), 'TRUST_PROXY');
+    this.trustProxy = trustProxy(envOr('TRUST_PROXY', 'false'), this.env);
     this.corsOrigins = webOrigins(envOr('CORS_ORIGINS', this.env === 'development' ? 'http://localhost:5173' : ''), this.env);
-    this.openApiEnabled = optionalBoolean('OPENAPI_ENABLED', this.env !== 'production');
     this.maintenanceMode = maintenanceMode(envOr('MAINTENANCE_MODE', this.env === 'production' ? 'disabled' : 'api'));
     const store = envOr('RATE_LIMIT_STORE', 'memory').toLowerCase();
     if (store !== 'memory' && store !== 'redis') throw new Error('config: RATE_LIMIT_STORE must be memory or redis');
@@ -335,6 +362,7 @@ export class ConfigService {
       message: limit('RATE_LIMIT_MESSAGE', 60, '1m'),
       dataExport: limit('RATE_LIMIT_DATA_EXPORT', 5, '1h'),
       report: limit('RATE_LIMIT_REPORT', 5, '1h'),
+      photo: limit('RATE_LIMIT_PHOTO', 10, '1h'),
       swipe: limit('RATE_LIMIT_SWIPE', 120, '1m'),
       billing: limit('RATE_LIMIT_BILLING', 10, '1m'),
       billingWebhook: limit('RATE_LIMIT_BILLING_WEBHOOK', 300, '1m'),
@@ -347,143 +375,4 @@ let sharedConfig: ConfigService | undefined;
 export function applicationConfig(): ConfigService {
   sharedConfig ??= new ConfigService();
   return sharedConfig;
-}
-
-function required(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`config: required environment variable ${JSON.stringify(name)} is not set`);
-  return value;
-}
-
-export function parseEnvironment(value: string | undefined): Environment {
-  const environment = value?.trim().toLowerCase();
-  if (environment === 'development' || environment === 'test' || environment === 'production') return environment;
-  throw new Error('config: ENV must be development, test, or production');
-}
-
-function envOr(name: string, fallback: string): string {
-  const value = process.env[name]?.trim();
-  return value || fallback;
-}
-
-function commaSeparated(value: string, name: string): string[] {
-  const values = value.split(',').map((item) => item.trim()).filter(Boolean);
-  if (!values.length || values.some((item) => /[\s/]/.test(item))) throw new Error(`config: invalid ${name}`);
-  return values;
-}
-
-function identifier(value: string, name: string): string {
-  if (!/^[a-z][a-z0-9_]{0,47}$/.test(value)) throw new Error(`config: invalid ${name}`);
-  return value;
-}
-
-function integer(value: string, name: string, min: number, max = Number.MAX_SAFE_INTEGER): number {
-  if (!/^[0-9]+$/.test(value)) throw new Error(`config: invalid ${name}`);
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) throw new Error(`config: invalid ${name}`);
-  return parsed;
-}
-
-function boolean(value: string, name: string): boolean {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  throw new Error(`config: invalid ${name}`);
-}
-
-function optionalBoolean(name: string, fallback: boolean): boolean {
-  const value = process.env[name]?.trim();
-  return value === undefined || value === '' ? fallback : boolean(value, name);
-}
-
-function maintenanceMode(value: string): MaintenanceMode {
-  if (value === 'api' || value === 'worker' || value === 'disabled') return value;
-  throw new Error('config: MAINTENANCE_MODE must be api, worker, or disabled');
-}
-
-function smsProvider(value: string): SmsProvider {
-  if (value === 'disabled' || value === 'sweego') return value;
-  throw new Error('config: SMS_PROVIDER must be disabled or sweego');
-}
-
-function billingProvider(value: string): BillingProvider {
-  if (value === 'disabled' || value === 'stripe') return value;
-  throw new Error('config: BILLING_PROVIDER must be disabled or stripe');
-}
-
-function webOrigins(value: string, environment: Environment): string[] {
-  if (!value.trim()) return [];
-  const origins = value.split(',').map((item) => item.trim()).filter(Boolean);
-  if (new Set(origins).size !== origins.length) throw new Error('config: CORS_ORIGINS contains duplicates');
-  for (const origin of origins) {
-    try {
-      const parsed = new URL(origin);
-      if (parsed.origin !== origin || (parsed.protocol !== 'https:' && (environment === 'production' || parsed.protocol !== 'http:'))) throw new Error();
-    } catch {
-      throw new Error('config: CORS_ORIGINS must contain comma-separated HTTP(S) origins and HTTPS in production');
-    }
-  }
-  return origins;
-}
-
-function smsSenderId(value: string): string {
-  if (!/^[A-Za-z0-9]{3,11}$/.test(value)) {
-    throw new Error('config: SWEEGO_SMS_SENDER_ID must contain 3 to 11 letters or digits');
-  }
-  return value;
-}
-
-function smsRegion(value: string): string {
-  const normalized = value.toUpperCase();
-  if (!/^[A-Z]{2}$/.test(normalized)) throw new Error('config: SWEEGO_SMS_REGION must be an ISO 3166-1 alpha-2 code');
-  if (normalized !== 'FR') throw new Error('config: SWEEGO_SMS_REGION must be FR while OTP delivery is restricted to French phone numbers');
-  return normalized;
-}
-
-function httpsUrl(value: string, name: string): string {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== 'https:') throw new Error('invalid protocol');
-    return parsed.toString();
-  } catch {
-    throw new Error(`config: ${name} must be an absolute HTTPS URL`);
-  }
-}
-
-function stripeReturnUrl(value: string, name: string, checkoutSuccess = false): string {
-  if (checkoutSuccess && !value.includes('{CHECKOUT_SESSION_ID}')) {
-    throw new Error(`config: ${name} must contain the literal {CHECKOUT_SESSION_ID} placeholder`);
-  }
-  try {
-    const parsed = new URL(value.replace('{CHECKOUT_SESSION_ID}', 'cs_test_validation'));
-    if (parsed.protocol !== 'https:') throw new Error('invalid protocol');
-    return value;
-  } catch {
-    throw new Error(`config: ${name} must be an absolute HTTPS URL`);
-  }
-}
-
-function legalUrl(value: string, name: string, environment: Environment): string {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== 'https:' && (environment === 'production' || parsed.protocol !== 'http:')) throw new Error('invalid protocol');
-    return parsed.toString();
-  } catch {
-    throw new Error(`config: ${name} must be an absolute HTTP(S) URL and HTTPS in production`);
-  }
-}
-
-function duration(value: string, name: string): number {
-  const match = /^(\d+)(ms|s|m|h)$/.exec(value);
-  if (!match) throw new Error(`config: invalid ${name}`);
-  const multiplier = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[match[2] as 'ms' | 's' | 'm' | 'h'];
-  const result = Number(match[1]) * multiplier;
-  if (!Number.isSafeInteger(result) || result <= 0) throw new Error(`config: invalid ${name}`);
-  return result;
-}
-
-function limit(prefix: string, defaultMax: number, defaultWindow: string): LimitPolicy {
-  return {
-    max: integer(envOr(prefix, String(defaultMax)), prefix, 1),
-    windowMs: duration(envOr(`${prefix}_WINDOW`, defaultWindow), `${prefix}_WINDOW`),
-  };
 }

@@ -4,17 +4,14 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
-import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { PublicMatch } from '../matches/matches.mapper';
 import { CreateSwipeDto, FeedQueryDto } from './dto/discovery.dto';
-import { DiscoveryStatusResponseDto, FeedResponseDto, SwipeResponseDto } from './dto/discovery.responses';
 import type { DiscoveryStatus, FeedCandidate, SwipeDecision } from './discovery.models';
 import { DiscoveryService } from './discovery.service';
 
 @Controller('api')
 @UseGuards(JwtActiveGuard)
-@ApiTags('Discovery')
-@ApiBearerAuth()
+
 export class DiscoveryController {
   constructor(
     private readonly discovery: DiscoveryService,
@@ -23,13 +20,13 @@ export class DiscoveryController {
   ) {}
 
   @Get('users/me/discovery-status')
-  @ApiOkResponse({ type: DiscoveryStatusResponseDto })
+
   status(@Req() request: AuthenticatedRequest): Promise<DiscoveryStatus> {
     return this.discovery.status(userId(request));
   }
 
   @Post('swipes')
-  @ApiCreatedResponse({ type: SwipeResponseDto })
+
   async swipe(
     @ValidatedBody({ code: 'invalid_swipe_payload', message: 'The swipe request body is invalid.' }) body: CreateSwipeDto,
     @Req() request: AuthenticatedRequest,
@@ -39,7 +36,7 @@ export class DiscoveryController {
   }
 
   @Get('feed')
-  @ApiOkResponse({ type: FeedResponseDto })
+
   async feed(
     @ValidatedQuery({ code: 'invalid_feed_query', message: 'The feed query is invalid.' }) query: FeedQueryDto,
     @Req() request: AuthenticatedRequest,

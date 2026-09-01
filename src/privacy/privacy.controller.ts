@@ -1,5 +1,4 @@
 import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { AllowIncompleteOnboarding } from '../auth/onboarding.decorator';
@@ -7,15 +6,12 @@ import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/v
 import { CreateDataSubjectRequestDto, DataAccessLogQueryDto, ListDataSubjectRequestsDto, PrivacyRequestIdParamDto, UpdateDataSubjectRequestDto, UserIdParamDto } from './dto/privacy.dto';
 import type { BlockedUser, DataAccessLogRow, DataSubjectRequestRow, PortableUserData } from './privacy.models';
 import { PrivacyService } from './privacy.service';
-import { BlockedUserListResponseDto, DataAccessLogListResponseDto, DataSubjectRequestListResponseDto, DataSubjectRequestResponseDto, PortableDataResponseDto } from './dto/privacy.responses';
-import { MessageResponseDto } from '../common/dto/responses.dto';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
 
 @Controller('api')
 @UseGuards(JwtActiveGuard)
-@ApiTags('Privacy')
-@ApiBearerAuth()
+
 export class PrivacyController {
   constructor(
     private readonly privacy: PrivacyService,
@@ -25,7 +21,7 @@ export class PrivacyController {
 
   @Post('users/me/data-subject-requests')
   @AllowIncompleteOnboarding()
-  @ApiCreatedResponse({ type: DataSubjectRequestResponseDto })
+
   async createRequest(
     @ValidatedBody({ code: 'invalid_data_request', message: 'The data subject request is invalid.' }) body: CreateDataSubjectRequestDto,
     @Req() request: AuthenticatedRequest,
@@ -35,28 +31,28 @@ export class PrivacyController {
 
   @Get('users/me/data-subject-requests')
   @AllowIncompleteOnboarding()
-  @ApiOkResponse({ type: DataSubjectRequestListResponseDto })
+
   async myRequests(@Req() request: AuthenticatedRequest): Promise<{ requests: DataSubjectRequestRow[] }> {
     return { requests: await this.privacy.requestsForUser(userId(request)) };
   }
 
   @Get('users/me/data-export')
   @AllowIncompleteOnboarding()
-  @ApiOkResponse({ type: PortableDataResponseDto })
+
   async export(@Req() request: AuthenticatedRequest): Promise<PortableUserData> {
     await this.limits.enforce('data-export', userId(request), this.config.rateLimit.dataExport, 'data_export_rate_limit_exceeded');
     return this.privacy.exportUserData(userId(request));
   }
 
   @Get('users/me/blocks')
-  @ApiOkResponse({ type: BlockedUserListResponseDto })
+
   async blocks(@Req() request: AuthenticatedRequest): Promise<{ blocks: BlockedUser[] }> {
     return { blocks: await this.privacy.blockedUsers(userId(request)) };
   }
 
   @Post('users/me/blocks/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiNoContentResponse()
+
   async block(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: UserIdParamDto,
     @Req() request: AuthenticatedRequest,
@@ -66,7 +62,7 @@ export class PrivacyController {
 
   @Delete('users/me/blocks/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiNoContentResponse()
+
   async unblock(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: UserIdParamDto,
     @Req() request: AuthenticatedRequest,
@@ -76,7 +72,7 @@ export class PrivacyController {
 
   @Get('admin/data-subject-requests')
   @UseGuards(AdminGuard)
-  @ApiOkResponse({ type: DataSubjectRequestListResponseDto })
+
   async requests(
     @ValidatedQuery({ code: 'invalid_data_request_query', message: 'The data subject request query is invalid.' }) query: ListDataSubjectRequestsDto,
   ): Promise<{ requests: DataSubjectRequestRow[] }> {
@@ -85,7 +81,7 @@ export class PrivacyController {
 
   @Patch('admin/data-subject-requests/:id')
   @UseGuards(AdminGuard)
-  @ApiOkResponse({ type: MessageResponseDto })
+
   async updateRequest(
     @ValidatedParams({ code: 'invalid_data_request_id', message: 'The data subject request ID is invalid.' }) params: PrivacyRequestIdParamDto,
     @ValidatedBody({ code: 'invalid_data_request', message: 'The data subject request is invalid.' }) body: UpdateDataSubjectRequestDto,
@@ -97,7 +93,7 @@ export class PrivacyController {
 
   @Get('admin/data-access-logs')
   @UseGuards(AdminGuard)
-  @ApiOkResponse({ type: DataAccessLogListResponseDto })
+
   async logs(
     @ValidatedQuery({ code: 'invalid_data_access_query', message: 'The data access query is invalid.' }) query: DataAccessLogQueryDto,
   ): Promise<{ logs: DataAccessLogRow[] }> {

@@ -79,7 +79,7 @@ export function toPublicMessage(row: MessageRow): PublicMessage {
   return message;
 }
 
-export function toPublicUserMatch(row: UserMatchRow): PublicUserMatch {
+export function toPublicUserMatch(row: UserMatchRow, photoUrl: string | null): PublicUserMatch {
   const match: PublicUserMatch = {
     id: row.id,
     status: row.status,
@@ -92,7 +92,7 @@ export function toPublicUserMatch(row: UserMatchRow): PublicUserMatch {
       sex: row.other_sex,
       bio: row.other_bio,
       traits: row.other_traits,
-      photo: row.other_photo,
+      photo: photoUrl,
     },
     my_revealed: row.my_revealed,
     photos_revealed: row.photos_revealed,

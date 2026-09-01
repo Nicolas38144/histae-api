@@ -21,7 +21,7 @@ export class AdminRepository {
   ): Promise<AdminUserRow[]> {
     return (await this.database.query<AdminUserRow>(`
       SELECT account.user_id AS id, account.role, account.is_banned, account.banned_at, account.created_at,
-        profile.firstname, profile.birthdate, profile.sex, profile.photo,
+        profile.firstname, profile.birthdate, profile.sex, NULL::text AS photo,
         COALESCE(subscription.plan, 'free') AS plan,
         (
           account.role <> 'user' OR (

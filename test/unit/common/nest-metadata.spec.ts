@@ -48,10 +48,14 @@ import { BillingController, StripeWebhookController } from '../../../src/billing
 import { BillingRepository } from '../../../src/billing/billing.repository';
 import { BillingService } from '../../../src/billing/billing.service';
 import { StripeGateway } from '../../../src/billing/stripe.gateway';
+import { ObjectStorageService } from '../../../src/storage/object-storage.service';
+import { PhotosRepository } from '../../../src/photos/photos.repository';
+import { PhotosService } from '../../../src/photos/photos.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
-  DatabaseService, ScyllaService, RedisService, HealthController, RateLimitService,
+  DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
+  PhotosRepository, PhotosService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,

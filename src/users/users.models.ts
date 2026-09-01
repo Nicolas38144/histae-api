@@ -21,7 +21,7 @@ export type PreferencesRow = {
   looking_for: LookingFor;
 };
 
-export type ProfileInput = { firstname: string; birthdate: string; sex: Sex | null; bio: string | null; photo: string | null };
+export type ProfileInput = { firstname: string; birthdate: string; sex: Sex | null; bio: string | null };
 export type PreferencesInput = { min_age: number; max_age: number; max_distance_km: number; looking_for: LookingFor };
 export type PresenceInput = { latitude: number; longitude: number };
 

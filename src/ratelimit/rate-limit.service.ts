@@ -9,6 +9,7 @@ type MemoryEntry = { count: number; expiresAt: number };
 @Injectable()
 export class RateLimitService {
   private readonly memory = new Map<string, MemoryEntry>();
+  private memoryOperationsSinceSweep = 0;
 
   constructor(private readonly config: ConfigService, private readonly redis: RedisService) {}
 
@@ -29,11 +30,21 @@ export class RateLimitService {
 
   private memoryAllow(key: string, policy: LimitPolicy): number | undefined {
     const now = Date.now();
+    this.sweepExpiredMemoryEntries(now);
     let entry = this.memory.get(key);
     if (!entry || now >= entry.expiresAt) entry = { count: 0, expiresAt: now + policy.windowMs };
     entry.count += 1;
     this.memory.set(key, entry);
     return entry.count > policy.max ? entry.expiresAt - now : undefined;
+  }
+
+  private sweepExpiredMemoryEntries(now: number): void {
+    this.memoryOperationsSinceSweep += 1;
+    if (this.memoryOperationsSinceSweep < 256) return;
+    this.memoryOperationsSinceSweep = 0;
+    for (const [key, entry] of this.memory) {
+      if (entry.expiresAt <= now) this.memory.delete(key);
+    }
   }
 
   private async redisAllow(key: string, policy: LimitPolicy): Promise<number | undefined> {

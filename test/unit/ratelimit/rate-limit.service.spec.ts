@@ -45,5 +45,22 @@ describe('RateLimitService', () => {
       .rejects.toMatchObject({ status: 429, code: 'test_rate_limit' });
     expect(redis.incrementFixedWindow).not.toHaveBeenCalled();
   });
-});
 
+  it('periodically removes expired in-memory identifiers', async () => {
+    const redis = { enabled: false, incrementFixedWindow: jest.fn() };
+    const limits = new RateLimitService(config as never, redis as never);
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      for (let index = 0; index < 255; index += 1) {
+        await limits.enforce('test', `expired-${index}`, { max: 1, windowMs: 1 }, 'test_rate_limit');
+      }
+      now.mockReturnValue(2_000);
+      await limits.enforce('test', 'current', { max: 1, windowMs: 1_000 }, 'test_rate_limit');
+
+      const memory = (limits as unknown as { memory: Map<string, unknown> }).memory;
+      expect(memory.size).toBe(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});

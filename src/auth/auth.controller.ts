@@ -1,8 +1,6 @@
 import { Controller, Get, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { ApiAcceptedResponse, ApiHeader, ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ValidatedBody } from '../common/http/validated-request.decorator';
-import { MessageResponseDto, SessionResponseDto, TokenPairResponseDto } from '../common/dto/responses.dto';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { JwtActiveGuard, userId } from './auth.guard';
@@ -13,7 +11,7 @@ import { AllowIncompleteOnboarding } from './onboarding.decorator';
 import { OtpService } from './otp.service';
 
 @Controller('api/auth')
-@ApiTags('Authentication')
+
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
@@ -25,7 +23,7 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtActiveGuard)
   @AllowIncompleteOnboarding()
-  @ApiOkResponse({ type: SessionResponseDto })
+
   me(@Req() request: AuthenticatedRequest): { user_id: string; onboarding_complete: boolean } {
     return {
       user_id: userId(request),
@@ -35,8 +33,7 @@ export class AuthController {
 
   @Post('otp/send')
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'A new UUID v4 for the logical send request.' })
-  @ApiAcceptedResponse({ type: MessageResponseDto })
+
   async sendOtp(
     @ValidatedBody() body: SendOtpDto,
     @Req() request: FastifyRequest,
@@ -50,7 +47,7 @@ export class AuthController {
 
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
-  @ApiOkResponse({ type: TokenPairResponseDto })
+
   async verifyOtp(
     @ValidatedBody() body: VerifyOtpDto,
     @Req() request: FastifyRequest,
@@ -63,7 +60,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOkResponse({ type: TokenPairResponseDto })
+
   async refresh(
     @ValidatedBody() body: RefreshTokenDto,
     @Req() request: FastifyRequest,
@@ -76,7 +73,7 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtActiveGuard)
   @AllowIncompleteOnboarding()
-  @ApiNoContentResponse()
+
   async logout(@ValidatedBody() body: LogoutDto, @Req() request: AuthenticatedRequest): Promise<void> {
     await this.auth.logout(userId(request), body.refresh_token, body.device_id);
   }

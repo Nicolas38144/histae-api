@@ -2,24 +2,47 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export const migrations = [
-  { version: '001_api_contract.sql', filename: '001_api_contract.sql' },
-  { version: '002_privacy_and_schema_parity.sql', filename: '002_privacy_and_schema_parity.sql' },
-  { version: '003_legal_choice_semantics.sql', filename: '003_legal_choice_semantics.sql' },
-  { version: '004_consent_event_order.sql', filename: '004_consent_event_order.sql' },
-  { version: '005_strict_profile_age.sql', filename: '005_strict_profile_age.sql' },
-  { version: '006_privacy_workflows.sql', filename: '006_privacy_workflows.sql' },
-  { version: '007_keyset_pagination_indexes.sql', filename: '007_keyset_pagination_indexes.sql' },
-  { version: '008_index_cleanup.sql', filename: '008_index_cleanup.sql' },
-  { version: '009_otp_sms_delivery.sql', filename: '009_otp_sms_delivery.sql' },
-  { version: '010_single_usable_otp.sql', filename: '010_single_usable_otp.sql' },
-  { version: '011_mobile_client_contract.sql', filename: '011_mobile_client_contract.sql' },
-  { version: '012_stripe_billing.sql', filename: '012_stripe_billing.sql' },
-  { version: '013_preserve_stripe_trial_history.sql', filename: '013_preserve_stripe_trial_history.sql' },
-  { version: '014_billing_event_order.sql', filename: '014_billing_event_order.sql' },
+export const CONSOLIDATED_BASELINE_VERSION = '001_baseline_20260901';
+
+export const LEGACY_MIGRATION_VERSIONS = [
+  '001_api_contract.sql',
+  '002_privacy_and_schema_parity.sql',
+  '003_legal_choice_semantics.sql',
+  '004_consent_event_order.sql',
+  '005_strict_profile_age.sql',
+  '006_privacy_workflows.sql',
+  '007_keyset_pagination_indexes.sql',
+  '008_index_cleanup.sql',
+  '009_otp_sms_delivery.sql',
+  '010_single_usable_otp.sql',
+  '011_mobile_client_contract.sql',
+  '012_stripe_billing.sql',
+  '013_preserve_stripe_trial_history.sql',
+  '014_billing_event_order.sql',
+  '015_private_profile_photos.sql',
 ] as const;
 
+export const migrations = [{
+  version: CONSOLIDATED_BASELINE_VERSION,
+  filenames: ['schema_postgres.sql', 'insert_postgres.sql'],
+}] as const;
+
+export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';
+
+export function legacyHistoryState(appliedVersions: readonly string[]): LegacyHistoryState {
+  const applied = new Set(appliedVersions);
+  const count = LEGACY_MIGRATION_VERSIONS.filter((version) => applied.has(version)).length;
+  if (count === 0) return 'fresh';
+  return count === LEGACY_MIGRATION_VERSIONS.length ? 'complete' : 'partial';
+}
+
 export async function loadMigration(migration: typeof migrations[number]): Promise<{ sql: string; checksum: string }> {
-  const sql = await readFile(join(process.cwd(), 'db', migration.filename), 'utf8');
+  const sources = await Promise.all(migration.filenames.map(async (filename) => ({
+    filename,
+    contents: await readFile(join(process.cwd(), 'db', filename), 'utf8'),
+  })));
+  const sql = sources
+    .map(({ filename, contents }) => `-- source: ${filename}\n${contents.trim()}\n`)
+    .join('\n');
   return { sql, checksum: createHash('sha256').update(sql).digest('hex') };
 }

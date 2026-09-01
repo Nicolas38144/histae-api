@@ -25,6 +25,8 @@ import {
 } from './users.models';
 import { UsersRepository } from './users.repository';
 import { BillingService } from '../billing/billing.service';
+import { PhotosService } from '../photos/photos.service';
+import type { UploadedPhoto } from '../photos/photo-processor.service';
 
 export { ConsentChange, PreferencesInput, PresenceInput, ProfileInput } from './users.models';
 
@@ -35,12 +37,13 @@ export class UsersService {
     private readonly config: ConfigService,
     private readonly discovery: DiscoveryStore,
     private readonly billing: BillingService,
+    private readonly photos: PhotosService,
   ) {}
 
   async getProfile(userId: string): Promise<PublicProfile> {
     const profile = await this.users.findProfile(userId);
     if (!profile) throw apiError(404, 'profile_not_found', 'The account exists, but its profile has not been completed yet.');
-    return toPublicProfile(profile);
+    return toPublicProfile(profile, await this.photos.urlForKey(profile.photo));
   }
 
   async updateProfile(userId: string, input: ProfileInput): Promise<void> {
@@ -57,13 +60,17 @@ export class UsersService {
       : ['terms_of_service_acceptance', 'privacy_notice_acknowledgement', 'sensitive_data_consent']);
     const bio = input.bio === null ? null : input.bio.trim();
     if (bio !== null && Buffer.byteLength(bio) > 2_000) throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
-    const photo = input.photo === null ? null : input.photo.trim();
-    if (photo !== null && (Buffer.byteLength(photo) > 2_048 || !isSafePhotoUrl(photo))) {
-      throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
-    }
-    if (!await this.users.upsertProfile(userId, { firstname, birthdate: input.birthdate, sex: input.sex, bio, photo })) {
+    if (!await this.users.upsertProfile(userId, { firstname, birthdate: input.birthdate, sex: input.sex, bio })) {
       throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
     }
+  }
+
+  uploadPhoto(userId: string, upload: UploadedPhoto): Promise<string> {
+    return this.photos.upload(userId, upload);
+  }
+
+  deletePhoto(userId: string): Promise<void> {
+    return this.photos.delete(userId);
   }
 
   async getPreferences(userId: string): Promise<PreferencesRow> {
@@ -106,6 +113,7 @@ export class UsersService {
   async anonymize(userId: string): Promise<void> {
     try {
       await this.billing.deleteCustomerForAccount(userId);
+      await this.photos.deleteForAccount(userId);
       await this.discovery.deleteUserData(userId);
     } catch (error) {
       if (error instanceof ScyllaUnavailableError) {
@@ -225,13 +233,4 @@ function isAdult(birthdate: { year: number; month: number; day: number }): boole
   if (birthdate.year !== thresholdYear) return birthdate.year < thresholdYear;
   const currentMonth = now.getUTCMonth() + 1;
   return birthdate.month < currentMonth || (birthdate.month === currentMonth && birthdate.day <= now.getUTCDate());
-}
-
-function isSafePhotoUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' && !!parsed.host && !parsed.username && !parsed.password;
-  } catch {
-    return false;
-  }
 }

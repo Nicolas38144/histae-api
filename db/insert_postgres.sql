@@ -55,7 +55,7 @@ ON CONFLICT (name) DO NOTHING;
 -- The UUIDs are deterministic, so rerunning the seed updates the same fake
 -- users instead of creating duplicates. Phone values are non-reversible seed
 -- placeholders and intentionally cannot be used to authenticate through the
--- mobile OTP flow. Fake avatars use generated illustrations, not real people.
+-- mobile OTP flow. Fake profiles intentionally have no stored photo.
 --
 -- All four current legal choices are recorded. There is deliberately no
 -- marketing consent because Histae performs no marketing processing.
@@ -167,15 +167,14 @@ SELECT
   END,
   seed_values.bios[1 + ((seed_number - 1) % array_length(seed_values.bios, 1))]
     || ' J''aime ' || seed_values.interests[1 + ((seed_number * 3 - 1) % array_length(seed_values.interests, 1))] || '.',
-  'https://api.dicebear.com/9.x/personas/png?seed=histae-fake-' || lpad(seed_number::text, 3, '0')
+  NULL
 FROM fake_users
 CROSS JOIN seed_values
 ON CONFLICT (user_id) DO UPDATE SET
   firstname = EXCLUDED.firstname,
   birthdate = EXCLUDED.birthdate,
   sex = EXCLUDED.sex,
-  bio = EXCLUDED.bio,
-  photo = EXCLUDED.photo;
+  bio = EXCLUDED.bio;
 
 WITH fake_users AS (
   SELECT
@@ -378,7 +377,6 @@ BEGIN
       AND user_account.is_banned = false
       AND user_profile.sex IS NOT NULL
       AND user_profile.bio IS NOT NULL
-      AND user_profile.photo IS NOT NULL
       AND user_presence.is_location_fresh = true
       AND consent_counts.consent_count = 4
       AND trait_counts.trait_count >= 3;

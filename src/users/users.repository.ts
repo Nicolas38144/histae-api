@@ -18,13 +18,13 @@ export class UsersRepository {
 
   async upsertProfile(userId: string, input: ProfileInput): Promise<boolean> {
     const result = await this.database.query(`
-      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo)
-      SELECT $1, $2, $3, $4, $5, $6 WHERE EXISTS (
+      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
+      SELECT $1, $2, $3, $4, $5 WHERE EXISTS (
         SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
       )
       ON CONFLICT (user_id) DO UPDATE SET firstname = EXCLUDED.firstname, birthdate = EXCLUDED.birthdate,
-        sex = EXCLUDED.sex, bio = EXCLUDED.bio, photo = EXCLUDED.photo
-    `, [userId, input.firstname, input.birthdate, input.sex, input.bio, input.photo]);
+        sex = EXCLUDED.sex, bio = EXCLUDED.bio
+    `, [userId, input.firstname, input.birthdate, input.sex, input.bio]);
     return result.rowCount !== 0;
   }
 

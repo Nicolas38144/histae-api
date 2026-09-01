@@ -2,6 +2,7 @@ import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
+import multipart from '@fastify/multipart';
 import { JwtActiveGuard } from '../../src/auth/auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
@@ -11,6 +12,8 @@ import { TraitsController } from '../../src/traits/traits.controller';
 import { TraitsService } from '../../src/traits/traits.service';
 import { UsersController } from '../../src/users/users.controller';
 import { UsersService } from '../../src/users/users.service';
+import { RateLimitService } from '../../src/ratelimit/rate-limit.service';
+import { ConfigService } from '../../src/config/config.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const TRAIT_ID = '22222222-2222-4222-8222-222222222222';
@@ -51,6 +54,8 @@ describe('Users HTTP contract', () => {
     getConsents: jest.fn().mockResolvedValue(consentState),
     updateConsents: jest.fn().mockResolvedValue(consentState),
     updateProfile: jest.fn().mockResolvedValue(undefined),
+    uploadPhoto: jest.fn().mockResolvedValue('https://storage.example.test/signed-photo.webp'),
+    deletePhoto: jest.fn().mockResolvedValue(undefined),
     getPreferences: jest.fn().mockResolvedValue(preferences),
     updatePreferences: jest.fn().mockResolvedValue(undefined),
     updatePresence: jest.fn().mockResolvedValue(undefined),
@@ -78,6 +83,8 @@ describe('Users HTTP contract', () => {
       features: [],
     }]),
   };
+  const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
+  const config = { rateLimit: { photo: { max: 10, windowMs: 3_600_000 } } };
   const activeGuard: CanActivate = {
     canActivate(context: ExecutionContext): boolean {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -96,9 +103,12 @@ describe('Users HTTP contract', () => {
         { provide: UsersService, useValue: users },
         { provide: TraitsService, useValue: traits },
         { provide: PlansService, useValue: plans },
+        { provide: RateLimitService, useValue: limits },
+        { provide: ConfigService, useValue: config },
       ],
     }).overrideGuard(JwtActiveGuard).useValue(activeGuard).compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    await app.register(multipart, { limits: { fileSize: 500_000, files: 1, fields: 0, parts: 1 } });
     app.useGlobalFilters(new ApiExceptionFilter());
     await app.init();
   });
@@ -163,7 +173,6 @@ describe('Users HTTP contract', () => {
       birthdate: '1995-04-12',
       sex: 'female',
       bio: 'Curieuse et voyageuse.',
-      photo: 'https://cdn.example.test/alice.jpg',
     };
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'PATCH',
@@ -174,6 +183,47 @@ describe('Users HTTP contract', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ message: 'profile updated' });
     expect(users.updateProfile).toHaveBeenCalledWith(USER_ID, payload);
+  });
+
+  it('uploads and deletes the private profile photo through dedicated routes', async () => {
+    const multipartRequest = multipartPhoto('portrait.webp', 'image/webp', Buffer.from('webp fixture'));
+    const uploaded = await app.getHttpAdapter().getInstance().inject({
+      method: 'PUT',
+      url: '/api/users/me/photo',
+      headers: multipartRequest.headers,
+      payload: multipartRequest.payload,
+    });
+    const deleted = await app.getHttpAdapter().getInstance().inject({ method: 'DELETE', url: '/api/users/me/photo' });
+
+    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.json()).toEqual({
+      message: 'photo updated',
+      photo: 'https://storage.example.test/signed-photo.webp',
+    });
+    expect(users.uploadPhoto).toHaveBeenCalledWith(USER_ID, {
+      filename: 'portrait.webp',
+      mimetype: 'image/webp',
+      body: Buffer.from('webp fixture'),
+    });
+    expect(limits.enforce).toHaveBeenCalledWith(
+      'photo', USER_ID, config.rateLimit.photo, 'photo_rate_limit_exceeded',
+    );
+    expect(deleted.statusCode).toBe(204);
+    expect(users.deletePhoto).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('rejects a photo upload larger than 500,000 bytes', async () => {
+    const multipartRequest = multipartPhoto('portrait.jpg', 'image/jpeg', Buffer.alloc(500_001));
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'PUT',
+      url: '/api/users/me/photo',
+      headers: multipartRequest.headers,
+      payload: multipartRequest.payload,
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json().error.code).toBe('photo_too_large');
+    expect(users.uploadPhoto).not.toHaveBeenCalled();
   });
 
   it('rejects privilege fields in profile updates', async () => {
@@ -266,3 +316,18 @@ describe('Users HTTP contract', () => {
     expect(plans.list).toHaveBeenCalledTimes(1);
   });
 });
+
+function multipartPhoto(filename: string, mimetype: string, content: Buffer): {
+  headers: Record<string, string>;
+  payload: Buffer;
+} {
+  const boundary = '----histae-photo-contract-boundary';
+  return {
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${filename}"\r\nContent-Type: ${mimetype}\r\n\r\n`),
+      content,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+}

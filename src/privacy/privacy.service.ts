@@ -6,6 +6,7 @@ import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType,
 import { PrivacyRepository } from './privacy.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
 import { BillingService } from '../billing/billing.service';
+import { PhotosService } from '../photos/photos.service';
 
 @Injectable()
 export class PrivacyService {
@@ -13,6 +14,7 @@ export class PrivacyService {
     private readonly privacy: PrivacyRepository,
     private readonly discovery: DiscoveryStore,
     private readonly billing: BillingService,
+    private readonly photos: PhotosService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
 
@@ -47,6 +49,7 @@ export class PrivacyService {
         notes,
         async (userId) => {
           await this.billing.deleteCustomerForAccount(userId);
+          await this.photos.deleteForAccount(userId);
           await this.discovery.deleteUserData(userId);
         },
       );
@@ -66,7 +69,13 @@ export class PrivacyService {
         this.privacy.exportUserData(userId),
         this.discovery.exportOwnActions(userId),
       ]);
-      return { ...postgresData, discovery_actions: { outgoing: outgoingDiscoveryActions } };
+      const profile = isRecord(postgresData.profile) ? postgresData.profile : null;
+      const photoKey = profile && (typeof profile.photo === 'string' || profile.photo === null) ? profile.photo : null;
+      return {
+        ...postgresData,
+        profile: profile === null ? postgresData.profile : { ...profile, photo: await this.photos.urlForKey(photoKey) },
+        discovery_actions: { outgoing: outgoingDiscoveryActions },
+      };
     } catch (error) {
       if (error instanceof ScyllaUnavailableError) {
         throw apiError(503, 'data_export_unavailable', 'The complete data export is temporarily unavailable.', error);
@@ -93,4 +102,8 @@ export class PrivacyService {
   accessLogs(accessedUserId: string): Promise<DataAccessLogRow[]> {
     return this.privacy.accessLogs(accessedUserId);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

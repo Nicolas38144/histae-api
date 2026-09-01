@@ -10,6 +10,7 @@ import { toPublicMatch, toPublicMessage, toPublicUserMatch } from './matches.map
 import type { MatchAvailabilityFailure, MatchRow } from './matches.models';
 import { MatchesRepository } from './matches.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
+import { PhotosService } from '../photos/photos.service';
 
 const HOUR = 60 * 60 * 1_000;
 const MATCH_WINDOW_MS = 24 * HOUR;
@@ -20,6 +21,7 @@ export type ContinuationQuota = { plan: string; used: number; weekly_limit?: num
 export class MatchesService {
   constructor(
     private readonly matches: MatchesRepository,
+    private readonly photos: PhotosService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
 
@@ -59,7 +61,10 @@ export class MatchesService {
     const cursor = decodeCursor(rawCursor);
     const rows = await this.matches.listDetailedForUser(userId, limit + 1, offset, cursor);
     const page = cursorPage(rows, limit, (row) => row.cursor_at);
-    return { items: page.items.map(toPublicUserMatch), next_cursor: page.next_cursor };
+    return {
+      items: await Promise.all(page.items.map(async (row) => toPublicUserMatch(row, await this.photos.urlForKey(row.other_photo)))),
+      next_cursor: page.next_cursor,
+    };
   }
 
   async listForAdmin(

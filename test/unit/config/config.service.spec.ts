@@ -122,6 +122,41 @@ describe('ConfigService SMS configuration', () => {
     expect(() => new ConfigService()).toThrow('config: CORS_ORIGINS');
   });
 
+  it('accepts an explicit trusted-proxy IP and CIDR list', () => {
+    process.env = baseEnvironment({ TRUST_PROXY: '127.0.0.1,10.0.0.0/8,2001:db8::/32' });
+    expect(new ConfigService().trustProxy).toEqual(['127.0.0.1', '10.0.0.0/8', '2001:db8::/32']);
+  });
+
+  it('refuses globally trusted forwarding headers in production', () => {
+    process.env = productionEnvironment({ TRUST_PROXY: 'true' });
+    expect(() => new ConfigService()).toThrow('config: production TRUST_PROXY must list explicit proxy IP addresses or CIDR ranges');
+  });
+
+  it('accepts provider-neutral S3-compatible object storage settings', () => {
+    process.env = baseEnvironment({
+      OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:8333',
+      OBJECT_STORAGE_REGION: 'us-east-1',
+      OBJECT_STORAGE_BUCKET: 'histae-test-photos',
+      OBJECT_STORAGE_ACCESS_KEY: 'test-access',
+      OBJECT_STORAGE_SECRET_KEY: 'test-secret',
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'true',
+    });
+
+    expect(new ConfigService().objectStorage).toEqual({
+      endpoint: 'http://127.0.0.1:8333/',
+      region: 'us-east-1',
+      bucket: 'histae-test-photos',
+      accessKey: 'test-access',
+      secretKey: 'test-secret',
+      forcePathStyle: true,
+    });
+  });
+
+  it('requires HTTPS object storage in production', () => {
+    process.env = productionEnvironment({ OBJECT_STORAGE_ENDPOINT: 'http://storage.histae.test' });
+    expect(() => new ConfigService()).toThrow('config: OBJECT_STORAGE_ENDPOINT must be an absolute HTTP(S) origin and HTTPS in production');
+  });
+
   it.each(['59s', '31m'])('rejects the out-of-range account deletion token duration %s', (ttl) => {
     process.env = baseEnvironment({ ACCOUNT_DELETION_TOKEN_TTL: ttl });
 
@@ -216,6 +251,9 @@ function productionEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
     REDIS_ADDR: 'localhost:6379',
     REDIS_TLS: 'true',
     REDIS_PASSWORD: 'test-password',
+    OBJECT_STORAGE_ENDPOINT: 'https://storage.histae.test',
+    OBJECT_STORAGE_ACCESS_KEY: 'test-object-access',
+    OBJECT_STORAGE_SECRET_KEY: 'test-object-secret',
     SMS_PROVIDER: 'sweego',
     SWEEGO_API_KEY: 'sweego-test-key',
     SWEEGO_SMS_SENDER_ID: 'Histae',

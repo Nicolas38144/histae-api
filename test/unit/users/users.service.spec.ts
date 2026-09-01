@@ -2,6 +2,12 @@ import { UsersService } from '../../../src/users/users.service';
 
 describe('UsersService consent enforcement', () => {
   const noOpBilling = { deleteCustomerForAccount: jest.fn().mockResolvedValue(undefined) };
+  const noOpPhotos = {
+    urlForKey: jest.fn(async (key: string | null) => key),
+    upload: jest.fn(),
+    delete: jest.fn(),
+    deleteForAccount: jest.fn().mockResolvedValue(undefined),
+  };
   const config = { legal: {
     termsVersion: 'terms-v1',
     privacyVersion: 'privacy-v1',
@@ -21,10 +27,10 @@ describe('UsersService consent enforcement', () => {
       ]),
       upsertProfile: jest.fn(),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.updateProfile('user-id', {
-      firstname: 'Nicolas', birthdate: '1990-01-01', sex: 'male', bio: null, photo: null,
+      firstname: 'Nicolas', birthdate: '1990-01-01', sex: 'male', bio: null,
     })).rejects.toEqual(expect.objectContaining({ status: 403, code: 'required_consent_missing' }));
     expect(repository.upsertProfile).not.toHaveBeenCalled();
   });
@@ -39,7 +45,7 @@ describe('UsersService consent enforcement', () => {
         },
       ]),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.updateConsents('user-id', [{ consent_type: 'terms_of_service_acceptance', granted: true }], '127.0.0.1', 'test-agent'))
       .resolves.toEqual(expect.objectContaining({
@@ -71,10 +77,10 @@ describe('UsersService consent enforcement', () => {
       ]),
       upsertProfile: jest.fn(),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.updateProfile('user-id', {
-      firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null, photo: null,
+      firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null,
     })).rejects.toEqual(expect.objectContaining({ status: 403, code: 'required_consent_missing' }));
     expect(repository.upsertProfile).not.toHaveBeenCalled();
   });
@@ -84,7 +90,7 @@ describe('UsersService consent enforcement', () => {
       recordConsents: jest.fn().mockResolvedValue(true),
       currentConsents: jest.fn().mockResolvedValue([]),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await service.updateConsents('user-id', [
       { consent_type: 'sensitive_data_consent', granted: true },
@@ -99,7 +105,7 @@ describe('UsersService consent enforcement', () => {
 
   it('does not model contract acceptance or privacy acknowledgement as withdrawable consent', async () => {
     const repository = { recordConsents: jest.fn() };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.updateConsents('user-id', [
       { consent_type: 'terms_of_service_acceptance', granted: false },
@@ -123,7 +129,7 @@ describe('UsersService consent enforcement', () => {
         },
       ]),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.getConsents('user-id')).resolves.toEqual(expect.objectContaining({
       onboarding_complete: true,
@@ -135,36 +141,37 @@ describe('UsersService consent enforcement', () => {
     'rejects the invalid calendar birthdate %s before persistence',
     async (birthdate) => {
       const repository = { upsertProfile: jest.fn(), activeLegalChoices: jest.fn() };
-      const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+      const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
       await expect(service.updateProfile('user-id', {
-        firstname: 'Nicolas', birthdate, sex: null, bio: null, photo: null,
+        firstname: 'Nicolas', birthdate, sex: null, bio: null,
       })).rejects.toEqual(expect.objectContaining({ status: 400, code: 'invalid_profile' }));
       expect(repository.upsertProfile).not.toHaveBeenCalled();
     },
   );
 
-  it('rejects an unencrypted profile photo URL before persistence', async () => {
+  it('keeps photo storage outside profile payload persistence', async () => {
     const repository = {
-      upsertProfile: jest.fn(),
+      upsertProfile: jest.fn().mockResolvedValue(true),
       activeLegalChoices: jest.fn().mockResolvedValue([
         { consent_type: 'terms_of_service_acceptance', document_version: 'terms-v1' },
         { consent_type: 'privacy_notice_acknowledgement', document_version: 'privacy-v1' },
       ]),
     };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.updateProfile('user-id', {
       firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null,
-      photo: 'http://cdn.example.test/profile.jpg',
-    })).rejects.toEqual(expect.objectContaining({ status: 400, code: 'invalid_profile' }));
-    expect(repository.upsertProfile).not.toHaveBeenCalled();
+    })).resolves.toBeUndefined();
+    expect(repository.upsertProfile).toHaveBeenCalledWith('user-id', {
+      firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null,
+    });
   });
 
   it('deletes Scylla discovery data before anonymizing the PostgreSQL account', async () => {
     const calls: string[] = [];
     const repository = { anonymize: jest.fn(async () => { calls.push('postgres'); }) };
     const discovery = { deleteUserData: jest.fn(async () => { calls.push('scylla'); }) };
-    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never, noOpPhotos as never);
 
     await service.anonymize('user-id');
 
@@ -176,16 +183,17 @@ describe('UsersService consent enforcement', () => {
     const repository = { anonymize: jest.fn(async () => { calls.push('postgres'); }) };
     const discovery = { deleteUserData: jest.fn(async () => { calls.push('scylla'); }) };
     const billing = { deleteCustomerForAccount: jest.fn(async () => { calls.push('stripe'); }) };
-    const service = new UsersService(repository as never, config as never, discovery as never, billing as never);
+    const photos = { deleteForAccount: jest.fn(async () => { calls.push('storage'); }) };
+    const service = new UsersService(repository as never, config as never, discovery as never, billing as never, photos as never);
 
     await service.anonymize('user-id');
 
-    expect(calls).toEqual(['stripe', 'scylla', 'postgres']);
+    expect(calls).toEqual(['stripe', 'storage', 'scylla', 'postgres']);
   });
 
   it('issues a short-lived deletion token while storing only its hash', async () => {
     const repository = { replaceDeletionToken: jest.fn().mockResolvedValue(true) };
-    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, {} as never, noOpBilling as never, noOpPhotos as never);
 
     const result = await service.issueDeletionToken('user-id');
 
@@ -208,7 +216,7 @@ describe('UsersService consent enforcement', () => {
       anonymize: jest.fn(async () => { calls.push('postgres'); }),
     };
     const discovery = { deleteUserData: jest.fn(async () => { calls.push('scylla'); }) };
-    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never, noOpPhotos as never);
     const { confirmation_token: token } = await service.issueDeletionToken('user-id');
 
     await service.confirmAnonymize('user-id', token);
@@ -225,7 +233,7 @@ describe('UsersService consent enforcement', () => {
   it('rejects a malformed deletion token without erasing account data', async () => {
     const repository = { consumeDeletionToken: jest.fn(), anonymize: jest.fn() };
     const discovery = { deleteUserData: jest.fn() };
-    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never);
+    const service = new UsersService(repository as never, config as never, discovery as never, noOpBilling as never, noOpPhotos as never);
 
     await expect(service.confirmAnonymize('user-id', 'not-a-token')).rejects.toEqual(expect.objectContaining({
       status: 401,

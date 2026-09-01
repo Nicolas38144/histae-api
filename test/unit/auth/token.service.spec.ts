@@ -22,4 +22,14 @@ describe('TokenService', () => {
       expect.objectContaining({ algorithm: 'HS256', audience: 'histae-app', issuer: 'histae-api' }),
     );
   });
+
+  it.each([
+    '',
+    'not-a-uuid:secret',
+    '11111111-1111-1111-8111-111111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    '11111111-1111-4111-8111-111111111111:too-short',
+    '11111111-1111-4111-8111-111111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA!',
+  ])('rejects malformed refresh tokens without hashing attacker-controlled shapes (%s)', (token) => {
+    expect(service.parseRefreshToken(token)).toBeUndefined();
+  });
 });
