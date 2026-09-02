@@ -1,13 +1,15 @@
 # Politique de conservation technique
 
-Mise à jour : 1er septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
+Mise à jour : 2 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
 
 | Données | Finalité | Déclencheur et durée | Traitement automatique |
 | --- | --- | --- | --- |
 | Compte, profil, préférences, traits | Fourniture du service | Vie du compte ; effacement à la suppression ou au retrait du consentement sensible pour les champs concernés | Suppression des tables de profil ; compte technique anonymisé et désactivé |
-| Photo de profil privée | Présentation du profil après révélation mutuelle | Jusqu’au remplacement, à la suppression de la photo ou à l’effacement du compte | La ligne `ready` passe à `deleting`, l’objet WebP versionné est supprimé du stockage compatible S3, puis sa ligne technique est retirée ; aucune URL signée persistée. Les échecs sont repris par `PhotosMaintenanceService` |
+| Photo de profil privée | Présentation du profil après révélation mutuelle | Jusqu’au remplacement, à la suppression de la photo ou à l’effacement du compte | La ligne `ready` passe à `deleting` et un événement `photo.delete` est écrit dans la même transaction. Le worker outbox supprime l’objet WebP puis la ligne technique ; `PhotosMaintenanceService` reste le filet de réconciliation. Aucune URL signée n’est persistée |
+| Idempotence d’upload photo | Rejouer sans double conversion ni double écriture | 24 heures après la demande | `photo_upload_request` conserve UUID utilisateur, UUID de clé, SHA-256 du nom/MIME/contenu source et état technique, jamais les octets de la photo ; purge bornée par `PhotosMaintenanceService` |
+| Outbox technique | Garantir les suppressions objet demandées | Événement réussi : 7 jours ; `dead_letter` : jusqu’au diagnostic opérateur | Le worker revendique avec `SKIP LOCKED`, réessaie dix fois avec backoff, purge les succès par lots et conserve les échecs définitifs sans message d’erreur sensible |
 | Position précise | Découverte locale demandée par l’utilisateur | Fraîche pendant 1 h, supprimée après 24 h ; immédiatement supprimée au retrait du consentement de localisation | `PrivacyMaintenanceService` et transaction de retrait |
 | Décisions de swipe (`like`/`pass`) | Exclure les profils déjà évalués et détecter un intérêt réciproque | 1 an fixe (`default_time_to_live = 31536000`) ou effacement immédiat du compte | TTL uniforme sur les deux vues ScyllaDB, avec TWCS par fenêtres de 14 jours ; suppression croisée des partitions acteur/cible lors de l’effacement |
 | OTP | Authentification | Jusqu’à `expires_at` ou consommation | Suppression par lots après expiration |
@@ -49,4 +51,9 @@ communique que les décisions prises par cet utilisateur, jamais l’identité n
 
 ## Exécution
 
-En développement, `MAINTENANCE_MODE=api` lance la maintenance dans l’API. En production, utilisez `MAINTENANCE_MODE=disabled` pour l’API et exécutez périodiquement une tâche séparée avec `MAINTENANCE_MODE=worker pnpm maintenance:run`. Les traitements sont bornés par lots et protégés par des verrous PostgreSQL. Les photos restées `processing` plus de 30 minutes sont supprimées comme objets potentiellement orphelins ; une ligne `deleting` en échec devient réessayable après 5 minutes.
+En développement, `MAINTENANCE_MODE=api` lance la maintenance et le consommateur outbox dans l’API. En production,
+utilisez `MAINTENANCE_MODE=disabled` pour l’API, exécutez périodiquement
+`MAINTENANCE_MODE=worker pnpm maintenance:run` et gardez au moins un
+`MAINTENANCE_MODE=worker pnpm outbox:work` actif. Les traitements sont bornés par lots et protégés par des verrous
+PostgreSQL. Les photos restées `processing` plus de 30 minutes sont supprimées comme objets potentiellement
+orphelins ; une ligne `deleting` en échec devient réessayable après 5 minutes par le filet de maintenance.

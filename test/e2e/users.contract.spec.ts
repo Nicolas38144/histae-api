@@ -18,6 +18,7 @@ import { ConfigService } from '../../src/config/config.service';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const TRAIT_ID = '22222222-2222-4222-8222-222222222222';
 const DELETION_TOKEN = `33333333-3333-4333-8333-333333333333:${'a'.repeat(43)}`;
+const PHOTO_IDEMPOTENCY_KEY = '44444444-4444-4444-8444-444444444444';
 
 describe('Users HTTP contract', () => {
   let app: NestFastifyApplication;
@@ -190,7 +191,10 @@ describe('Users HTTP contract', () => {
     const uploaded = await app.getHttpAdapter().getInstance().inject({
       method: 'PUT',
       url: '/api/users/me/photo',
-      headers: multipartRequest.headers,
+      headers: {
+        ...multipartRequest.headers,
+        'idempotency-key': PHOTO_IDEMPOTENCY_KEY,
+      },
       payload: multipartRequest.payload,
     });
     const deleted = await app.getHttpAdapter().getInstance().inject({ method: 'DELETE', url: '/api/users/me/photo' });
@@ -204,7 +208,7 @@ describe('Users HTTP contract', () => {
       filename: 'portrait.webp',
       mimetype: 'image/webp',
       body: Buffer.from('webp fixture'),
-    });
+    }, PHOTO_IDEMPOTENCY_KEY);
     expect(limits.enforce).toHaveBeenCalledWith(
       'photo', USER_ID, config.rateLimit.photo, 'photo_rate_limit_exceeded',
     );
@@ -217,12 +221,34 @@ describe('Users HTTP contract', () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'PUT',
       url: '/api/users/me/photo',
-      headers: multipartRequest.headers,
+      headers: {
+        ...multipartRequest.headers,
+        'idempotency-key': PHOTO_IDEMPOTENCY_KEY,
+      },
       payload: multipartRequest.payload,
     });
 
     expect(response.statusCode).toBe(413);
     expect(response.json().error.code).toBe('photo_too_large');
+    expect(users.uploadPhoto).not.toHaveBeenCalled();
+  });
+
+  it('requires a UUID v4 Idempotency-Key before reading the photo', async () => {
+    const multipartRequest = multipartPhoto(
+      'portrait.webp',
+      'image/webp',
+      Buffer.from('webp fixture'),
+    );
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: 'PUT',
+      url: '/api/users/me/photo',
+      headers: multipartRequest.headers,
+      payload: multipartRequest.payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('invalid_idempotency_key');
+    expect(limits.enforce).not.toHaveBeenCalled();
     expect(users.uploadPhoto).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-# Check-up de sécurité — 1er septembre 2026
+# Check-up de sécurité — 2 septembre 2026
 
 ## Portée et niveau de confiance
 
@@ -21,7 +21,7 @@ directement corrigeables trouvés pendant la revue ont été traités.
 | Entrées | Satisfaisant | DTO stricts, whitelist avec rejet des champs inconnus, limites métier, UUID et dates validés. |
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
 | Limites de débit | Satisfaisant | Redis obligatoire en production, clés HMAC, échec fermé, `Retry-After`, limite globale et limites sensibles dédiées. |
-| Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, clés versionnées, cycle de vie PostgreSQL réconciliable et URL courte signée seulement au besoin. |
+| Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, upload idempotent 24 h, clés versionnées, suppression par outbox durable et URL courte signée seulement au besoin. |
 | Données sensibles | Satisfaisant avec dépendances infra | Téléphone HMAC + AES-256-GCM, logs HTTP sans query string, export/effacement inter-bases et politique de rétention. |
 | Dépendances | Satisfaisant au contrôle | Audits pnpm complet et production : aucune vulnérabilité connue le 1er septembre 2026. |
 
@@ -43,6 +43,12 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - La table `user_photo` ne rend visible que l’état `ready`, impose la cohérence des métadonnées WebP et conserve
   les états `processing`/`deleting` après une issue S3 incertaine. La maintenance effectue des suppressions
   idempotentes et évite ainsi l’écrasement ou l’oubli silencieux d’un objet lors d’un remplacement.
+- L’upload photo exige une clé UUID v4. PostgreSQL sérialise les mutations par profil et conserve seulement un
+  SHA-256 de la requête pendant 24 heures : un replay identique ne redécode pas l’image, une clé réutilisée avec
+  un autre contenu est refusée et une ancienne réponse devenue obsolète ne peut pas redevenir visible.
+- Le remplacement ou la suppression d’une photo écrit `photo.delete` dans la même transaction que le passage à
+  `deleting`. Le worker outbox utilise `SKIP LOCKED`, des lots et une concurrence bornés, un backoff exponentiel,
+  dix tentatives et une dead-letter. Seuls des codes d’erreur normalisés sont persistés, sans détail fournisseur.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -58,7 +64,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
    supervisée et testée en restauration. Déployer PostgreSQL, Redis et ScyllaDB avec TLS, authentification,
    redondance et sauvegardes vérifiées.
 5. **Observabilité** : ajouter métriques et alertes sur les `401/403/429/5xx`, les échecs OTP/Stripe/S3, les accès
-   administratifs, la saturation des pools et les retards de maintenance, sans journaliser de données sensibles.
+   administratifs, la saturation des pools, les retards de maintenance et toute dead-letter outbox, sans
+   journaliser de données sensibles.
 6. **Validation offensive** : faire réaliser un pentest authentifié couvrant IDOR/BOLA, élévation de privilèges,
    concurrence, abuse cases OTP, webhooks Stripe, multipart/HEIC et URLs signées. Ajouter SAST, secret scanning et
    audit de dépendances récurrent dans la chaîne de livraison lorsque celle-ci sera définie.
@@ -76,8 +83,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 38 suites, 225 cas réussis ;
-- tests e2e Fastify : 8 suites, 53 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 40 cas réussis ;
-- migrations PostgreSQL : `002_user_photo_lifecycle` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migration incrémentale appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
+- tests unitaires : 40 suites, 243 cas réussis ;
+- tests e2e Fastify : 8 suites, 54 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 42 cas réussis ;
+- migrations PostgreSQL : `003_photo_idempotency_and_outbox` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
 - état Docker local : SeaweedFS, Redis et ScyllaDB déclarés `healthy`; configuration Compose objet valide.

@@ -65,8 +65,12 @@ export class UsersService {
     }
   }
 
-  uploadPhoto(userId: string, upload: UploadedPhoto): Promise<string> {
-    return this.photos.upload(userId, upload);
+  uploadPhoto(
+    userId: string,
+    upload: UploadedPhoto,
+    idempotencyKey: string | undefined,
+  ): Promise<string> {
+    return this.photos.upload(userId, upload, idempotencyKey);
   }
 
   deletePhoto(userId: string): Promise<void> {

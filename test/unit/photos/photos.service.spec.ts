@@ -3,6 +3,7 @@ import { PhotosService } from '../../../src/photos/photos.service';
 import { ObjectStorageUnavailableError } from '../../../src/storage/object-storage.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
+const IDEMPOTENCY_KEY = '33333333-3333-4333-8333-333333333333';
 const OLD_PHOTO = {
   id: '22222222-2222-4222-8222-222222222222',
   userId: USER_ID,
@@ -34,7 +35,7 @@ describe('PhotosService', () => {
       storage as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD)).resolves.toBe(
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toBe(
       'https://storage.test/signed',
     );
 
@@ -44,6 +45,14 @@ describe('PhotosService', () => {
     };
     expect(processing.objectKey).toBe(
       `profile-photos/${USER_ID}/${processing.id}.webp`,
+    );
+    expect(repository.createProcessing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: IDEMPOTENCY_KEY,
+        requestSha256: expect.any(Buffer),
+        createdAt: expect.any(Date),
+        expiresAt: expect.any(Date),
+      }),
     );
     expect(repository.recordProcessed).toHaveBeenCalledWith(
       processing.id,
@@ -66,36 +75,31 @@ describe('PhotosService', () => {
     expect(storage.signedGetUrl).toHaveBeenCalledWith(processing.objectKey, 300);
   });
 
-  it('retires the old object without failing an already activated replacement', async () => {
+  it('replays a completed upload without processing or writing the object again', async () => {
     const repository = repositoryMock();
-    repository.activate.mockResolvedValue({
-      activated: true,
-      previous: [OLD_PHOTO],
+    repository.createProcessing.mockResolvedValue({
+      state: 'replay',
+      photo: { ...OLD_PHOTO, status: 'ready' },
     });
-    const processor = { toWebp: jest.fn().mockResolvedValue(PROCESSED) };
+    const processor = { toWebp: jest.fn() };
     const storage = storageMock();
-    storage.delete.mockRejectedValue(
-      new ObjectStorageUnavailableError(new Error('offline')),
-    );
     const service = new PhotosService(
       repository as never,
       processor as never,
       storage as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD)).resolves.toBe(
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toBe(
       'https://storage.test/signed',
     );
-    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.objectKey);
-    expect(repository.completeDeletion).not.toHaveBeenCalled();
+    expect(processor.toWebp).not.toHaveBeenCalled();
+    expect(storage.put).not.toHaveBeenCalled();
+    expect(storage.signedGetUrl).toHaveBeenCalledWith(OLD_PHOTO.objectKey, 300);
   });
 
-  it('marks a ready photo deleting before removing its object', async () => {
+  it('queues a ready photo for asynchronous deletion', async () => {
     const repository = repositoryMock();
-    repository.beginDelete.mockResolvedValue({
-      profileFound: true,
-      photo: OLD_PHOTO,
-    });
+    repository.beginDelete.mockResolvedValue(true);
     const storage = storageMock();
     const service = new PhotosService(
       repository as never,
@@ -104,8 +108,8 @@ describe('PhotosService', () => {
     );
 
     await expect(service.delete(USER_ID)).resolves.toBeUndefined();
-    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.objectKey);
-    expect(repository.completeDeletion).toHaveBeenCalledWith(OLD_PHOTO.id);
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(repository.completeDeletion).not.toHaveBeenCalled();
   });
 
   it('discards DB state when image validation fails before upload', async () => {
@@ -119,7 +123,7 @@ describe('PhotosService', () => {
       storageMock() as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD)).rejects.toEqual(
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).rejects.toEqual(
       expect.objectContaining({ status: 400, code: 'invalid_photo' }),
     );
     const photoId = repository.createProcessing.mock.calls[0]?.[0].id;
@@ -139,7 +143,7 @@ describe('PhotosService', () => {
       storage as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD)).rejects.toEqual(
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).rejects.toEqual(
       expect.objectContaining({
         status: 503,
         code: 'photo_storage_unavailable',
@@ -155,6 +159,37 @@ describe('PhotosService', () => {
 
     await expect(service.urlForKey('../public/photo.webp')).resolves.toBeNull();
     expect(storage.signedGetUrl).not.toHaveBeenCalled();
+  });
+
+  it('requires a UUID v4 idempotency key before creating upload state', async () => {
+    const repository = repositoryMock();
+    const service = new PhotosService(
+      repository as never,
+      {} as never,
+      storageMock() as never,
+    );
+
+    await expect(service.upload(USER_ID, UPLOAD, undefined)).rejects.toEqual(
+      expect.objectContaining({ status: 400, code: 'invalid_idempotency_key' }),
+    );
+    expect(repository.createProcessing).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['idempotency_conflict', 'idempotency_key_conflict'],
+    ['idempotency_consumed', 'idempotency_key_consumed'],
+    ['update_in_progress', 'photo_update_in_progress'],
+  ] as const)('maps %s to the stable %s conflict', async (state, code) => {
+    const repository = repositoryMock();
+    repository.createProcessing.mockResolvedValue({ state });
+    const service = new PhotosService(
+      repository as never,
+      {} as never,
+      storageMock() as never,
+    );
+
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY))
+      .rejects.toEqual(expect.objectContaining({ status: 409, code }));
   });
 
   it('fails account erasure while retaining every object not confirmed deleted', async () => {
@@ -193,10 +228,10 @@ describe('PhotosService', () => {
 
 function repositoryMock(): Record<string, jest.Mock> {
   return {
-    createProcessing: jest.fn().mockResolvedValue('created'),
+    createProcessing: jest.fn().mockResolvedValue({ state: 'created' }),
     recordProcessed: jest.fn().mockResolvedValue(true),
-    activate: jest.fn().mockResolvedValue({ activated: true, previous: [] }),
-    beginDelete: jest.fn().mockResolvedValue({ profileFound: true }),
+    activate: jest.fn().mockResolvedValue(true),
+    beginDelete: jest.fn().mockResolvedValue(true),
     beginAccountDeletion: jest.fn().mockResolvedValue([]),
     completeDeletion: jest.fn().mockResolvedValue(undefined),
     discardProcessing: jest.fn().mockResolvedValue(undefined),

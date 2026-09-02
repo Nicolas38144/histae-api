@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(2);
+    expect(migrations).toHaveLength(3);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -19,6 +19,14 @@ describe('PostgreSQL migration catalog', () => {
     expect(photos.sql).toContain('-- source: 002_user_photo_lifecycle.sql');
     expect(photos.sql).toContain('CREATE TABLE user_photo');
     expect(photos.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const outbox = await loadMigration(migrations[2]);
+    expect(outbox.sql).toContain(
+      '-- source: 003_photo_idempotency_and_outbox.sql',
+    );
+    expect(outbox.sql).toContain('CREATE TABLE photo_upload_request');
+    expect(outbox.sql).toContain('CREATE TABLE outbox_event');
+    expect(outbox.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

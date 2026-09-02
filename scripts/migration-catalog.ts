@@ -28,6 +28,9 @@ export const migrations = [{
 }, {
   version: '002_user_photo_lifecycle',
   filenames: ['002_user_photo_lifecycle.sql'],
+}, {
+  version: '003_photo_idempotency_and_outbox',
+  filenames: ['003_photo_idempotency_and_outbox.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

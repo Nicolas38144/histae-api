@@ -10,6 +10,7 @@ const PHOTO = {
 describe('PhotosMaintenanceService', () => {
   it('deletes claimed objects and completes their database lifecycle', async () => {
     const repository = {
+      purgeExpiredUploadRequests: jest.fn().mockResolvedValue(2),
       claimCleanupBatch: jest.fn()
         .mockResolvedValueOnce([PHOTO])
         .mockResolvedValueOnce([]),
@@ -22,13 +23,18 @@ describe('PhotosMaintenanceService', () => {
       { maintenanceMode: 'disabled' } as never,
     );
 
-    await expect(service.runOnce()).resolves.toEqual({ cleaned: 1, failed: 0 });
+    await expect(service.runOnce()).resolves.toEqual({
+      cleaned: 1,
+      failed: 0,
+      expiredIdempotencyRecords: 2,
+    });
     expect(storage.delete).toHaveBeenCalledWith(PHOTO.objectKey);
     expect(repository.completeDeletion).toHaveBeenCalledWith(PHOTO.id);
   });
 
   it('leaves failed deletions claimed for a later retry', async () => {
     const repository = {
+      purgeExpiredUploadRequests: jest.fn().mockResolvedValue(0),
       claimCleanupBatch: jest.fn()
         .mockResolvedValueOnce([PHOTO])
         .mockResolvedValueOnce([]),
@@ -41,7 +47,11 @@ describe('PhotosMaintenanceService', () => {
       { maintenanceMode: 'disabled' } as never,
     );
 
-    await expect(service.runOnce()).resolves.toEqual({ cleaned: 0, failed: 1 });
+    await expect(service.runOnce()).resolves.toEqual({
+      cleaned: 0,
+      failed: 1,
+      expiredIdempotencyRecords: 0,
+    });
     expect(repository.completeDeletion).not.toHaveBeenCalled();
   });
 });

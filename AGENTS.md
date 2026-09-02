@@ -29,7 +29,7 @@ Ne dupliquer ni profils ni autres données personnelles de référence dans Scyl
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `photos`, `plans`, `privacy`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`, `privacy`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
@@ -54,8 +54,10 @@ Respecter autant que possible la séparation suivante :
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
 - Une photo reçue ne peut dépasser 500 000 octets et doit porter l’une des extensions `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Vérifier aussi MIME, signature et dimensions ; ne stocker qu’un WebP privé sans métadonnées, lui-même limité à 500 000 octets.
+- `PUT /users/me/photo` exige un `Idempotency-Key` UUID v4. Conserver 24 heures uniquement son empreinte de requête et son état ; un replay identique ne doit ni reconvertir ni réécrire l’objet, et une clé réutilisée avec un autre contenu ou un résultat devenu obsolète doit être refusée.
 - PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Les réponses publiques ne lisent que la ligne `ready` et produisent une URL signée courte au dernier moment.
-- Préserver le protocole photo inter-stockages : créer `processing`, persister les métadonnées, écrire l’objet, activer atomiquement la nouvelle ligne et passer l’ancienne à `deleting`. Une issue S3 incertaine doit rester réconciliable ; ne jamais supprimer la trace PostgreSQL avant la suppression confirmée de l’objet.
+- Préserver le protocole photo inter-stockages : créer `processing` et la demande idempotente dans une transaction, persister les métadonnées, écrire l’objet, puis activer atomiquement la nouvelle ligne, terminer la demande, passer l’ancienne à `deleting` et émettre `photo.delete` dans l’outbox. Une issue S3 incertaine doit rester réconciliable ; ne jamais supprimer la trace PostgreSQL avant la suppression confirmée de l’objet.
+- Les effets outbox doivent être idempotents, revendiqués avec verrouillage PostgreSQL, bornés en lot/concurrence et réessayés sans persister de détail sensible. Ne pas contourner l’outbox par un appel réseau entre une mutation métier et son commit.
 - Une collection administrative ou de blocages ne signe aucune photo. Seul un accès métier explicitement autorisé peut produire un lien signé ; le détail admin exige un motif et une trace d'audit.
 - L’accès au stockage doit rester derrière `ObjectStorageService` et les six variables `OBJECT_STORAGE_*`; ne jamais dépendre d’une API SeaweedFS, MinIO, Garage ou fournisseur cloud spécifique.
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
@@ -68,7 +70,7 @@ Respecter autant que possible la séparation suivante :
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- La migration incrémentale `002_user_photo_lifecycle` crée le registre photo récupérable et retire la colonne provisoire `user_profile.photo`. Après cette migration, ajouter une nouvelle version pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle` et `003_photo_idempotency_and_outbox` créent respectivement le registre photo récupérable, puis l’idempotence d’upload et l’outbox générique. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -80,6 +82,7 @@ pnpm install --frozen-lockfile
 pnpm run db:migrate
 pnpm run scylla:migrate
 pnpm run start:dev
+pnpm run outbox:work
 ```
 
 Validation autonome, sans infrastructure externe :
@@ -103,7 +106,7 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 1er septembre 2026, lint, typecheck, build, les 46 suites/278 cas autonomes et les 3 suites/40 cas d'intégration réels sont verts, soit 49 suites et 318 cas. La migration `002_user_photo_lifecycle` a été appliquée sans destruction sur `histae-dev`, vérifiée idempotente et testée avec la baseline dans un schéma temporaire vide. SeaweedFS avait également passé son healthcheck Docker et un aller-retour S3 écriture/lecture/suppression. Réexécuter les contrôles après toute modification.
+Au 2 septembre 2026, la migration `003_photo_idempotency_and_outbox` a été appliquée sans destruction sur `histae-dev`, vérifiée idempotente et testée avec toutes les migrations dans un schéma temporaire vide. L’intégration PostgreSQL couvre aussi le rejeu/conflit/consommation photo et les reprises/dead letters de l’outbox. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 
@@ -111,7 +114,7 @@ Les prochains travaux API/infra prioritaires documentés sont :
 
 1. suivi opérationnel de la livraison Sweego, idéalement par webhook, et gestion/test de la perte de réponse fournisseur ;
 2. métriques, dashboards et alertes, y compris latences et comportement du feed hybride ;
-3. ordonnanceur de maintenance et Redis hautement disponible/managé dans l'environnement cible ;
+3. déploiement/supervision des workers maintenance et outbox, avec Redis hautement disponible/managé dans l'environnement cible ;
 4. sauvegarde/restauration PostgreSQL, du stockage objet et stratégie de sauvegarde, réparation et montée de version Scylla ;
 5. réconciliation Stripe planifiée vers `user_subscription` et alerte sur les webhooks durablement en échec ;
 6. tests de charge, audit de sécurité externe et rotation opérationnelle des secrets.

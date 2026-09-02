@@ -52,11 +52,14 @@ import { ObjectStorageService } from '../../../src/storage/object-storage.servic
 import { PhotosRepository } from '../../../src/photos/photos.repository';
 import { PhotosService } from '../../../src/photos/photos.service';
 import { PhotosMaintenanceService } from '../../../src/photos/photos-maintenance.service';
+import { OutboxRepository } from '../../../src/outbox/outbox.repository';
+import { OutboxWorkerService } from '../../../src/outbox/outbox-worker.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
   PhotosRepository, PhotosService, PhotosMaintenanceService,
+  OutboxRepository, OutboxWorkerService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,

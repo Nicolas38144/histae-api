@@ -1,6 +1,6 @@
 # Histae API — résumé du projet
 
-Mise à jour : 1er septembre 2026.
+Mise à jour : 2 septembre 2026.
 
 Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
 de test : consulter respectivement `routes.md` et `test.md` pour ces inventaires détaillés.
@@ -24,7 +24,9 @@ Le socle fonctionnel principal est implémenté :
 Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
 consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. La migration
 `002_user_photo_lifecycle` a ensuite remplacé la clé provisoire du profil par un registre d’objets versionnés,
-réconciliable après une panne PostgreSQL/S3. Le check-up complet est dans `docs/security-checkup.md`.
+réconciliable après une panne PostgreSQL/S3. La migration `003_photo_idempotency_and_outbox` rend l’upload
+idempotent pendant 24 heures et découple les suppressions objet par une outbox PostgreSQL durable. Le check-up
+complet est dans `docs/security-checkup.md`.
 
 ## 2. Architecture
 
@@ -56,7 +58,7 @@ pas une dépendance applicative : changer de fournisseur revient à modifier le
 
 ### Organisation des sources
 
-Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `photos`, `plans`,
+Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`,
 `privacy`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
 `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
@@ -146,8 +148,9 @@ Le flux SSE annonce les créations/mises à jour de match, invalidations, messag
 
 ### Photos privées
 
-`PUT /api/users/me/photo` accepte un unique champ multipart `photo`. Les extensions admises sont `.jpg`, `.jpeg`,
-`.png`, `.heic`, `.heif` et `.webp`. L’entrée comme le WebP produit sont limitées à **500 000 octets**.
+`PUT /api/users/me/photo` exige `Idempotency-Key: <UUID v4>` et accepte un unique champ multipart `photo`. Les
+extensions admises sont `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif` et `.webp`. L’entrée comme le WebP produit sont
+limitées à **500 000 octets**.
 
 Le processeur vérifie extension, MIME, signature binaire, pixels et dimensions, borne le décodage HEIC, applique
 l’orientation, réduit à 2 048 px maximum et retire les métadonnées. Chaque WebP final reçoit une clé immuable :
@@ -158,8 +161,14 @@ profile-photos/<user_uuid>/<photo_uuid>.webp
 
 La table `user_photo` conserve l’état `pending | processing | ready | deleting`, la clé privée, le MIME, la taille,
 les dimensions et le SHA-256. Les contraintes garantissent au plus une photo `ready` et une conversion en cours
-par utilisateur. L’upload active la nouvelle version dans une transaction courte, puis supprime l’ancienne. Une
-écriture S3 incertaine ou une suppression échouée reste enregistrée et sera reprise par la maintenance.
+par utilisateur. `photo_upload_request` conserve pendant 24 heures la clé d’idempotence et un SHA-256 borné du
+nom, du MIME et du contenu source, jamais la photo. Un retry identique d’une demande terminée renvoie la photo
+courante sans nouvelle conversion ; un contenu différent ou un résultat déjà remplacé est refusé explicitement.
+
+L’activation rend la nouvelle version visible, passe l’ancienne à `deleting`, termine l’état d’idempotence et
+insère `photo.delete` dans `outbox_event`, le tout dans la même transaction. Le worker supprime ensuite l’objet et
+la ligne technique avec verrous `SKIP LOCKED`, concurrence bornée, backoff exponentiel, dix tentatives et état
+`dead_letter`. Une écriture S3 incertaine reste réconciliable par la maintenance horaire.
 
 PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
 générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
@@ -187,7 +196,8 @@ Le moteur compose le schéma et les inserts canoniques, calcule un checksum SHA-
 et applique la baseline dans une transaction.
 
 La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
-colonne provisoire `user_profile.photo`. Une base neuve applique donc la baseline puis cette migration.
+colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
+bornée et l’outbox générique. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
 
 La compatibilité est sans perte :
 
@@ -212,7 +222,13 @@ activé et le bucket objet. La fermeture Nest libère les pools/clients.
 La maintenance peut fonctionner dans l’API, dans un worker séparé ou être désactivée. Elle expire notamment les
 présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
 signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`. Elle réconcilie
-aussi les conversions photo abandonnées et les objets dont la suppression S3 doit être retentée.
+aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
+dont la suppression S3 doit être retentée.
+
+L’outbox est consommée chaque seconde par l’API lorsque `MAINTENANCE_MODE=api`. Pour séparer le trafic HTTP des
+effets externes, `MAINTENANCE_MODE=worker pnpm run outbox:work` lance un consommateur dédié et arrêtable proprement.
+Les événements terminés sont purgés après sept jours ; les dead letters restent visibles pour diagnostic et
+rejeu opérateur futur.
 
 En local, les Compose sont séparés pour ScyllaDB, Redis et SeaweedFS. Le Compose objet lie l’API S3 à
 `127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de
@@ -257,7 +273,7 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
 3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
    accès personnels ou actions de sûreté.
 4. Ajouter métriques, tableaux de bord et alertes sur latences, erreurs, pools, rate limits, OTP, Stripe, S3,
-   Scylla et retard de maintenance. Planifier réellement le worker de maintenance.
+   Scylla, retard de maintenance et dead letters. Déployer et superviser réellement les workers maintenance/outbox.
 5. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
    puis gérer explicitement la perte de réponse réseau.
 6. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.

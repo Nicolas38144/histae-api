@@ -10,6 +10,8 @@ import { PhotoProcessorService } from './photos/photo-processor.service';
 import { PhotosRepository } from './photos/photos.repository';
 import { PhotosService } from './photos/photos.service';
 import { PhotosMaintenanceService } from './photos/photos-maintenance.service';
+import { OutboxRepository } from './outbox/outbox.repository';
+import { OutboxWorkerService } from './outbox/outbox-worker.service';
 
 @Global()
 @Module({
@@ -25,11 +27,14 @@ import { PhotosMaintenanceService } from './photos/photos-maintenance.service';
     PhotosRepository,
     PhotosService,
     PhotosMaintenanceService,
+    OutboxRepository,
+    OutboxWorkerService,
   ],
   exports: [
     ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService,
     ObjectStorageService, PhotoProcessorService, PhotosRepository, PhotosService,
     PhotosMaintenanceService,
+    OutboxRepository, OutboxWorkerService,
   ],
 })
 export class CoreModule {}

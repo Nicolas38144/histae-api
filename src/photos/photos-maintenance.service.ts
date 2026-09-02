@@ -14,6 +14,7 @@ const MAX_BATCHES_PER_RUN = 100;
 export type PhotoMaintenanceResult = {
   cleaned: number;
   failed: number;
+  expiredIdempotencyRecords: number;
 };
 
 @Injectable()
@@ -41,7 +42,14 @@ export class PhotosMaintenanceService
   }
 
   async runOnce(): Promise<PhotoMaintenanceResult> {
-    const totals: PhotoMaintenanceResult = { cleaned: 0, failed: 0 };
+    const totals: PhotoMaintenanceResult = {
+      cleaned: 0,
+      failed: 0,
+      expiredIdempotencyRecords: await this.photos.purgeExpiredUploadRequests(
+        new Date(),
+        BATCH_SIZE,
+      ),
+    };
 
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch += 1) {
       const now = new Date();

@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
 
 import { apiError } from '../common/api-error';
+import { normalizeIdempotencyKey } from '../common/idempotency';
 import {
   ObjectStorageService,
   ObjectStorageUnavailableError,
@@ -14,9 +15,10 @@ import {
   type ProcessedPhoto,
   type UploadedPhoto,
 } from './photo-processor.service';
-import { PhotoObject, PhotosRepository } from './photos.repository';
+import { type PhotoObject, PhotosRepository } from './photos.repository';
 
 const PROFILE_PHOTO_TTL_SECONDS = 300;
+const PHOTO_UPLOAD_IDEMPOTENCY_TTL_MILLIS = 24 * 60 * 60 * 1_000;
 const PROFILE_PHOTO_CACHE_CONTROL =
   `private, max-age=${PROFILE_PHOTO_TTL_SECONDS}`;
 const PROFILE_PHOTO_KEY_PATTERN =
@@ -32,25 +34,57 @@ export class PhotosService {
     private readonly objectStorage: ObjectStorageService,
   ) {}
 
-  async upload(userId: string, upload: UploadedPhoto): Promise<string> {
+  async upload(
+    userId: string,
+    upload: UploadedPhoto,
+    idempotencyInput: string | undefined,
+  ): Promise<string> {
+    const idempotencyKey = normalizeIdempotencyKey(idempotencyInput);
     const photoId = randomUUID();
     const objectKey = this.profilePhotoKey(userId, photoId);
+    const createdAt = new Date();
     const creation = await this.photosRepository.createProcessing({
       id: photoId,
       userId,
       objectKey,
+      idempotencyKey,
+      requestSha256: uploadRequestHash(upload),
+      createdAt,
+      expiresAt: new Date(
+        createdAt.getTime() + PHOTO_UPLOAD_IDEMPOTENCY_TTL_MILLIS,
+      ),
     });
 
-    if (creation === 'profile_not_found') {
+    if (creation.state === 'profile_not_found') {
       throw apiError(404, 'profile_not_found', 'Profile not found');
     }
 
-    if (creation === 'update_in_progress') {
+    if (creation.state === 'update_in_progress') {
       throw apiError(
         409,
         'photo_update_in_progress',
         'A profile photo update is already in progress',
       );
+    }
+
+    if (creation.state === 'idempotency_conflict') {
+      throw apiError(
+        409,
+        'idempotency_key_conflict',
+        'The Idempotency-Key has already been used for another photo',
+      );
+    }
+
+    if (creation.state === 'idempotency_consumed') {
+      throw apiError(
+        409,
+        'idempotency_key_consumed',
+        'The result associated with this Idempotency-Key is no longer current',
+      );
+    }
+
+    if (creation.state === 'replay') {
+      return this.signPhoto(creation.photo.objectKey);
     }
 
     let processed: ProcessedPhoto;
@@ -106,8 +140,8 @@ export class PhotosService {
       this.throwStorageUnavailable(error, 'upload');
     }
 
-    const activation = await this.photosRepository.activate(photoId, userId);
-    if (!activation.activated) {
+    const activated = await this.photosRepository.activate(photoId, userId);
+    if (!activated) {
       // The object may already exist. Maintenance will safely remove it.
       throw apiError(
         409,
@@ -116,35 +150,12 @@ export class PhotosService {
       );
     }
 
-    await this.cleanupPreviousPhotos(activation.previous);
-
-    try {
-      return await this.objectStorage.signedGetUrl(
-        objectKey,
-        PROFILE_PHOTO_TTL_SECONDS,
-      );
-    } catch (error: unknown) {
-      this.throwStorageUnavailable(error, 'sign');
-    }
+    return this.signPhoto(objectKey);
   }
 
   async delete(userId: string): Promise<void> {
-    const deletion = await this.photosRepository.beginDelete(userId);
-    if (!deletion.profileFound) {
+    if (!await this.photosRepository.beginDelete(userId)) {
       throw apiError(404, 'profile_not_found', 'Profile not found');
-    }
-
-    if (!deletion.photo) {
-      return;
-    }
-
-    try {
-      await this.removePhoto(deletion.photo);
-    } catch (error: unknown) {
-      if (error instanceof ObjectStorageUnavailableError) {
-        this.throwStorageUnavailable(error, 'delete');
-      }
-      throw error;
     }
   }
 
@@ -190,16 +201,6 @@ export class PhotosService {
     }
   }
 
-  private async cleanupPreviousPhotos(photos: PhotoObject[]): Promise<void> {
-    for (const photo of photos) {
-      try {
-        await this.removePhoto(photo);
-      } catch (error: unknown) {
-        this.logPhotoOperationFailure(error, 'old photo cleanup');
-      }
-    }
-  }
-
   private async removePhoto(photo: PhotoObject): Promise<void> {
     await this.objectStorage.delete(photo.objectKey);
     await this.photosRepository.completeDeletion(photo.id);
@@ -207,6 +208,17 @@ export class PhotosService {
 
   private profilePhotoKey(userId: string, photoId: string): string {
     return `profile-photos/${userId}/${photoId}.webp`;
+  }
+
+  private async signPhoto(objectKey: string): Promise<string> {
+    try {
+      return await this.objectStorage.signedGetUrl(
+        objectKey,
+        PROFILE_PHOTO_TTL_SECONDS,
+      );
+    } catch (error: unknown) {
+      this.throwStorageUnavailable(error, 'sign');
+    }
   }
 
   private throwStorageUnavailable(error: unknown, operation: string): never {
@@ -226,4 +238,21 @@ export class PhotosService {
 
     this.logger.error(`Unexpected photo ${operation} failure`);
   }
+}
+
+function uploadRequestHash(upload: UploadedPhoto): Buffer {
+  const hash = createHash('sha256');
+  updateLengthPrefixed(hash, Buffer.from(upload.filename, 'utf8'));
+  updateLengthPrefixed(hash, Buffer.from(upload.mimetype.trim().toLowerCase(), 'utf8'));
+  updateLengthPrefixed(hash, upload.body);
+  return hash.digest();
+}
+
+function updateLengthPrefixed(
+  hash: ReturnType<typeof createHash>,
+  value: Buffer,
+): void {
+  const size = Buffer.allocUnsafe(4);
+  size.writeUInt32BE(value.length);
+  hash.update(size).update(value);
 }

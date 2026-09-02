@@ -9,6 +9,7 @@ import { ConfirmAccountDeletionDto, UpdateConsentsDto, UpdatePreferencesDto, Upd
 import type { PublicProfile } from './users.mapper';
 import type { ConsentState, PreferencesRow } from './users.models';
 import { apiError } from '../common/api-error';
+import { normalizeIdempotencyKey } from '../common/idempotency';
 import { MAX_PHOTO_UPLOAD_BYTES } from '../photos/photo-processor.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
@@ -70,8 +71,10 @@ export class UsersController {
   @Put('photo')
 
   async uploadPhoto(
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() request: AuthenticatedRequest,
   ): Promise<{ message: string; photo: string }> {
+    const normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
     if (!request.isMultipart()) throw apiError(400, 'invalid_photo', 'A multipart photo file is required.');
     await this.limits.enforce('photo', userId(request), this.config.rateLimit.photo, 'photo_rate_limit_exceeded');
     try {
@@ -83,7 +86,7 @@ export class UsersController {
         filename: part.filename,
         mimetype: part.mimetype,
         body: await part.toBuffer(),
-      });
+      }, normalizedIdempotencyKey);
       return { message: 'photo updated', photo };
     } catch (error) {
       if (isMultipartLimitError(error)) {

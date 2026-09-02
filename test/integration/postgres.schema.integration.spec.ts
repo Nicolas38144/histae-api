@@ -15,6 +15,8 @@ import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { UsersRepository } from '../../src/users/users.repository';
 import { BillingRepository } from '../../src/billing/billing.repository';
+import { OutboxRepository } from '../../src/outbox/outbox.repository';
+import { PhotosRepository } from '../../src/photos/photos.repository';
 import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
@@ -51,7 +53,7 @@ describe('PostgreSQL schema contract', () => {
       'data_subject_request', 'data_access_log', 'user_block', 'device_token', 'notification',
       'account_tombstone', 'account_deletion_token', 'billing_customer',
       'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
-      'user_photo',
+      'user_photo', 'photo_upload_request', 'outbox_event',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -93,22 +95,30 @@ describe('PostgreSQL schema contract', () => {
         account: boolean;
         invoices: boolean;
         photos: boolean;
+        photoRequests: boolean;
+        outbox: boolean;
         plans: number;
       }>(`
         SELECT
           to_regclass($1) IS NOT NULL AS account,
           to_regclass($2) IS NOT NULL AS invoices,
           to_regclass($3) IS NOT NULL AS photos,
+          to_regclass($4) IS NOT NULL AS "photoRequests",
+          to_regclass($5) IS NOT NULL AS outbox,
           (SELECT count(*)::integer FROM subscription_plan) AS plans
       `, [
         `${schema}.user_account`,
         `${schema}.billing_invoice`,
         `${schema}.user_photo`,
+        `${schema}.photo_upload_request`,
+        `${schema}.outbox_event`,
       ]);
       expect(contract.rows[0]).toEqual({
         account: true,
         invoices: true,
         photos: true,
+        photoRequests: true,
+        outbox: true,
         plans: 2,
       });
     } finally {
@@ -157,6 +167,8 @@ describe('PostgreSQL schema contract', () => {
       'idx_billing_checkout_expiry', 'idx_stripe_webhook_processed', 'idx_billing_invoice_user_created',
       'idx_billing_customer_active_stripe_id',
       'uq_user_photo_ready', 'uq_user_photo_in_progress', 'idx_user_photo_cleanup',
+      'idx_photo_upload_request_expires', 'idx_outbox_event_due',
+      'idx_outbox_event_stale_lock', 'idx_outbox_event_completed',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -183,6 +195,197 @@ describe('PostgreSQL schema contract', () => {
       WHERE index_definition.indexrelid = 'idx_otp_one_usable_per_phone'::regclass
     `);
     expect(usableOtpIndex.rows[0]?.is_unique).toBe(true);
+  });
+
+  it('replays photo uploads idempotently and queues replaced objects transactionally', async () => {
+    const userId = randomUUID();
+    const otherId = randomUUID();
+    const firstPhotoId = randomUUID();
+    const replacementPhotoId = randomUUID();
+    const idempotencyKey = randomUUID();
+    const replacementKey = randomUUID();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 86_400_000);
+    const database = databaseFor(pool);
+    const outbox = new OutboxRepository(database as never);
+    const photos = new PhotosRepository(database as never, outbox);
+    await insertAccounts(pool, userId, otherId);
+    await pool.query(`
+      INSERT INTO user_profile (user_id, firstname, birthdate)
+      VALUES ($1, 'Photo', '1990-01-01')
+    `, [userId]);
+
+    const first = {
+      id: firstPhotoId,
+      userId,
+      objectKey: `profile-photos/${userId}/${firstPhotoId}.webp`,
+      idempotencyKey,
+      requestSha256: Buffer.alloc(32, 1),
+      createdAt: now,
+      expiresAt,
+    };
+
+    try {
+      await expect(photos.createProcessing(first)).resolves.toEqual({
+        state: 'created',
+      });
+      await expect(photos.recordProcessed(firstPhotoId, userId, {
+        mimeType: 'image/webp',
+        sizeBytes: 100,
+        width: 10,
+        height: 10,
+        sha256: Buffer.alloc(32, 2),
+      })).resolves.toBe(true);
+      await expect(photos.activate(firstPhotoId, userId)).resolves.toBe(true);
+
+      await expect(photos.createProcessing({
+        ...first,
+        id: randomUUID(),
+        objectKey: `profile-photos/${userId}/${randomUUID()}.webp`,
+      })).resolves.toEqual({
+        state: 'replay',
+        photo: expect.objectContaining({ id: firstPhotoId, status: 'ready' }),
+      });
+      await expect(photos.createProcessing({
+        ...first,
+        id: randomUUID(),
+        requestSha256: Buffer.alloc(32, 3),
+      })).resolves.toEqual({ state: 'idempotency_conflict' });
+
+      await expect(photos.createProcessing({
+        ...first,
+        id: replacementPhotoId,
+        objectKey: `profile-photos/${userId}/${replacementPhotoId}.webp`,
+        idempotencyKey: replacementKey,
+      })).resolves.toEqual({ state: 'created' });
+      await photos.recordProcessed(replacementPhotoId, userId, {
+        mimeType: 'image/webp',
+        sizeBytes: 100,
+        width: 10,
+        height: 10,
+        sha256: Buffer.alloc(32, 4),
+      });
+      await expect(photos.activate(replacementPhotoId, userId))
+        .resolves.toBe(true);
+
+      await expect(photos.createProcessing({
+        ...first,
+        id: randomUUID(),
+      })).resolves.toEqual({ state: 'idempotency_consumed' });
+
+      const queued = await pool.query<{
+        event_type: string;
+        aggregate_id: string;
+        status: string;
+      }>(`
+        SELECT event_type, aggregate_id, status
+        FROM outbox_event
+        WHERE aggregate_id = $1
+      `, [firstPhotoId]);
+      expect(queued.rows[0]).toEqual({
+        event_type: 'photo.delete',
+        aggregate_id: firstPhotoId,
+        status: 'pending',
+      });
+
+      await photos.completeDeletion(firstPhotoId);
+      const retired = await pool.query<{
+        request_status: string;
+        photo_id: string | null;
+        photo_exists: boolean;
+      }>(`
+        SELECT request.status AS request_status, request.photo_id,
+          EXISTS(SELECT 1 FROM user_photo WHERE id = $2) AS photo_exists
+        FROM photo_upload_request AS request
+        WHERE request.user_id = $1 AND request.idempotency_key = $3
+      `, [userId, firstPhotoId, idempotencyKey]);
+      expect(retired.rows[0]).toEqual({
+        request_status: 'consumed',
+        photo_id: null,
+        photo_exists: false,
+      });
+    } finally {
+      await pool.query(
+        'DELETE FROM outbox_event WHERE aggregate_id = ANY($1::uuid[])',
+        [[firstPhotoId, replacementPhotoId]],
+      );
+      await deleteAccounts(pool, userId, otherId);
+    }
+  });
+
+  it('claims outbox events once and moves exhausted retries to dead letter', async () => {
+    const aggregateId = randomUUID();
+    const firstWorkerId = randomUUID();
+    const secondWorkerId = randomUUID();
+    const now = new Date(Date.now() + 1_000);
+    const outbox = new OutboxRepository(databaseFor(pool) as never);
+
+    try {
+      await expect(outbox.enqueue(databaseFor(pool) as never, {
+        eventType: 'photo.delete',
+        aggregateId,
+      })).resolves.toBe(true);
+      const firstClaim = await outbox.claimBatch(
+        firstWorkerId,
+        now,
+        new Date(now.getTime() - 300_000),
+        10,
+      );
+      expect(firstClaim).toEqual([
+        expect.objectContaining({ aggregateId, attempts: 1 }),
+      ]);
+      await expect(outbox.claimBatch(
+        secondWorkerId,
+        now,
+        new Date(now.getTime() - 300_000),
+        10,
+      )).resolves.toEqual([]);
+
+      await expect(outbox.reschedule(
+        firstClaim[0]!.id,
+        firstWorkerId,
+        now,
+        'handler_failed',
+        2,
+      )).resolves.toBe('pending');
+      const secondClaim = await outbox.claimBatch(
+        secondWorkerId,
+        now,
+        new Date(now.getTime() - 300_000),
+        10,
+      );
+      expect(secondClaim[0]).toEqual(
+        expect.objectContaining({ aggregateId, attempts: 2 }),
+      );
+      await expect(outbox.reschedule(
+        secondClaim[0]!.id,
+        secondWorkerId,
+        now,
+        'handler_failed',
+        2,
+      )).resolves.toBe('dead_letter');
+
+      const state = await pool.query<{
+        status: string;
+        attempts: number;
+        locked_by: string | null;
+        last_error_code: string | null;
+      }>(`
+        SELECT status, attempts, locked_by, last_error_code
+        FROM outbox_event
+        WHERE aggregate_id = $1
+      `, [aggregateId]);
+      expect(state.rows[0]).toEqual({
+        status: 'dead_letter',
+        attempts: 2,
+        locked_by: null,
+        last_error_code: 'handler_failed',
+      });
+    } finally {
+      await pool.query('DELETE FROM outbox_event WHERE aggregate_id = $1', [
+        aggregateId,
+      ]);
+    }
   });
 
   it('activates only provider-accepted OTPs and preserves an older code after delivery failure', async () => {

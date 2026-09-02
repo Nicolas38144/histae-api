@@ -19,6 +19,7 @@
     "seed:swipes": "ts-node scripts/seed-fake-swipe.ts",
     "fixtures:photos": "ts-node scripts/generate-photo-fixtures.ts",
     "maintenance:run": "ts-node scripts/maintenance.ts",
+    "outbox:work": "ts-node scripts/outbox-worker.ts",
     "test": "jest --runInBand --testPathIgnorePatterns=test/integration",
     "test:unit": "jest --runInBand --testPathPatterns=test/unit",
     "test:e2e": "jest --runInBand --testPathPatterns=test/e2e",

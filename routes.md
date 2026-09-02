@@ -1,13 +1,13 @@
 # Histae API — routes existantes
 
-Mise à jour : 1er septembre 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
+Mise à jour : 2 septembre 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
 
 ## Conventions
 
 - Ce fichier est la référence du contrat HTTP ; l’API n’expose ni document OpenAPI ni interface Swagger.
 - Les requêtes avec corps utilisent JSON. Les champs non documentés sont refusés.
 - Taille maximale d’un corps JSON : **1 Mio**.
-- L’upload photo est la seule entrée multipart : un fichier de **500 000 octets maximum** dans le champ `photo`.
+- L’upload photo est la seule entrée multipart : `Idempotency-Key: <UUID v4>` et un fichier de **500 000 octets maximum** dans le champ `photo`.
 - Les erreurs suivent le format `{ "error": { "code", "message" } }`.
 - Une route « authentifiée » requiert `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
 - Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, `POST /auth/logout`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
@@ -78,8 +78,8 @@ Toutes ces routes sont authentifiées.
 | --- | --- | --- | --- |
 | GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `photo` est absente ou contient une URL privée signée valable cinq minutes. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
 | PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max. La photo n’est pas acceptée par cette route. |
-| PUT | `/users/me/photo` | `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées sous une clé versionnée. Retourne `409 photo_update_in_progress` si une conversion est déjà active, ou `409 photo_update_conflict` si l’activation n’est plus possible. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
-| DELETE | `/users/me/photo` | — | `204`. La photo `ready` passe d’abord à `deleting`, devient immédiatement invisible, puis l’objet privé et sa ligne technique sont supprimés. Un échec S3 retourne `503 photo_storage_unavailable` et reste traçable pour la maintenance. |
+| PUT | `/users/me/photo` | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées sous une clé versionnée. Pendant 24 h, rejouer la même clé avec le même fichier renvoie une nouvelle URL signée de la même photo sans reconversion. Une clé réutilisée avec un autre nom, MIME ou contenu renvoie `409 idempotency_key_conflict`; une clé dont la photo a depuis été remplacée ou supprimée renvoie `409 idempotency_key_consumed`; une demande encore active renvoie `409 photo_update_in_progress`. Une clé absente ou invalide renvoie `400 invalid_idempotency_key`. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
+| DELETE | `/users/me/photo` | — | `204` dès que la transition est durable. La photo `ready` passe atomiquement à `deleting`, devient immédiatement invisible et un événement `photo.delete` est ajouté à l’outbox PostgreSQL. Le worker supprime ensuite l’objet privé et la ligne technique avec reprises bornées ; une panne S3 après le `204` n’annule donc pas la demande. |
 | GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
@@ -183,6 +183,7 @@ créé que par deux likes réciproques.
 | GET | `/health/live` | `200 { "status": "ok" }` si le processus répond. |
 | GET | `/health/ready` | `200 { "status": "ready" }` si PostgreSQL, le bucket objet, ScyllaDB activée et Redis requis répondent ; sinon `503`. |
 
-Les erreurs photo spécifiques sont `400 invalid_photo`, `413 photo_too_large`, `404 profile_not_found`,
+Les erreurs photo spécifiques sont `400 invalid_idempotency_key`, `400 invalid_photo`, `413 photo_too_large`,
+`404 profile_not_found`, `409 idempotency_key_conflict`, `409 idempotency_key_consumed`,
 `409 photo_update_in_progress`, `409 photo_update_conflict`, `429 photo_rate_limit_exceeded` et
 `503 photo_storage_unavailable`.
