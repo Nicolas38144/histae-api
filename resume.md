@@ -11,7 +11,7 @@ Histae API est un backend NestJS 11/Fastify 5 en TypeScript strict pour l’ap
 Le socle fonctionnel principal est implémenté :
 
 - authentification par OTP SMS et rotation des sessions ;
-- onboarding, profil, préférences, traits et consentements ;
+- onboarding, profil, questions/réponses guidées, préférences, traits et consentements ;
 - découverte distribuée, swipes et création de match par like réciproque ;
 - cycle de vie des matchs, révélation mutuelle, continuation et messagerie ;
 - blocage, signalement, modération et audit des accès administratifs ;
@@ -27,7 +27,8 @@ consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en
 réconciliable après une panne PostgreSQL/S3. La migration `003_photo_idempotency_and_outbox` rend l’upload
 idempotent pendant 24 heures et découple les suppressions objet par une outbox PostgreSQL durable. Le check-up
 complet est dans `docs/security-checkup.md`. La migration `004_admin_photo_reconciliation` ajoute l’action d’audit
-qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard.
+qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard. La migration
+`005_profile_questions` fournit un catalogue initial administrable et jusqu’à trois réponses ordonnées par profil.
 
 ## 2. Architecture
 
@@ -45,7 +46,7 @@ qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashb
 
 ### Responsabilité des stockages
 
-PostgreSQL est l’autorité transactionnelle pour les comptes, profils, consentements, préférences, traits,
+PostgreSQL est l’autorité transactionnelle pour les comptes, profils, questions/réponses, consentements, préférences, traits,
 abonnements, matchs, messages, signalements, appareils, notifications, audit et workflows RGPD.
 
 ScyllaDB ne stocke que les décisions de découverte, dans deux tables orientées requêtes : actions sortantes et
@@ -60,7 +61,7 @@ pas une dépendance applicative : changer de fournisseur revient à modifier le
 ### Organisation des sources
 
 Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`,
-`privacy`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
+`privacy`, `profile-questions`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
 `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 La convention est : contrôleur pour HTTP, DTO pour la validation stricte des entrées, service pour les règles métier, repository
@@ -134,6 +135,12 @@ La date de naissance est une date calendrier stricte `YYYY-MM-DD`; les dates imp
 contrôle des 18 ans existe dans l’application comme dans PostgreSQL. Les valeurs de sexe/préférence viennent de
 types fermés et ne sont acceptées qu’avec le consentement requis.
 
+Le catalogue propose initialement quinze questions réparties en cinq catégories. Un utilisateur remplace
+atomiquement une sélection ordonnée de zéro à trois réponses, chacune liée à une question distincte et limitée à
+10–300 caractères. Les réponses apparaissent dans le profil personnel, le feed, le résumé des matchs et l’export
+RGPD. Le dashboard admin peut ajouter, modifier et supprimer les questions. Une suppression est physique et
+entraîne volontairement toutes les réponses liées par `ON DELETE CASCADE`, après avertissement sur leur nombre.
+
 ### Découverte et matchs
 
 Le feed combine les candidats relationnels PostgreSQL avec les décisions Scylla déjà prises. Les écritures CQL
@@ -205,7 +212,8 @@ et applique la baseline dans une transaction.
 La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
 colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
 bornée et l’outbox générique. `004_admin_photo_reconciliation` étend la liste fermée des actions d’audit pour la
-relance opérateur. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
+relance opérateur. `005_profile_questions` ajoute le catalogue administrable et les réponses en cascade. Une base
+neuve applique donc la baseline puis ces migrations dans l’ordre.
 
 La compatibilité est sans perte :
 
@@ -280,12 +288,14 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
    gestionnaire de secrets et procédures de rotation/révocation.
 3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
    accès personnels ou actions de sûreté.
-4. Compléter les métriques déjà présentes pour `user_photo` par une collecte d’observabilité sur les latences,
+4. Mettre en place les contrôles de qualité et de modération des photos, bios et réponses libres, avec signalement,
+   file de revue et règles explicables avant l’ouverture publique.
+5. Compléter les métriques déjà présentes pour `user_photo` par une collecte d’observabilité sur les latences,
    erreurs, pools, rate limits, OTP, Stripe, S3 et Scylla, puis définir les alertes. Déployer et superviser réellement
    les workers maintenance/outbox.
-5. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
+6. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
    puis gérer explicitement la perte de réponse réseau.
-6. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.
+7. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.
 
 ### Validation à étendre
 

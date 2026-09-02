@@ -1,4 +1,5 @@
 import type { MatchRow, MatchStatus, MessageRow, UserMatchRow } from './matches.models';
+import type { ProfileAnswer } from '../profile-questions/profile-questions.models';
 
 export type PublicMatch = {
   id: string;
@@ -28,6 +29,7 @@ export type PublicMatchUser = {
   bio: string | null;
   traits: string[];
   photo: string | null;
+  profile_answers: ProfileAnswer[];
 };
 
 export type PublicLastMessage = {
@@ -93,6 +95,7 @@ export function toPublicUserMatch(row: UserMatchRow, photoUrl: string | null): P
       bio: row.other_bio,
       traits: row.other_traits,
       photo: photoUrl,
+      profile_answers: row.other_profile_answers ?? [],
     },
     my_revealed: row.my_revealed,
     photos_revealed: row.photos_revealed,

@@ -9,6 +9,10 @@ Avant chaque nouvelle version juridique :
 - valider que les consentements sensibles et de localisation sont facultatifs, séparés, non précochés, compréhensibles et retirables aussi facilement qu’ils sont donnés ;
 - vérifier les procédures de réponse sous un mois, de contrôle d’identité proportionné, de protection des tiers dans l’export et de refus motivé ;
 - valider la matrice [`retention-policy.md`](retention-policy.md), y compris les sauvegardes et sous-traitants ;
+- faire approuver les questions de profil initiales et la gouvernance des ajouts administratifs, interdire les
+  formulations qui solliciteraient inutilement des données sensibles, informer que les réponses sont visibles aux
+  autres membres et vérifier que la suppression d’une question et de toutes ses réponses est compatible avec les
+  procédures de modération, d’export et d’effacement ;
 - documenter l’hébergeur objet de production, sa région, les transferts éventuels, le chiffrement, les habilitations, les sauvegardes, la purge des photos remplacées ou supprimées, la rétention de 24 h des empreintes d’idempotence et le traitement des dead letters `photo.delete`, y compris les habilitations et motifs de relance `admin_reconcile_photo` ;
 - intégrer `sharp`/libvips, `heic-decode`/libheif-js et le SDK AWS v3 à l’inventaire des composants et vérifier leurs licences et mises à jour de sécurité avant livraison ;
 - enregistrer l’approbation dans un système durable (ticket signé, procès-verbal ou registre DPO) et placer son identifiant dans `LEGAL_REVIEW_REFERENCE` ;

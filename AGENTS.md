@@ -19,7 +19,7 @@ Si le code et la documentation divergent, vérifier le comportement par les test
 ## Stack et responsabilités des stockages
 
 - Node.js 22+, pnpm 11.22.0, TypeScript strict.
-- PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, consentements, abonnements, matchs, messages, signalements et workflows RGPD.
+- PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, questions/réponses de profil, consentements, abonnements, matchs, messages, signalements et workflows RGPD.
 - ScyllaDB conserve uniquement les décisions de découverte à fort volume et leurs vues par acteur/cible.
 - Redis fournit le rate limiting distribué et le relais Pub/Sub SSE entre instances.
 - Le stockage objet compatible S3 conserve les photos privées. SeaweedFS `weed mini` est uniquement le choix local ; le code ne doit importer aucun type ou comportement propre à SeaweedFS.
@@ -29,7 +29,7 @@ Ne dupliquer ni profils ni autres données personnelles de référence dans Scyl
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`, `privacy`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
@@ -53,6 +53,8 @@ Respecter autant que possible la séparation suivante :
 - Les transitions de match, la continuation, les quotas, l'expiration et l'envoi idempotent des messages doivent rester atomiques.
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
+- Un utilisateur conserve au plus trois réponses de profil ordonnées, sur des questions distinctes. Leur remplacement reste atomique et leurs textes normalisés, sans caractères de contrôle, entre 10 et 300 caractères et 1 000 octets maximum.
+- Supprimer une question de profil supprime volontairement toutes ses réponses par cascade PostgreSQL. Le dashboard doit afficher `answer_count` et demander une confirmation explicite avant cette opération irréversible.
 - Une photo reçue ne peut dépasser 500 000 octets et doit porter l’une des extensions `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Vérifier aussi MIME, signature et dimensions ; ne stocker qu’un WebP privé sans métadonnées, lui-même limité à 500 000 octets.
 - `PUT /users/me/photo` exige un `Idempotency-Key` UUID v4. Conserver 24 heures uniquement son empreinte de requête et son état ; un replay identique ne doit ni reconvertir ni réécrire l’objet, et une clé réutilisée avec un autre contenu ou un résultat devenu obsolète doit être refusée.
 - PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Les réponses publiques ne lisent que la ligne `ready` et produisent une URL signée courte au dernier moment.
@@ -71,7 +73,7 @@ Respecter autant que possible la séparation suivante :
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox` et `004_admin_photo_reconciliation` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, puis l’action d’audit de relance opérateur. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox`, `004_admin_photo_reconciliation` et `005_profile_questions` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, l’action d’audit de relance opérateur, puis le catalogue et les réponses de profil. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -107,18 +109,19 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 2 septembre 2026, les migrations photo jusqu’à `004_admin_photo_reconciliation` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox et la relance admin transactionnelle/auditée. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
+Au 2 septembre 2026, les migrations jusqu’à `005_profile_questions` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, la relance admin transactionnelle/auditée et la suppression en cascade des réponses lors du retrait d’une question. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 
 Les prochains travaux API/infra prioritaires documentés sont :
 
 1. suivi opérationnel de la livraison Sweego, idéalement par webhook, et gestion/test de la perte de réponse fournisseur ;
-2. métriques, dashboards et alertes, y compris latences et comportement du feed hybride ;
-3. déploiement/supervision des workers maintenance et outbox, avec Redis hautement disponible/managé dans l'environnement cible ;
-4. sauvegarde/restauration PostgreSQL, du stockage objet et stratégie de sauvegarde, réparation et montée de version Scylla ;
-5. réconciliation Stripe planifiée vers `user_subscription` et alerte sur les webhooks durablement en échec ;
-6. tests de charge, audit de sécurité externe et rotation opérationnelle des secrets.
+2. qualité et modération des photos, bios et réponses libres avant ouverture publique ;
+3. métriques, dashboards et alertes, y compris latences et comportement du feed hybride ;
+4. déploiement/supervision des workers maintenance et outbox, avec Redis hautement disponible/managé dans l'environnement cible ;
+5. sauvegarde/restauration PostgreSQL, du stockage objet et stratégie de sauvegarde, réparation et montée de version Scylla ;
+6. réconciliation Stripe planifiée vers `user_subscription` et alerte sur les webhooks durablement en échec ;
+7. tests de charge, audit de sécurité externe et rotation opérationnelle des secrets.
 
 La couverture à étendre concerne notamment la concurrence de continuation/quota Free, les refresh tokens avec PostgreSQL réel, les tombstones, le retrait des consentements, la pagination matchs/signalements, la maintenance sur données expirées, les coupures Redis/Scylla, le webhook Sweego et un parcours Stripe sandbox complet.
 

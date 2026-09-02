@@ -96,6 +96,11 @@ asynchrone avec reprise exponentielle et dead-letter après dix tentatives.
 La console admin expose des métriques de cycle de vie et une file de réconciliation paginée. Une relance manuelle
 ne révèle ni clé objet ni image, refuse les photos saines et crée une trace d’audit avec son motif.
 
+Les profils disposent aussi d’un catalogue de questions administrable. Chaque utilisateur peut enregistrer jusqu’à
+trois réponses ordonnées via un remplacement atomique. Elles sont exposées sur son profil, dans la découverte et
+les résumés de match, et figurent dans l’export RGPD. Le dashboard peut créer, modifier et supprimer une question ;
+une suppression efface également toutes les réponses associées après confirmation explicite.
+
 ## Authentification OTP
 
 L’authentification combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte
@@ -111,7 +116,7 @@ numéros acceptés utilisent actuellement le format français E.164, par exemple
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox et l’action d’audit de réconciliation. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation et les questions de profil. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
 | `pnpm run db:reset-scylla` | Vide les décisions de découverte du ScyllaDB local. |

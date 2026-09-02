@@ -93,6 +93,7 @@ export class MatchesRepository {
         CASE WHEN COALESCE(my_state.revealed, false) AND COALESCE(other_state.revealed, false)
           THEN other_photo.object_key ELSE NULL END AS other_photo,
         COALESCE(other_traits.names, ARRAY[]::text[]) AS other_traits,
+        COALESCE(other_answers.items, '[]'::jsonb) AS other_profile_answers,
         COALESCE(my_state.revealed, false) AS my_revealed,
         COALESCE(my_state.revealed, false) AND COALESCE(other_state.revealed, false) AS photos_revealed,
         COALESCE(my_state.continued, false) AS my_continued,
@@ -118,6 +119,18 @@ export class MatchesRepository {
         FROM user_trait JOIN trait ON trait.id = user_trait.trait_id
         WHERE user_trait.user_id = other_profile.user_id
       ) AS other_traits ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'question_id', answer.question_id,
+          'code', question.code,
+          'question', question.prompt,
+          'answer', answer.answer,
+          'position', answer.position
+        ) ORDER BY answer.position) AS items
+        FROM user_profile_answer AS answer
+        JOIN profile_question AS question ON question.id = answer.question_id
+        WHERE answer.user_id = other_profile.user_id
+      ) AS other_answers ON true
       LEFT JOIN LATERAL (
         SELECT message.id, message.sender_id, message.content, message.created_at, message.read_at
         FROM chat_message AS message

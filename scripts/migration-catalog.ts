@@ -34,6 +34,9 @@ export const migrations = [{
 }, {
   version: '004_admin_photo_reconciliation',
   filenames: ['004_admin_photo_reconciliation.sql'],
+}, {
+  version: '005_profile_questions',
+  filenames: ['005_profile_questions.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

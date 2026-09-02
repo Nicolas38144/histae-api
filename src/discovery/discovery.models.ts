@@ -1,4 +1,5 @@
 import type { Sex } from '../users/users.models';
+import type { ProfileAnswer } from '../profile-questions/profile-questions.models';
 
 export const SWIPE_DECISIONS = ['like', 'pass'] as const;
 export type SwipeDecision = typeof SWIPE_DECISIONS[number];
@@ -11,6 +12,7 @@ export type DiscoveryCandidateRow = {
   bio: string | null;
   distance_km: number;
   traits: string[];
+  profile_answers?: ProfileAnswer[] | null;
 };
 
 export type DiscoveryCursor = { distance_km: number; id: string };
@@ -27,7 +29,10 @@ export type DiscoveryDataReferences = {
   incoming: DiscoveryAction[];
 };
 
-export type FeedCandidate = Omit<DiscoveryCandidateRow, 'distance_km'> & { distance_km: number };
+export type FeedCandidate = Omit<DiscoveryCandidateRow, 'distance_km' | 'profile_answers'> & {
+  distance_km: number;
+  profile_answers: ProfileAnswer[];
+};
 
 export const DISCOVERY_REQUIRED_ACTIONS = [
   'profile',

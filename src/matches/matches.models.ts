@@ -1,3 +1,5 @@
+import type { ProfileAnswer } from '../profile-questions/profile-questions.models';
+
 export const MATCH_STATUSES = ['awaiting_continuation', 'active', 'confirmed', 'expired', 'ended'] as const;
 export type MatchStatus = typeof MATCH_STATUSES[number];
 
@@ -23,6 +25,7 @@ export type UserMatchRow = CursorMatchRow & {
   other_bio: string | null;
   other_photo: string | null;
   other_traits: string[];
+  other_profile_answers?: ProfileAnswer[] | null;
   my_revealed: boolean;
   photos_revealed: boolean;
   my_continued: boolean;

@@ -113,6 +113,7 @@ export class DiscoveryRepository {
             * power(sin(radians((target_presence.longitude::double precision - viewer.longitude) / 2)), 2)
           )))))::double precision AS distance_km,
           COALESCE(traits.names, ARRAY[]::text[]) AS traits,
+          COALESCE(answers.items, '[]'::jsonb) AS profile_answers,
           viewer.max_distance_km AS viewer_max_distance_km,
           target_preferences.max_distance_km AS target_max_distance_km
         FROM viewer
@@ -129,6 +130,18 @@ export class DiscoveryRepository {
           FROM user_trait JOIN trait ON trait.id = user_trait.trait_id
           WHERE user_trait.user_id = target.user_id
         ) AS traits ON true
+        LEFT JOIN LATERAL (
+          SELECT jsonb_agg(jsonb_build_object(
+            'question_id', answer.question_id,
+            'code', question.code,
+            'question', question.prompt,
+            'answer', answer.answer,
+            'position', answer.position
+          ) ORDER BY answer.position) AS items
+          FROM user_profile_answer AS answer
+          JOIN profile_question AS question ON question.id = answer.question_id
+          WHERE answer.user_id = target.user_id
+        ) AS answers ON true
         WHERE target_presence.latitude::double precision BETWEEN
             viewer.latitude - viewer.max_distance_km / 111.0
             AND viewer.latitude + viewer.max_distance_km / 111.0
@@ -165,13 +178,18 @@ export class DiscoveryRepository {
                OR (user1_id = target.user_id AND user2_id = $1)
           )
       )
-      SELECT user_id, firstname, age, sex, bio, distance_km, traits
+      SELECT user_id, firstname, age, sex, bio, distance_km, traits, profile_answers
       FROM candidates
       WHERE distance_km <= least(viewer_max_distance_km, target_max_distance_km)
         AND ($4::double precision IS NULL OR (distance_km, user_id) > ($4::double precision, $5::uuid))
       ORDER BY distance_km, user_id
       LIMIT $6
     `, [userId, sensitiveVersion, locationVersion, cursor?.distance_km ?? null, cursor?.id ?? null, limit, targetId ?? null]);
-    return result.rows.map((row) => ({ ...row, distance_km: Number(row.distance_km), traits: row.traits ?? [] }));
+    return result.rows.map((row) => ({
+      ...row,
+      distance_km: Number(row.distance_km),
+      traits: row.traits ?? [],
+      profile_answers: row.profile_answers ?? [],
+    }));
   }
 }

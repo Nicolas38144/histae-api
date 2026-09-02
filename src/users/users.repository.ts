@@ -9,11 +9,24 @@ export class UsersRepository {
   async findProfile(userId: string): Promise<ProfileRow | undefined> {
     const result = await this.database.query<ProfileRow>(`
       SELECT profile.user_id, profile.firstname, profile.birthdate, profile.sex, profile.bio,
-        photo.object_key AS photo
+        photo.object_key AS photo,
+        COALESCE(answers.items, '[]'::jsonb) AS profile_answers
       FROM user_profile AS profile
       JOIN user_account AS account ON account.user_id = profile.user_id
       LEFT JOIN user_photo AS photo
         ON photo.user_id = profile.user_id AND photo.status = 'ready'
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object(
+          'question_id', answer.question_id,
+          'code', question.code,
+          'question', question.prompt,
+          'answer', answer.answer,
+          'position', answer.position
+        ) ORDER BY answer.position) AS items
+        FROM user_profile_answer AS answer
+        JOIN profile_question AS question ON question.id = answer.question_id
+        WHERE answer.user_id = profile.user_id
+      ) AS answers ON true
       WHERE profile.user_id = $1 AND account.deleted_at IS NULL
     `, [userId]);
     return result.rows[0];

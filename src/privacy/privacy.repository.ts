@@ -93,6 +93,13 @@ export class PrivacyRepository {
       `, [userId]);
       const preferences = await client.query('SELECT min_age, max_age, max_distance_km, looking_for FROM user_preferences WHERE user_id = $1', [userId]);
       const traits = await client.query(`SELECT trait.id, trait.name FROM trait JOIN user_trait ON user_trait.trait_id = trait.id WHERE user_trait.user_id = $1 ORDER BY trait.name`, [userId]);
+      const profileAnswers = await client.query(`
+        SELECT answer.question_id, question.code, question.prompt AS question,
+          answer.answer, answer.position
+        FROM user_profile_answer AS answer
+        JOIN profile_question AS question ON question.id = answer.question_id
+        WHERE answer.user_id = $1 ORDER BY answer.position
+      `, [userId]);
       const consents = await client.query(`SELECT consent_type, granted, document_version, granted_at, withdrawn_at FROM user_consent WHERE user_id = $1 ORDER BY event_sequence`, [userId]);
       const matches = await client.query(`SELECT id, user1_id, user2_id, status, expires_at, created_at, last_message_at FROM match_init WHERE user1_id = $1 OR user2_id = $1 ORDER BY created_at`, [userId]);
       const messages = await client.query(`SELECT id, match_id, content, created_at, read_at FROM chat_message WHERE sender_id = $1 ORDER BY created_at`, [userId]);
@@ -120,6 +127,7 @@ export class PrivacyRepository {
         profile: profile.rows[0] ?? null,
         preferences: preferences.rows[0] ?? null,
         traits: traits.rows,
+        profile_answers: profileAnswers.rows,
         legal_choices: consents.rows,
         matches: matches.rows,
         authored_messages: messages.rows,

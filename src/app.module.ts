@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { AdminModule } from './admin/admin.module';
 import { MobileModule } from './mobile/mobile.module';
 import { BillingModule } from './billing/billing.module';
+import { ProfileQuestionsModule } from './profile-questions/profile-questions.module';
 
-@Module({ imports: [CoreModule, AuthModule, MobileModule, BillingModule, AdminModule, UsersModule, PrivacyModule, TraitsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
+@Module({ imports: [CoreModule, AuthModule, MobileModule, BillingModule, AdminModule, UsersModule, PrivacyModule, TraitsModule, ProfileQuestionsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
 export class AppModule {}

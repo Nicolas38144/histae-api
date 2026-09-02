@@ -78,7 +78,7 @@ Toutes ces routes sont authentifiées.
 
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
-| GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `photo` est absente ou contient une URL privée signée valable cinq minutes. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
+| GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate`, `profile_answers` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `profile_answers` contient au plus trois objets ordonnés `{ question_id, code, question, answer, position }`. `photo` est absente ou contient une URL privée signée valable cinq minutes. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
 | PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max. La photo n’est pas acceptée par cette route. |
 | PUT | `/users/me/photo` | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées sous une clé versionnée. Pendant 24 h, rejouer la même clé avec le même fichier renvoie une nouvelle URL signée de la même photo sans reconversion. Une clé réutilisée avec un autre nom, MIME ou contenu renvoie `409 idempotency_key_conflict`; une clé dont la photo a depuis été remplacée ou supprimée renvoie `409 idempotency_key_consumed`; une demande encore active renvoie `409 photo_update_in_progress`. Une clé absente ou invalide renvoie `400 invalid_idempotency_key`. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
 | DELETE | `/users/me/photo` | — | `204` dès que la transition est durable. La photo `ready` passe atomiquement à `deleting`, devient immédiatement invisible et un événement `photo.delete` est ajouté à l’outbox PostgreSQL. Le worker supprime ensuite l’objet privé et la ligne technique avec reprises bornées ; une panne S3 après le `204` n’annule donc pas la demande. |
@@ -86,7 +86,7 @@ Toutes ces routes sont authentifiées.
 | PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
 | PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
 | POST | `/users/me/deletion-token` | — | `201 { "confirmation_token", "expires_at" }`. Remplace tout jeton précédent par un secret dédié, hashé en base, à usage unique et valable 10 minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1 à 30 min). |
-| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, supprime le Customer Stripe et la photo privée, puis efface profil, préférences, traits, localisation, sessions, appareils, notifications, blocages, projection d’abonnement et swipes Scylla entrants/sortants ; les factures sont détachées du compte pour leur conservation comptable. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si un stockage externe indispensable ne permet pas un effacement complet : `503 data_erasure_unavailable`. |
+| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `204`. Consomme d’abord le jeton dédié, supprime le Customer Stripe et la photo privée, puis efface profil, réponses aux questions, préférences, traits, localisation, sessions, appareils, notifications, blocages, projection d’abonnement et swipes Scylla entrants/sortants ; les factures sont détachées du compte pour leur conservation comptable. Jeton invalide ou expiré : `401 invalid_or_expired_deletion_token`. Si un stockage externe indispensable ne permet pas un effacement complet : `503 data_erasure_unavailable`. |
 | GET | `/users/me/continuation-quota` | — | `200` avec le plan effectif, l’usage et, pour un plan limité, `weekly_limit` et `remaining`. |
 
 ### Appareils, push et temps réel
@@ -115,7 +115,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | --- | --- | --- | --- | --- |
 | POST | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | `{ "type": "access\|erasure\|portability\|rectification\|restriction\|objection" }` | `201` avec la demande. Une seule demande ouverte par utilisateur et par type. |
 | GET | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | — | `200 { "requests": [...] }`. |
-| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, la projection d’abonnement, les factures Stripe rattachées et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
+| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, dont les réponses aux questions de profil, la projection d’abonnement, les factures Stripe rattachées et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
 | GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. `photo` vaut toujours `null` : bloquer un compte n’accorde aucun accès à sa photo privée. |
 | POST | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. Clôt immédiatement les matchs entre les deux comptes et empêche leur recréation. |
 | DELETE | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. |
@@ -135,6 +135,22 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | PATCH | `/admin/traits/:id` | Admin | `{ "name": "…" }` | `200 { "message": "trait updated" }`. |
 | DELETE | `/admin/traits/:id` | Admin | UUID | `204`. Cette version supprime physiquement le trait. |
 
+## Questions de profil
+
+Le catalogue initial contient quinze questions. Chaque réponse publique a la forme
+`{ "question_id", "code", "question", "answer", "position" }`. Une réponse est une ligne de texte normalisée,
+de 10 à 300 caractères et 1 000 octets maximum ; les caractères de contrôle sont refusés.
+
+| Méthode | Route | Accès | Corps / paramètres | Résultat |
+| --- | --- | --- | --- | --- |
+| GET | `/profile-questions` | Authentifiée | — | `200 { "questions": [...] }`, trié par `display_order` puis UUID. Chaque entrée expose `id`, `code`, `prompt`, `category` et `display_order`. |
+| GET | `/users/me/profile-answers` | Authentifiée | — | `200 { "answers": [...] }`, avec au plus trois réponses dans l’ordre choisi. |
+| PUT | `/users/me/profile-answers` | Authentifiée | `{ "answers": [{ "question_id": "uuid", "answer": "…" }] }` | Remplace atomiquement toutes les réponses et renvoie `200 { "answers": [...] }`. Le tableau peut être vide, contient au plus trois questions distinctes et n’accepte que des questions existantes. Profil absent : `404 profile_not_found`; question absente : `404 profile_question_not_found`. |
+| GET | `/admin/profile-questions` | Admin | — | `200 { "questions": [...] }`, avec dates et `answer_count` pour avertir avant une modification ou suppression. |
+| POST | `/admin/profile-questions` | Admin | `{ "prompt", "category", "display_order"?: 100 }` | `201` avec la question créée. Les catégories sont `daily_life`, `personality`, `interests`, `relationships` et `conversation`. Un libellé déjà présent, sans tenir compte de la casse, renvoie `409 profile_question_already_exists`. |
+| PATCH | `/admin/profile-questions/:id` | Admin | Au moins un de `{ "prompt", "category", "display_order" }` | `200` avec la question mise à jour. La modification du libellé devient immédiatement visible avec les réponses existantes. |
+| DELETE | `/admin/profile-questions/:id` | Admin | UUID | `204`. Supprime définitivement la question et toutes ses réponses utilisateur dans la même opération PostgreSQL (`ON DELETE CASCADE`). |
+
 ## Signalements
 
 | Méthode | Route | Accès | Corps / paramètres | Résultat |
@@ -147,7 +163,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 
 | Méthode | Route | Accès | Corps / paramètres | Résultat |
 | --- | --- | --- | --- | --- |
-| GET | `/matches/me` | Authentifiée | `limit`, `cursor` (`offset` déprécié) | `200 { "matches": [...], "next_cursor": "…\|null" }`, triés par activité. Chaque élément contient l’autre utilisateur (`firstname`, âge, sexe, bio, traits et photo conditionnelle), `my_revealed`, `photos_revealed`, `my_continued`, `unread_count` et `last_message`. La photo reste `null` avant la révélation mutuelle. |
+| GET | `/matches/me` | Authentifiée | `limit`, `cursor` (`offset` déprécié) | `200 { "matches": [...], "next_cursor": "…\|null" }`, triés par activité. Chaque élément contient l’autre utilisateur (`firstname`, âge, sexe, bio, traits, `profile_answers` et photo conditionnelle), `my_revealed`, `photos_revealed`, `my_continued`, `unread_count` et `last_message`. La photo reste `null` avant la révélation mutuelle. |
 | GET | `/matches/:userId` | Admin | UUID utilisateur ; `reason` obligatoire (3 à 500 caractères) ; `limit`, `cursor` (`offset` déprécié) | Même réponse paginée pour l’utilisateur ciblé. La consultation est inscrite dans `data_access_log`. |
 | PATCH | `/matches/:id/reveal` | Authentifiée | — | `200` avec `{ "message", "photos_revealed" }`. Chaque participant enregistre son consentement ; `photos_revealed` devient vrai quand les deux ont consenti. |
 | PATCH | `/matches/:id/continue` | Authentifiée | — | `200` avec `{ "message", "match_confirmed" }`. Disponible après la fenêtre initiale de 24 h, puis demande le consentement des deux participants. Le quota hebdomadaire est débité lorsque le second consentement confirme le match. |
@@ -164,7 +180,7 @@ Un match est initialement `active` pendant 24 h. Il passe ensuite à `awaiting_c
 | --- | --- | --- | --- | --- |
 | GET | `/users/me/discovery-status` | Authentifiée | — | `200 { "ready", "required_actions", "presence_expires_at" }`. Les actions possibles sont `profile`, `sex`, `preferences`, `sensitive_data_consent`, `location_consent` et `fresh_presence`. |
 | POST | `/swipes` | Authentifiée | `{ "target_user_id": "uuid", "decision": "like\|pass" }` | `201 { "decision", "matched", "match"? }`. La décision est immuable pendant sa rétention. Deux likes réciproques créent atomiquement le match PostgreSQL. Limite dédiée : 120/min/utilisateur par défaut. |
-| GET | `/feed` | Authentifiée | `limit` de 1 à 100 (20 par défaut), `cursor` opaque optionnel | `200 { "profiles": [...], "next_cursor": "…\|null" }`. Limite : 60/min/utilisateur, puis `429 feed_rate_limit_exceeded`. Chaque profil expose `user_id`, prénom, âge, sexe, bio éventuelle, distance arrondie au dixième et traits. |
+| GET | `/feed` | Authentifiée | `limit` de 1 à 100 (20 par défaut), `cursor` opaque optionnel | `200 { "profiles": [...], "next_cursor": "…\|null" }`. Limite : 60/min/utilisateur, puis `429 feed_rate_limit_exceeded`. Chaque profil expose `user_id`, prénom, âge, sexe, bio éventuelle, distance arrondie au dixième, traits et `profile_answers`. |
 
 Le demandeur et les candidats doivent posséder un compte actif, un profil avec sexe, des préférences, les
 versions courantes des consentements sensible et de localisation, ainsi qu’une position fraîche de moins d’une

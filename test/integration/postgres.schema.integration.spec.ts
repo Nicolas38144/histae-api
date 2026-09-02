@@ -17,6 +17,7 @@ import { UsersRepository } from '../../src/users/users.repository';
 import { BillingRepository } from '../../src/billing/billing.repository';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
 import { PhotosRepository } from '../../src/photos/photos.repository';
+import { ProfileQuestionsRepository } from '../../src/profile-questions/profile-questions.repository';
 import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
@@ -54,6 +55,7 @@ describe('PostgreSQL schema contract', () => {
       'account_tombstone', 'account_deletion_token', 'billing_customer',
       'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
       'user_photo', 'photo_upload_request', 'outbox_event',
+      'profile_question', 'user_profile_answer',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -97,6 +99,9 @@ describe('PostgreSQL schema contract', () => {
         photos: boolean;
         photoRequests: boolean;
         outbox: boolean;
+        profileQuestions: boolean;
+        profileAnswers: boolean;
+        seededQuestions: number;
         plans: number;
       }>(`
         SELECT
@@ -105,13 +110,18 @@ describe('PostgreSQL schema contract', () => {
           to_regclass($3) IS NOT NULL AS photos,
           to_regclass($4) IS NOT NULL AS "photoRequests",
           to_regclass($5) IS NOT NULL AS outbox,
-          (SELECT count(*)::integer FROM subscription_plan) AS plans
+          to_regclass($6) IS NOT NULL AS "profileQuestions",
+          to_regclass($7) IS NOT NULL AS "profileAnswers",
+          (SELECT count(*)::integer FROM subscription_plan) AS plans,
+          (SELECT count(*)::integer FROM profile_question) AS "seededQuestions"
       `, [
         `${schema}.user_account`,
         `${schema}.billing_invoice`,
         `${schema}.user_photo`,
         `${schema}.photo_upload_request`,
         `${schema}.outbox_event`,
+        `${schema}.profile_question`,
+        `${schema}.user_profile_answer`,
       ]);
       expect(contract.rows[0]).toEqual({
         account: true,
@@ -119,11 +129,69 @@ describe('PostgreSQL schema contract', () => {
         photos: true,
         photoRequests: true,
         outbox: true,
+        profileQuestions: true,
+        profileAnswers: true,
         plans: 2,
+        seededQuestions: 15,
       });
     } finally {
       await client.query('ROLLBACK');
       client.release();
+    }
+  });
+
+  it('replaces at most three profile answers and cascades them when an administrator deletes a question', async () => {
+    const userId = randomUUID();
+    const questionId = randomUUID();
+    const repository = new ProfileQuestionsRepository(databaseFor(pool) as never);
+    try {
+      await pool.query(`
+        INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
+        VALUES ($1, 'user', $2, $3)
+      `, [userId, `test-${userId}`, Buffer.alloc(0)]);
+      await pool.query(`
+        INSERT INTO user_profile (user_id, firstname, birthdate)
+        VALUES ($1, 'Question test', DATE '1990-01-01')
+      `, [userId]);
+      await expect(repository.create(questionId, `test_${questionId.replaceAll('-', '')}`, {
+        prompt: 'Une question de test suffisamment longue ?',
+        category: 'conversation',
+        display_order: 999,
+      })).resolves.toEqual(expect.objectContaining({
+        id: questionId,
+        answer_count: 0,
+      }));
+
+      await expect(repository.replaceForUser(userId, [{
+        question_id: questionId,
+        answer: 'Une réponse de test suffisamment longue.',
+      }])).resolves.toBe('updated');
+      await expect(repository.listForUser(userId)).resolves.toEqual([expect.objectContaining({
+        question_id: questionId,
+        position: 1,
+      })]);
+      await expect(new UsersRepository(databaseFor(pool) as never).findProfile(userId)).resolves.toEqual(
+        expect.objectContaining({
+          profile_answers: [expect.objectContaining({ question_id: questionId, position: 1 })],
+        }),
+      );
+      await expect(repository.listForAdmin()).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: questionId, answer_count: 1 }),
+      ]));
+      await expect(repository.update(questionId, {
+        prompt: 'Une question de test modifiée et suffisamment longue ?',
+        display_order: 998,
+      })).resolves.toEqual(expect.objectContaining({
+        id: questionId,
+        display_order: 998,
+        answer_count: 1,
+      }));
+
+      await expect(repository.delete(questionId)).resolves.toBe(true);
+      await expect(repository.listForUser(userId)).resolves.toEqual([]);
+    } finally {
+      await pool.query('DELETE FROM profile_question WHERE id = $1', [questionId]);
+      await deleteAccounts(pool, userId);
     }
   });
 

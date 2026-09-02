@@ -1,3 +1,5 @@
+import type { ProfileAnswer } from '../profile-questions/profile-questions.models';
+
 export const SEXES = ['male', 'female', 'other'] as const;
 export type Sex = typeof SEXES[number];
 
@@ -11,6 +13,7 @@ export type ProfileRow = {
   sex: Sex | null;
   bio: string | null;
   photo: string | null;
+  profile_answers?: ProfileAnswer[] | null;
 };
 
 export type PreferencesRow = {

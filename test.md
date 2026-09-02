@@ -15,19 +15,19 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **52 fichiers de test, 52 suites Jest et 349 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **54 fichiers de test, 54 suites Jest et 363 cas** lorsque toutes les intégrations sont activées :
 
-- 248 tests unitaires ;
-- 58 tests e2e ;
-- 31 tests d’intégration PostgreSQL et démarrage applicatif ;
+- 257 tests unitaires ;
+- 62 tests e2e ;
+- 32 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 40 suites unitaires, 9 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 49 suites autonomes et leurs 306 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 43 cas, sans flag d’activation.
+Jest affiche 41 suites unitaires, 10 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 51 suites autonomes et leurs 319 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 44 cas, sans flag d’activation.
 
-Le 2 septembre 2026, TypeScript, ESLint, le build, les **49 suites et 306 cas autonomes** ainsi que les
-**3 suites et 43 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **52 suites et 349 cas**.
-La migration `004_admin_photo_reconciliation` a été appliquée sans destruction sur `histae-dev`; la chaîne complète
+Le 2 septembre 2026, TypeScript, ESLint, le build, les **51 suites et 319 cas autonomes** ainsi que les
+**3 suites et 44 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **54 suites et 363 cas**.
+La migration `005_profile_questions` a été appliquée sans destruction sur `histae-dev`; la chaîne complète
 est aussi rejouée dans un schéma isolé afin de vérifier les migrations et leurs checksums.
 
 ## Commandes
@@ -42,7 +42,7 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 42 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 44 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL et démarrage applicatif réels uniquement.
@@ -167,7 +167,7 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 56 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 59 tests paramétrés
 
 Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 56 classes injectées principales, y compris Redis, le stockage photo, l’outbox et son worker, le module mobile et les cinq composants Stripe Billing.
 
@@ -360,6 +360,15 @@ Suite `PrivacyService cross-database privacy operations` :
 3. Vérifie l’ordre Stripe, stockage photo puis Scylla pour une demande d’effacement terminée par l’administration.
 4. Garantit que la liste des comptes bloqués ne signe aucune photo privée.
 
+### `test/unit/profile-questions/profile-questions.service.spec.ts` — 6 tests
+
+1. Normalise puis remplace atomiquement les réponses sélectionnées.
+2. Refuse les questions dupliquées et les caractères de contrôle avant la persistance.
+3. Traduit l’absence du profil ou d’une question en erreurs stables.
+4. Normalise une question admin et génère un code opaque stable.
+5. Supprime une question ou renvoie `404 profile_question_not_found`.
+6. Refuse une mise à jour administrative vide.
+
 ### `test/unit/ratelimit/rate-limit.service.spec.ts` — 4 tests
 
 1. Vérifie le compteur Redis, le `429`, le `Retry-After` et l’absence de l’identifiant brut dans la clé HMAC.
@@ -462,6 +471,13 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 5. Vérifie le blocage et le déblocage d’un UUID cible.
 6. Refuse un identifiant de cible invalide avant mutation.
 
+### `test/e2e/profile-questions.contract.spec.ts` — 4 tests
+
+1. Liste le catalogue et remplace les réponses de l’utilisateur authentifié.
+2. Refuse plus de trois réponses et les champs inconnus avant le service.
+3. Vérifie la création, la modification et la suppression administratives.
+4. Refuse les mutations admin dont les champs ne respectent pas le contrat.
+
 ### `test/e2e/reports.contract.spec.ts` — 3 tests
 
 1. Crée un signalement validé sous le rate limit utilisateur dédié.
@@ -487,7 +503,7 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 31 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 32 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
@@ -521,7 +537,8 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 28. **Idempotence photo et émission outbox** — crée et active une photo, la rejoue sans doublon, refuse une empreinte différente, remplace la photo et vérifie l’événement transactionnel ainsi que la consommation de l’ancienne clé.
 29. **Réconciliation photo admin** — liste et mesure un upload ancien, le passe à `deleting`, crée ou réinitialise `photo.delete` et vérifie l’audit opérateur dans la même transaction.
 30. **Concurrence et dead-letter outbox** — vérifie la propriété exclusive d’un événement, sa reprise puis son passage en dead-letter au budget configuré.
-31. **Base neuve** — applique la baseline et les migrations `002`/`003`/`004` dans un schéma isolé vide, vérifie les tables finales et les deux plans, puis annule toute la transaction.
+31. **Base neuve** — applique la baseline et les migrations `002`/`003`/`004`/`005` dans un schéma isolé vide, vérifie les tables finales, les deux plans et les quinze questions initiales, puis annule toute la transaction.
+32. **Questions de profil** — remplace réellement les réponses, vérifie leur projection dans le profil puis confirme que la suppression administrative de la question les efface par cascade.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -555,11 +572,11 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 306 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 43 cas réels et vérifier que les 349 cas passent au total.
+5. exécuter `pnpm test` pour les 319 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 44 cas réels et vérifier que les 363 cas passent au total.
 
-Dans l’état courant, TypeScript, ESLint, le build, les **40 suites/248 cas unitaires**, les **9 suites/58
-cas e2e** et les **3 suites/43 cas d’intégration** sont verts, soit **52 suites et 349 cas**. Docker déclare
+Dans l’état courant, TypeScript, ESLint, le build, les **41 suites/257 cas unitaires**, les **10 suites/62
+cas e2e** et les **3 suites/44 cas d’intégration** sont verts, soit **54 suites et 363 cas**. Docker déclare
 ScyllaDB, Redis et SeaweedFS `healthy`; le smoke test réel du bucket S3-compatible avait été validé lors du lot photo immédiatement précédent.
 
 ## Audit des tests obsolètes

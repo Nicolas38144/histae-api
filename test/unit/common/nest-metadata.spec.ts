@@ -54,6 +54,9 @@ import { PhotosService } from '../../../src/photos/photos.service';
 import { PhotosMaintenanceService } from '../../../src/photos/photos-maintenance.service';
 import { OutboxRepository } from '../../../src/outbox/outbox.repository';
 import { OutboxWorkerService } from '../../../src/outbox/outbox-worker.service';
+import { ProfileQuestionsController } from '../../../src/profile-questions/profile-questions.controller';
+import { ProfileQuestionsRepository } from '../../../src/profile-questions/profile-questions.repository';
+import { ProfileQuestionsService } from '../../../src/profile-questions/profile-questions.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
@@ -67,6 +70,7 @@ const injectedClasses = [
   MobileController, MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
   TraitsController, TraitsRepository, TraitsService,
+  ProfileQuestionsController, ProfileQuestionsRepository, ProfileQuestionsService,
   ReportsController, ReportsRepository, ReportsService,
   AdminController, AdminRepository, AdminService,
   BillingController, StripeWebhookController, BillingRepository, BillingService, StripeGateway,

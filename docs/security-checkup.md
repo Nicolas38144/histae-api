@@ -22,6 +22,7 @@ directement corrigeables trouvés pendant la revue ont été traités.
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
 | Limites de débit | Satisfaisant | Redis obligatoire en production, clés HMAC, échec fermé, `Retry-After`, limite globale et limites sensibles dédiées. |
 | Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, upload idempotent 24 h, clés versionnées, suppression par outbox durable et URL courte signée seulement au besoin. |
+| Questions de profil | Satisfaisant avec modération à compléter | Trois réponses au plus, questions distinctes, texte normalisé et borné, SQL paramétré, remplacement transactionnel et suppression en cascade annoncée dans le dashboard. |
 | Données sensibles | Satisfaisant avec dépendances infra | Téléphone HMAC + AES-256-GCM, logs HTTP sans query string, export/effacement inter-bases et politique de rétention. |
 | Dépendances | Satisfaisant au contrôle | Audits pnpm complet et production : aucune vulnérabilité connue le 1er septembre 2026. |
 
@@ -52,6 +53,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - La console admin ne reçoit ni clé objet, ni URL, ni image dans la file `user_photo`. Une relance refuse les photos
   `ready`, les traitements récents et les workers actifs, puis remet la suppression en file et inscrit le motif sous
   `admin_reconcile_photo` dans la même transaction.
+- Les questions de profil utilisent des catégories fermées, des libellés uniques et des bornes applicatives et SQL.
+  Le remplacement des réponses verrouille le profil et les questions concernées ; une suppression administrative
+  efface la question et ses réponses par cascade atomique, après affichage du nombre d’enregistrements concernés.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -73,6 +77,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 6. **Validation offensive** : faire réaliser un pentest authentifié couvrant IDOR/BOLA, élévation de privilèges,
    concurrence, abuse cases OTP, webhooks Stripe, multipart/HEIC et URLs signées. Ajouter SAST, secret scanning et
    audit de dépendances récurrent dans la chaîne de livraison lorsque celle-ci sera définie.
+7. **Contenu de profil** : ajouter la détection qualité/modération prévue pour les bios, photos et réponses libres,
+   avec un parcours de signalement et de revue adapté avant une ouverture publique à grande échelle.
 
 ## Hypothèses importantes
 
@@ -87,8 +93,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 40 suites, 248 cas réussis ;
-- tests e2e Fastify : 9 suites, 58 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 43 cas réussis ;
-- migrations PostgreSQL : `004_admin_photo_reconciliation` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
+- tests unitaires : 41 suites, 257 cas réussis ;
+- tests e2e Fastify : 10 suites, 62 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 44 cas réussis ;
+- migrations PostgreSQL : `005_profile_questions` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
 - état Docker local : SeaweedFS, Redis et ScyllaDB déclarés `healthy`; configuration Compose objet valide.

@@ -139,7 +139,11 @@ export class DiscoveryService {
 }
 
 function toFeedCandidate(row: DiscoveryCandidateRow): FeedCandidate {
-  return { ...row, distance_km: Number(row.distance_km.toFixed(1)) };
+  return {
+    ...row,
+    distance_km: Number(row.distance_km.toFixed(1)),
+    profile_answers: row.profile_answers ?? [],
+  };
 }
 
 function encodeDiscoveryCursor(distanceKm: number, id: string): string {
