@@ -1,13 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import type { KeysetCursor } from '../common/pagination';
-import { DatabaseService } from '../database/database.service';
-import type { AdminMessageRow, AdminMetrics, AdminRevenue, AdminUserDetail, AdminUserRow, AdminUserStatus, RevenuePeriod } from './admin.models';
+import { DatabaseService, type Queryable } from '../database/database.service';
+import type { OutboxStatus } from '../outbox/outbox.models';
+import { OutboxRepository } from '../outbox/outbox.repository';
+import type {
+  AdminMessageRow,
+  AdminMetrics,
+  AdminPhotoMetrics,
+  AdminPhotoReconciliationRow,
+  AdminRevenue,
+  AdminUserDetail,
+  AdminUserRow,
+  AdminUserStatus,
+  PhotoReconciliationFilter,
+  PhotoReconciliationResult,
+  RevenuePeriod,
+} from './admin.models';
 
 type AdminRole = 'admin' | 'superadmin';
 
 @Injectable()
 export class AdminRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly outbox: OutboxRepository,
+  ) {}
 
   async listUsers(
     status: AdminUserStatus | undefined,
@@ -104,10 +121,14 @@ export class AdminRepository {
         SELECT is_location_fresh, updated_at FROM user_presence WHERE user_id = $1
       `, [targetId])).rows[0] ?? null;
 
-      await client.query(`
-        INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
-        VALUES ($1, $2, $3, 'view_profile', $4)
-      `, [targetId, adminId, adminRole, reason]);
+      await this.recordAudit(
+        client,
+        targetId,
+        adminId,
+        adminRole,
+        'view_profile',
+        reason,
+      );
 
       return {
         user_id: account.id,
@@ -154,11 +175,118 @@ export class AdminRepository {
         WHERE user_id = $1
       `, [targetId, isBanned, reason, adminId]);
       if (isBanned) await client.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false', [targetId]);
-      await client.query(`
-        INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
-        VALUES ($1, $2, $3, $4, $5)
-      `, [targetId, adminId, adminRole, isBanned ? 'admin_ban' : 'admin_unban', reason]);
+      await this.recordAudit(
+        client,
+        targetId,
+        adminId,
+        adminRole,
+        isBanned ? 'admin_ban' : 'admin_unban',
+        reason,
+      );
       return 'updated';
+    });
+  }
+
+  async listPhotoReconciliation(
+    filter: PhotoReconciliationFilter,
+    staleBefore: Date,
+    limit: number,
+    offset: number,
+    cursor: KeysetCursor | undefined,
+  ): Promise<AdminPhotoReconciliationRow[]> {
+    return (await this.database.query<AdminPhotoReconciliationRow>(`
+      SELECT photo.id, photo.user_id, photo.status, photo.size_bytes,
+        photo.width, photo.height, photo.created_at, photo.updated_at,
+        event.status AS outbox_status, event.attempts AS outbox_attempts,
+        event.available_at AS outbox_available_at,
+        event.locked_at AS outbox_locked_at,
+        event.last_error_code AS outbox_last_error_code,
+        CASE
+          WHEN photo.status IN ('pending', 'processing') THEN 'stale_processing'
+          WHEN event.status = 'dead_letter' THEN 'deletion_dead_letter'
+          WHEN event.status = 'processing' THEN 'deletion_processing'
+          WHEN event.status = 'pending' AND event.attempts > 0 THEN 'deletion_retry_scheduled'
+          WHEN event.status = 'pending' THEN 'deletion_queued'
+          WHEN event.status = 'completed' THEN 'deletion_event_completed'
+          ELSE 'deletion_event_missing'
+        END AS issue,
+        to_char(photo.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
+      FROM user_photo AS photo
+      LEFT JOIN outbox_event AS event
+        ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
+      WHERE (
+          (photo.status IN ('pending', 'processing') AND photo.updated_at <= $1)
+          OR photo.status = 'deleting'
+        )
+        AND ($2 = 'all'
+          OR ($2 = 'stale_processing' AND photo.status IN ('pending', 'processing'))
+          OR ($2 = 'deleting' AND photo.status = 'deleting')
+          OR ($2 = 'dead_letter' AND photo.status = 'deleting' AND event.status = 'dead_letter'))
+        AND ($5::timestamptz IS NULL
+          OR (photo.updated_at, photo.id) < ($5::timestamptz, $6::uuid))
+      ORDER BY photo.updated_at DESC, photo.id DESC
+      LIMIT $3 OFFSET $4
+    `, [staleBefore, filter, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
+  }
+
+  async reconcilePhoto(
+    photoId: string,
+    photoStaleBefore: Date,
+    outboxStaleBefore: Date,
+    adminId: string,
+    adminRole: AdminRole,
+    reason: string,
+  ): Promise<PhotoReconciliationResult> {
+    return this.database.transaction(async (client) => {
+      const photo = (await client.query<{
+        user_id: string;
+        status: 'pending' | 'processing' | 'ready' | 'deleting';
+        updated_at: Date;
+      }>(`
+        SELECT user_id, status, updated_at
+        FROM user_photo
+        WHERE id = $1
+        FOR UPDATE
+      `, [photoId])).rows[0];
+      if (!photo) return 'not_found';
+      if (photo.status === 'ready'
+        || (photo.status !== 'deleting' && photo.updated_at > photoStaleBefore)) {
+        return 'not_actionable';
+      }
+
+      const event = (await client.query<{
+        status: OutboxStatus;
+        locked_at: Date | null;
+      }>(`
+        SELECT status, locked_at
+        FROM outbox_event
+        WHERE event_type = 'photo.delete' AND aggregate_id = $1
+        FOR UPDATE
+      `, [photoId])).rows[0];
+      if (event?.status === 'processing'
+        && event.locked_at !== null
+        && event.locked_at > outboxStaleBefore) {
+        return 'already_processing';
+      }
+
+      await client.query(`
+        UPDATE user_photo
+        SET status = 'deleting', updated_at = clock_timestamp()
+        WHERE id = $1
+      `, [photoId]);
+      await this.outbox.requeue(client, {
+        eventType: 'photo.delete',
+        aggregateId: photoId,
+      });
+      await this.recordAudit(
+        client,
+        photo.user_id,
+        adminId,
+        adminRole,
+        'admin_reconcile_photo',
+        reason,
+      );
+      return 'queued';
     });
   }
 
@@ -215,7 +343,12 @@ export class AdminRepository {
     };
   }
 
-  async metrics(termsVersion: string, privacyVersion: string, revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
+  async metrics(
+    termsVersion: string,
+    privacyVersion: string,
+    revenuePeriod: RevenuePeriod,
+    photoStaleBefore: Date,
+  ): Promise<AdminMetrics> {
     const users = (await this.database.query<AdminMetrics['users']>(`
       SELECT count(*)::int AS total,
         count(*) FILTER (WHERE NOT is_banned)::int AS active,
@@ -239,6 +372,31 @@ export class AdminRepository {
     const matches: AdminMetrics['matches'] = { active: 0, awaiting_continuation: 0, confirmed: 0, expired: 0, ended: 0 };
     for (const row of matchRows) matches[row.status] = row.count;
     const messages = (await this.database.query<{ total: number }>('SELECT count(*)::int AS total FROM chat_message')).rows[0] ?? { total: 0 };
+    const photos = (await this.database.query<AdminPhotoMetrics>(`
+      SELECT
+        count(*) FILTER (WHERE photo.status = 'pending')::int AS pending,
+        count(*) FILTER (WHERE photo.status = 'processing')::int AS processing,
+        count(*) FILTER (WHERE photo.status = 'ready')::int AS ready,
+        count(*) FILTER (WHERE photo.status = 'deleting')::int AS deleting,
+        count(*) FILTER (WHERE photo.status IN ('pending', 'processing')
+          AND photo.updated_at <= $1)::int AS stale_processing,
+        count(*) FILTER (WHERE photo.status = 'deleting'
+          AND event.status = 'dead_letter')::int AS deletion_dead_letters,
+        count(*) FILTER (WHERE photo.status = 'deleting'
+          AND (event.id IS NULL OR event.status = 'completed'))::int
+          AS deletion_without_active_event
+      FROM user_photo AS photo
+      LEFT JOIN outbox_event AS event
+        ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
+    `, [photoStaleBefore])).rows[0] ?? {
+      pending: 0,
+      processing: 0,
+      ready: 0,
+      deleting: 0,
+      stale_processing: 0,
+      deletion_dead_letters: 0,
+      deletion_without_active_event: 0,
+    };
     const subscriptions = (await this.database.query<{ plan: string; users: number }>(`
       SELECT plan.code AS plan,
         count(account.user_id) FILTER (WHERE COALESCE(subscription.plan, 'free') = plan.code)::int AS users
@@ -249,7 +407,7 @@ export class AdminRepository {
       GROUP BY plan.code ORDER BY plan.code
     `)).rows;
     const revenue = await this.revenue(revenuePeriod);
-    return { users, moderation, matches, messages, subscriptions, revenue };
+    return { users, moderation, matches, messages, photos, subscriptions, revenue };
   }
 
   async messages(
@@ -278,6 +436,21 @@ export class AdminRepository {
         ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3
       `, [matchId, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
     });
+  }
+
+  private async recordAudit(
+    database: Queryable,
+    accessedUserId: string,
+    adminId: string,
+    adminRole: AdminRole,
+    action: 'view_profile' | 'admin_ban' | 'admin_unban' | 'admin_reconcile_photo',
+    reason: string,
+  ): Promise<void> {
+    await database.query(`
+      INSERT INTO data_access_log (
+        accessed_user_id, accessor_id, accessor_role, action, reason
+      ) VALUES ($1, $2, $3, $4, $5)
+    `, [accessedUserId, adminId, adminRole, action, reason]);
   }
 }
 

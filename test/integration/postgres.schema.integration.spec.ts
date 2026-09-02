@@ -128,7 +128,11 @@ describe('PostgreSQL schema contract', () => {
   });
 
   it('calculates the Premium revenue estimate from the catalog price and selected period', async () => {
-    const repository = new AdminRepository(databaseFor(pool) as never);
+    const repositoryDatabase = databaseFor(pool);
+    const repository = new AdminRepository(
+      repositoryDatabase as never,
+      new OutboxRepository(repositoryDatabase as never),
+    );
     const revenue = await repository.revenue('all_time');
     const expected = await pool.query<{ subscriptions: number; monthly_price_cents: number }>(`
       SELECT count(subscription.user_id)::int AS subscriptions,
@@ -310,6 +314,106 @@ describe('PostgreSQL schema contract', () => {
         [[firstPhotoId, replacementPhotoId]],
       );
       await deleteAccounts(pool, userId, otherId);
+    }
+  });
+
+  it('lists, measures and auditably requeues a stale photo lifecycle', async () => {
+    const userId = randomUUID();
+    const adminId = randomUUID();
+    const photoId = randomUUID();
+    const database = databaseFor(pool);
+    const outbox = new OutboxRepository(database as never);
+    const admin = new AdminRepository(database as never, outbox);
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - 30 * 60 * 1_000);
+    await insertAccounts(pool, userId, adminId);
+    await pool.query("UPDATE user_account SET role = 'admin' WHERE user_id = $1", [adminId]);
+    await pool.query(`
+      INSERT INTO user_profile (user_id, firstname, birthdate)
+      VALUES ($1, 'Photo', '1990-01-01')
+    `, [userId]);
+    await pool.query(`
+      INSERT INTO user_photo (
+        id, user_id, object_key, status, created_at, updated_at
+      ) VALUES (
+        $1, $2, 'profile-photos/' || $2::uuid::text || '/' || $1::uuid::text || '.webp',
+        'processing', $3, $3
+      )
+    `, [photoId, userId, new Date(staleBefore.getTime() - 1_000)]);
+
+    try {
+      const listed = await admin.listPhotoReconciliation(
+        'stale_processing',
+        staleBefore,
+        20,
+        0,
+        undefined,
+      );
+      expect(listed).toEqual([
+        expect.objectContaining({
+          id: photoId,
+          user_id: userId,
+          issue: 'stale_processing',
+          outbox_status: null,
+        }),
+      ]);
+
+      const metrics = await admin.metrics(
+        'terms-v1',
+        'privacy-v1',
+        'month_to_date',
+        staleBefore,
+      );
+      expect(metrics.photos.stale_processing).toBeGreaterThanOrEqual(1);
+
+      await expect(admin.reconcilePhoto(
+        photoId,
+        staleBefore,
+        new Date(now.getTime() - 5 * 60 * 1_000),
+        adminId,
+        'admin',
+        'Relance du traitement photo bloqué',
+      )).resolves.toBe('queued');
+
+      const state = await pool.query<{
+        photo_status: string;
+        event_status: string;
+        attempts: number;
+        audit_action: string;
+      }>(`
+        SELECT photo.status AS photo_status, event.status AS event_status,
+          event.attempts,
+          (SELECT action FROM data_access_log
+            WHERE accessed_user_id = $2 AND accessor_id = $3
+            ORDER BY accessed_at DESC LIMIT 1) AS audit_action
+        FROM user_photo AS photo
+        JOIN outbox_event AS event
+          ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
+        WHERE photo.id = $1
+      `, [photoId, userId, adminId]);
+      expect(state.rows[0]).toEqual({
+        photo_status: 'deleting',
+        event_status: 'pending',
+        attempts: 0,
+        audit_action: 'admin_reconcile_photo',
+      });
+
+      await pool.query(`
+        UPDATE outbox_event
+        SET status = 'completed', processed_at = clock_timestamp()
+        WHERE event_type = 'photo.delete' AND aggregate_id = $1
+      `, [photoId]);
+      const inconsistentMetrics = await admin.metrics(
+        'terms-v1',
+        'privacy-v1',
+        'month_to_date',
+        staleBefore,
+      );
+      expect(inconsistentMetrics.photos.deletion_without_active_event)
+        .toBeGreaterThanOrEqual(1);
+    } finally {
+      await pool.query('DELETE FROM outbox_event WHERE aggregate_id = $1', [photoId]);
+      await deleteAccounts(pool, userId, adminId);
     }
   });
 
@@ -538,7 +642,7 @@ describe('PostgreSQL schema contract', () => {
     } finally {
       await app.close();
     }
-  });
+  }, 15_000);
 
   it('accepts only the four supported legal choices and no marketing choice', async () => {
     const client = await pool.connect();

@@ -9,11 +9,11 @@ import {
   ObjectStorageService,
   ObjectStorageUnavailableError,
 } from '../storage/object-storage.service';
+import { OUTBOX_LOCK_TIMEOUT_MILLIS } from './outbox.constants';
 import type { OutboxEvent, OutboxWorkerResult } from './outbox.models';
 import { OutboxRepository } from './outbox.repository';
 
 const POLL_INTERVAL_MILLIS = 1_000;
-const LOCK_TIMEOUT_MILLIS = 5 * 60 * 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
 const COMPLETED_PURGE_INTERVAL_MILLIS = 60 * 60 * 1_000;
 const BATCH_SIZE = 50;
@@ -51,7 +51,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const events = await this.outbox.claimBatch(
       this.workerId,
       now,
-      new Date(now.getTime() - LOCK_TIMEOUT_MILLIS),
+      new Date(now.getTime() - OUTBOX_LOCK_TIMEOUT_MILLIS),
       BATCH_SIZE,
     );
     const result: OutboxWorkerResult = {

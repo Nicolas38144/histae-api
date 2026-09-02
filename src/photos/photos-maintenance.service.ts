@@ -3,10 +3,10 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { ConfigService } from '../config/config.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
+import { PHOTO_PROCESSING_STALE_AFTER_MILLIS } from './photos.constants';
 import { PhotosRepository } from './photos.repository';
 
 const HOUR = 60 * 60 * 1_000;
-const PROCESSING_STALE_AFTER = 30 * 60 * 1_000;
 const DELETION_RETRY_AFTER = 5 * 60 * 1_000;
 const BATCH_SIZE = 100;
 const MAX_BATCHES_PER_RUN = 100;
@@ -55,7 +55,7 @@ export class PhotosMaintenanceService
       const now = new Date();
       const photos = await this.photos.claimCleanupBatch(
         now,
-        new Date(now.getTime() - PROCESSING_STALE_AFTER),
+        new Date(now.getTime() - PHOTO_PROCESSING_STALE_AFTER_MILLIS),
         new Date(now.getTime() - DELETION_RETRY_AFTER),
         BATCH_SIZE,
       );

@@ -15,20 +15,20 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **51 fichiers de test, 51 suites Jest et 339 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **52 fichiers de test, 52 suites Jest et 349 cas** lorsque toutes les intégrations sont activées :
 
-- 243 tests unitaires ;
-- 54 tests e2e ;
-- 30 tests d’intégration PostgreSQL et démarrage applicatif ;
+- 248 tests unitaires ;
+- 58 tests e2e ;
+- 31 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 40 suites unitaires, 8 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 48 suites autonomes et leurs 297 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 42 cas, sans flag d’activation.
+Jest affiche 40 suites unitaires, 9 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 49 suites autonomes et leurs 306 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 43 cas, sans flag d’activation.
 
-Le 2 septembre 2026, TypeScript, ESLint, le build, les **48 suites et 297 cas autonomes** ainsi que les
-**3 suites et 42 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **51 suites et 339 cas**.
-La migration `003_photo_idempotency_and_outbox` a été appliquée sans destruction sur `histae-dev`, puis rejouée à vide
-pour vérifier son idempotence et son checksum.
+Le 2 septembre 2026, TypeScript, ESLint, le build, les **49 suites et 306 cas autonomes** ainsi que les
+**3 suites et 43 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **52 suites et 349 cas**.
+La migration `004_admin_photo_reconciliation` a été appliquée sans destruction sur `histae-dev`; la chaîne complète
+est aussi rejouée dans un schéma isolé afin de vérifier les migrations et leurs checksums.
 
 ## Commandes
 
@@ -103,13 +103,17 @@ donc la référence pour valider les effets métier.
 
 ## Tests unitaires
 
-### `test/unit/admin/admin.repository.spec.ts` — 3 tests
+### `test/unit/admin/admin.repository.spec.ts` — 5 tests
 
-Vérifie la protection entre rôles administratifs, la révocation des sessions et l’audit lors d’un bannissement, ainsi que le calcul du revenu Premium estimé.
+Vérifie la protection entre rôles administratifs, la révocation des sessions et l’audit lors d’un bannissement,
+le calcul du revenu Premium estimé, la relance transactionnelle d’une photo et le refus de reprendre le verrou d’un
+worker actif.
 
-### `test/unit/admin/admin.service.spec.ts` — 6 tests
+### `test/unit/admin/admin.service.spec.ts` — 8 tests
 
-Vérifie le contrat public des listes, la validation et le mapping des actions administratives, la justification des accès aux conversations et le transfert des périodes de revenu.
+Vérifie le contrat public des listes, la validation et le mapping des actions administratives, la justification des
+accès aux conversations, le transfert des périodes de revenu, le mapping explicite de la file photo sans donnée de
+stockage et les conflits de réconciliation.
 
 ### `test/unit/auth/auth.repository.spec.ts` — 2 tests
 
@@ -235,11 +239,12 @@ Les autres cas couvrent la configuration Sweego, CORS, les limites des TTL OTP/J
 1. Supprime les objets réclamés et termine leur cycle PostgreSQL.
 2. Conserve pour une reprise ultérieure une suppression S3 en échec.
 
-### `test/unit/outbox/outbox.repository.spec.ts` — 5 tests
+### `test/unit/outbox/outbox.repository.spec.ts` — 6 tests
 
 1. Vérifie que l’événement est inséré par le client de transaction fourni par le domaine.
-2. Réclame les événements dus ou bloqués avec `FOR UPDATE SKIP LOCKED`.
-3 à 5. Mappe les issues de reprise `pending`, `dead_letter` et perte de propriété du verrou.
+2. Vérifie qu’une relance opérateur réinitialise l’événement dans la transaction fournie.
+3. Réclame les événements dus ou bloqués avec `FOR UPDATE SKIP LOCKED`.
+4 à 6. Mappe les issues de reprise `pending`, `dead_letter` et perte de propriété du verrou.
 
 ### `test/unit/outbox/outbox-worker.service.spec.ts` — 4 tests
 
@@ -389,6 +394,13 @@ Suite `UsersService consent enforcement` :
 
 ## Tests e2e
 
+### `test/e2e/admin.contract.spec.ts` — 4 tests
+
+1. Liste une file de réconciliation validée et paginée.
+2. Remet une photo en file avec le motif et l’identité de l’administrateur authentifié, puis renvoie `202`.
+3. Refuse un filtre inconnu avant le service.
+4. Refuse un UUID photo mal formé et un motif vide avant toute mutation.
+
 ### `test/e2e/auth.contract.spec.ts` — 7 tests
 
 Cette suite démarre une vraie application Fastify de test avec `AuthController`, le filtre d’erreur global et des services maîtrisés :
@@ -475,7 +487,7 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 30 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 31 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
@@ -507,8 +519,9 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 26. **Ordre des événements** — empêche un événement Stripe ancien d’écraser une projection d’abonnement ou une facture plus récente.
 27. **Essai non réattribuable** — remplace un Customer supprimé tout en conservant la preuve d’essai consommé.
 28. **Idempotence photo et émission outbox** — crée et active une photo, la rejoue sans doublon, refuse une empreinte différente, remplace la photo et vérifie l’événement transactionnel ainsi que la consommation de l’ancienne clé.
-29. **Concurrence et dead-letter outbox** — vérifie la propriété exclusive d’un événement, sa reprise puis son passage en dead-letter au budget configuré.
-30. **Base neuve** — applique la baseline et les migrations `002`/`003` dans un schéma isolé vide, vérifie les tables finales et les deux plans, puis annule toute la transaction.
+29. **Réconciliation photo admin** — liste et mesure un upload ancien, le passe à `deleting`, crée ou réinitialise `photo.delete` et vérifie l’audit opérateur dans la même transaction.
+30. **Concurrence et dead-letter outbox** — vérifie la propriété exclusive d’un événement, sa reprise puis son passage en dead-letter au budget configuré.
+31. **Base neuve** — applique la baseline et les migrations `002`/`003`/`004` dans un schéma isolé vide, vérifie les tables finales et les deux plans, puis annule toute la transaction.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -542,11 +555,11 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 297 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 42 cas réels et vérifier que les 339 cas passent au total.
+5. exécuter `pnpm test` pour les 306 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 43 cas réels et vérifier que les 349 cas passent au total.
 
-Dans l’état courant, TypeScript, ESLint, le build, les **40 suites/243 cas unitaires**, les **8 suites/54
-cas e2e** et les **3 suites/42 cas d’intégration** sont verts, soit **51 suites et 339 cas**. Docker déclare
+Dans l’état courant, TypeScript, ESLint, le build, les **40 suites/248 cas unitaires**, les **9 suites/58
+cas e2e** et les **3 suites/43 cas d’intégration** sont verts, soit **52 suites et 349 cas**. Docker déclare
 ScyllaDB, Redis et SeaweedFS `healthy`; le smoke test réel du bucket S3-compatible avait été validé lors du lot photo immédiatement précédent.
 
 ## Audit des tests obsolètes

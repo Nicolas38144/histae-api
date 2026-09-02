@@ -4,7 +4,19 @@ import type { CursorPage } from '../common/pagination';
 import { cursorPage, decodeCursor } from '../common/pagination';
 import { ConfigService } from '../config/config.service';
 import { toPublicMessage, type PublicMessage } from '../matches/matches.mapper';
-import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail, AdminUserRow, AdminUserStatus, RevenuePeriod } from './admin.models';
+import { OUTBOX_LOCK_TIMEOUT_MILLIS } from '../outbox/outbox.constants';
+import { PHOTO_PROCESSING_STALE_AFTER_MILLIS } from '../photos/photos.constants';
+import type {
+  AdminMetrics,
+  AdminPhotoReconciliation,
+  AdminRevenue,
+  AdminUser,
+  AdminUserDetail,
+  AdminUserRow,
+  AdminUserStatus,
+  PhotoReconciliationFilter,
+  RevenuePeriod,
+} from './admin.models';
 import { AdminRepository } from './admin.repository';
 import { PhotosService } from '../photos/photos.service';
 
@@ -62,11 +74,65 @@ export class AdminService {
   }
 
   metrics(revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
-    return this.admin.metrics(this.config.legal.termsVersion, this.config.legal.privacyVersion, revenuePeriod);
+    return this.admin.metrics(
+      this.config.legal.termsVersion,
+      this.config.legal.privacyVersion,
+      revenuePeriod,
+      stalePhotoCutoff(),
+    );
   }
 
   revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {
     return this.admin.revenue(revenuePeriod);
+  }
+
+  async photoReconciliation(
+    status: PhotoReconciliationFilter,
+    limit: number,
+    offset: number,
+    rawCursor?: string,
+  ): Promise<CursorPage<AdminPhotoReconciliation>> {
+    if (limit < 1 || limit > 100 || offset < 0 || (rawCursor && offset !== 0)) {
+      throw invalidAdminRequest();
+    }
+    const rows = await this.admin.listPhotoReconciliation(
+      status,
+      stalePhotoCutoff(),
+      limit + 1,
+      offset,
+      decodeCursor(rawCursor),
+    );
+    const page = cursorPage(rows, limit, (row) => row.cursor_at);
+    return {
+      items: page.items.map(toAdminPhotoReconciliation),
+      next_cursor: page.next_cursor,
+    };
+  }
+
+  async reconcilePhoto(
+    photoId: string,
+    rawReason: string,
+    adminId: string,
+    adminRole: AdminRole,
+  ): Promise<void> {
+    const now = Date.now();
+    const result = await this.admin.reconcilePhoto(
+      photoId,
+      new Date(now - PHOTO_PROCESSING_STALE_AFTER_MILLIS),
+      new Date(now - OUTBOX_LOCK_TIMEOUT_MILLIS),
+      adminId,
+      adminRole,
+      normalizeReason(rawReason),
+    );
+    if (result === 'not_found') {
+      throw apiError(404, 'photo_not_found', 'The profile photo could not be found.');
+    }
+    if (result === 'not_actionable') {
+      throw apiError(409, 'photo_reconciliation_not_allowed', 'This profile photo does not require reconciliation.');
+    }
+    if (result === 'already_processing') {
+      throw apiError(409, 'photo_reconciliation_in_progress', 'This profile photo is already being processed.');
+    }
   }
 
   async messages(
@@ -104,6 +170,27 @@ function toAdminUser(row: AdminUserRow, photoUrl: string | null): AdminUser {
   };
 }
 
+function toAdminPhotoReconciliation(
+  row: Awaited<ReturnType<AdminRepository['listPhotoReconciliation']>>[number],
+): AdminPhotoReconciliation {
+  return {
+    photo_id: row.id,
+    user_id: row.user_id,
+    status: row.status,
+    size_bytes: row.size_bytes,
+    width: row.width,
+    height: row.height,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    outbox_status: row.outbox_status,
+    outbox_attempts: row.outbox_attempts,
+    outbox_available_at: row.outbox_available_at,
+    outbox_locked_at: row.outbox_locked_at,
+    outbox_last_error_code: row.outbox_last_error_code,
+    issue: row.issue,
+  };
+}
+
 function normalizeReason(value: string): string {
   const reason = value.trim();
   if (reason.length < 3 || reason.length > 500) throw invalidAdminRequest();
@@ -112,4 +199,8 @@ function normalizeReason(value: string): string {
 
 function invalidAdminRequest(): ReturnType<typeof apiError> {
   return apiError(400, 'invalid_admin_request', 'The administrator request is invalid.');
+}
+
+function stalePhotoCutoff(now = Date.now()): Date {
+  return new Date(now - PHOTO_PROCESSING_STALE_AFTER_MILLIS);
 }

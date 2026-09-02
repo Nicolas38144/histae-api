@@ -54,6 +54,28 @@ describe('OutboxRepository', () => {
     ]);
   });
 
+  it('resets an existing event when an operator explicitly requeues it', async () => {
+    const database = { query: jest.fn() };
+    const transaction = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+    const repository = new OutboxRepository(database as never);
+
+    await repository.requeue(transaction as never, {
+      eventType: 'photo.delete',
+      aggregateId: PHOTO_ID,
+    });
+
+    expect(transaction.query.mock.calls[0]?.[0]).toContain(
+      "SET status = 'pending', attempts = 0",
+    );
+    expect(transaction.query.mock.calls[0]?.[1]).toEqual([
+      expect.any(String),
+      'photo.delete',
+      PHOTO_ID,
+      {},
+    ]);
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['pending', 'pending'],
     ['dead_letter', 'dead_letter'],

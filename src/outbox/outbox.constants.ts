@@ -1,0 +1,1 @@
+export const OUTBOX_LOCK_TIMEOUT_MILLIS = 5 * 60 * 1_000;

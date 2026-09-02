@@ -49,6 +49,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - Le remplacement ou la suppression d’une photo écrit `photo.delete` dans la même transaction que le passage à
   `deleting`. Le worker outbox utilise `SKIP LOCKED`, des lots et une concurrence bornés, un backoff exponentiel,
   dix tentatives et une dead-letter. Seuls des codes d’erreur normalisés sont persistés, sans détail fournisseur.
+- La console admin ne reçoit ni clé objet, ni URL, ni image dans la file `user_photo`. Une relance refuse les photos
+  `ready`, les traitements récents et les workers actifs, puis remet la suppression en file et inscrit le motif sous
+  `admin_reconcile_photo` dans la même transaction.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -63,8 +66,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 4. **Stockages de production** : choisir une cible S3 compatible durable, privée, versionnée ou sauvegardée,
    supervisée et testée en restauration. Déployer PostgreSQL, Redis et ScyllaDB avec TLS, authentification,
    redondance et sauvegardes vérifiées.
-5. **Observabilité** : ajouter métriques et alertes sur les `401/403/429/5xx`, les échecs OTP/Stripe/S3, les accès
-   administratifs, la saturation des pools, les retards de maintenance et toute dead-letter outbox, sans
+5. **Observabilité** : les états `user_photo`, traitements bloqués, suppressions sans événement actif et dead letters
+   sont désormais agrégés pour le dashboard. Ajouter la collecte et les alertes sur les `401/403/429/5xx`, les
+   échecs OTP/Stripe/S3, les accès administratifs, la saturation des pools et les retards de maintenance, sans
    journaliser de données sensibles.
 6. **Validation offensive** : faire réaliser un pentest authentifié couvrant IDOR/BOLA, élévation de privilèges,
    concurrence, abuse cases OTP, webhooks Stripe, multipart/HEIC et URLs signées. Ajouter SAST, secret scanning et
@@ -83,8 +87,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 40 suites, 243 cas réussis ;
-- tests e2e Fastify : 8 suites, 54 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 42 cas réussis ;
-- migrations PostgreSQL : `003_photo_idempotency_and_outbox` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
+- tests unitaires : 40 suites, 248 cas réussis ;
+- tests e2e Fastify : 9 suites, 58 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 43 cas réussis ;
+- migrations PostgreSQL : `004_admin_photo_reconciliation` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
 - état Docker local : SeaweedFS, Redis et ScyllaDB déclarés `healthy`; configuration Compose objet valide.

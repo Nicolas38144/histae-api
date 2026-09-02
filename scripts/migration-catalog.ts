@@ -31,6 +31,9 @@ export const migrations = [{
 }, {
   version: '003_photo_idempotency_and_outbox',
   filenames: ['003_photo_idempotency_and_outbox.sql'],
+}, {
+  version: '004_admin_photo_reconciliation',
+  filenames: ['004_admin_photo_reconciliation.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

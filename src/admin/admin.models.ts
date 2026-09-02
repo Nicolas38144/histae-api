@@ -14,6 +14,61 @@ export const REVENUE_PERIODS = [
 ] as const;
 export type RevenuePeriod = typeof REVENUE_PERIODS[number];
 
+export const PHOTO_RECONCILIATION_FILTERS = [
+  'all',
+  'stale_processing',
+  'deleting',
+  'dead_letter',
+] as const;
+export type PhotoReconciliationFilter = typeof PHOTO_RECONCILIATION_FILTERS[number];
+
+export type AdminPhotoMetrics = {
+  pending: number;
+  processing: number;
+  ready: number;
+  deleting: number;
+  stale_processing: number;
+  deletion_dead_letters: number;
+  deletion_without_active_event: number;
+};
+
+export type PhotoReconciliationIssue =
+  | 'stale_processing'
+  | 'deletion_queued'
+  | 'deletion_processing'
+  | 'deletion_retry_scheduled'
+  | 'deletion_dead_letter'
+  | 'deletion_event_missing'
+  | 'deletion_event_completed';
+
+export type AdminPhotoReconciliationRow = {
+  id: string;
+  user_id: string;
+  status: 'pending' | 'processing' | 'deleting';
+  size_bytes: number | null;
+  width: number | null;
+  height: number | null;
+  created_at: Date;
+  updated_at: Date;
+  outbox_status: 'pending' | 'processing' | 'completed' | 'dead_letter' | null;
+  outbox_attempts: number | null;
+  outbox_available_at: Date | null;
+  outbox_locked_at: Date | null;
+  outbox_last_error_code: string | null;
+  issue: PhotoReconciliationIssue;
+  cursor_at: string;
+};
+
+export type AdminPhotoReconciliation = Omit<AdminPhotoReconciliationRow, 'id' | 'cursor_at'> & {
+  photo_id: string;
+};
+
+export type PhotoReconciliationResult =
+  | 'queued'
+  | 'not_found'
+  | 'not_actionable'
+  | 'already_processing';
+
 export type AdminRevenue = {
   period: RevenuePeriod;
   period_start: Date | null;
@@ -70,6 +125,7 @@ export type AdminMetrics = {
   moderation: { pending_reports: number; open_data_requests: number };
   matches: Record<MatchStatus, number>;
   messages: { total: number };
+  photos: AdminPhotoMetrics;
   subscriptions: Array<{ plan: string; users: number }>;
   revenue: AdminRevenue;
 };

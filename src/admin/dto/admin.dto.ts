@@ -1,9 +1,8 @@
 
 import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
-import type { AdminUserStatus } from '../admin.models';
-import type { RevenuePeriod } from '../admin.models';
-import { ADMIN_USER_STATUSES, REVENUE_PERIODS } from '../admin.models';
+import type { AdminUserStatus, PhotoReconciliationFilter, RevenuePeriod } from '../admin.models';
+import { ADMIN_USER_STATUSES, PHOTO_RECONCILIATION_FILTERS, REVENUE_PERIODS } from '../admin.models';
 
 export class AdminRevenueQueryDto {
 
@@ -24,6 +23,27 @@ export class AdminMatchIdParamDto {
 
   @IsUUID('all')
   id!: string;
+}
+
+export class AdminPhotoIdParamDto {
+
+  @IsUUID('all')
+  id!: string;
+}
+
+export class ListPhotoReconciliationDto extends PaginationDto {
+
+  @IsOptional()
+  @IsIn([...PHOTO_RECONCILIATION_FILTERS])
+  status: PhotoReconciliationFilter = 'all';
+}
+
+export class ReconcilePhotoDto {
+
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
 }
 
 export class ListAdminUsersDto extends PaginationDto {

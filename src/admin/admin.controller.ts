@@ -1,18 +1,21 @@
-import { Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import type { PublicMessage } from '../matches/matches.mapper';
-import type { AdminMetrics, AdminRevenue, AdminUser, AdminUserDetail } from './admin.models';
+import type { AdminMetrics, AdminPhotoReconciliation, AdminRevenue, AdminUser, AdminUserDetail } from './admin.models';
 import { AdminService } from './admin.service';
 import {
   AdminAccessQueryDto,
   AdminMatchIdParamDto,
   AdminMetricsQueryDto,
   AdminMessageQueryDto,
+  AdminPhotoIdParamDto,
   AdminRevenueQueryDto,
   AdminUserIdParamDto,
+  ListPhotoReconciliationDto,
   ListAdminUsersDto,
+  ReconcilePhotoDto,
   UpdateAdminUserStatusDto,
 } from './dto/admin.dto';
 
@@ -42,6 +45,37 @@ export class AdminController {
     @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: AdminRevenueQueryDto,
   ): Promise<AdminRevenue> {
     return this.admin.revenue(query.revenue_period);
+  }
+
+  @Get('photo-reconciliation')
+
+  async photoReconciliation(
+    @ValidatedQuery({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) query: ListPhotoReconciliationDto,
+  ): Promise<{ photos: AdminPhotoReconciliation[]; next_cursor: string | null }> {
+    const page = await this.admin.photoReconciliation(
+      query.status,
+      query.limit,
+      query.offset,
+      query.cursor,
+    );
+    return { photos: page.items, next_cursor: page.next_cursor };
+  }
+
+  @Post('photo-reconciliation/:id/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+
+  async reconcilePhoto(
+    @ValidatedParams({ code: 'invalid_photo_id', message: 'The photo ID must be a valid UUID.' }) params: AdminPhotoIdParamDto,
+    @ValidatedBody({ code: 'invalid_admin_request', message: 'The administrator request is invalid.' }) body: ReconcilePhotoDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ message: string }> {
+    await this.admin.reconcilePhoto(
+      params.id,
+      body.reason,
+      userId(request),
+      adminRole(request),
+    );
+    return { message: 'photo reconciliation queued' };
   }
 
   @Get('users')

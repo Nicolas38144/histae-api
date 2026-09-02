@@ -26,7 +26,8 @@ consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en
 `002_user_photo_lifecycle` a ensuite remplacé la clé provisoire du profil par un registre d’objets versionnés,
 réconciliable après une panne PostgreSQL/S3. La migration `003_photo_idempotency_and_outbox` rend l’upload
 idempotent pendant 24 heures et découple les suppressions objet par une outbox PostgreSQL durable. Le check-up
-complet est dans `docs/security-checkup.md`.
+complet est dans `docs/security-checkup.md`. La migration `004_admin_photo_reconciliation` ajoute l’action d’audit
+qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard.
 
 ## 2. Architecture
 
@@ -170,6 +171,12 @@ insère `photo.delete` dans `outbox_event`, le tout dans la même transaction. L
 la ligne technique avec verrous `SKIP LOCKED`, concurrence bornée, backoff exponentiel, dix tentatives et état
 `dead_letter`. Une écriture S3 incertaine reste réconciliable par la maintenance horaire.
 
+`GET /api/admin/metrics` agrège les états photo, les traitements anciens de plus de 30 minutes, les dead letters et
+les suppressions sans événement actif. `GET /api/admin/photo-reconciliation` expose une file technique paginée sans clé
+objet ni image. `POST /api/admin/photo-reconciliation/:id/retry` refuse les photos `ready` et les workers actifs,
+puis rend l’objet invisible, remet `photo.delete` en file et inscrit `admin_reconcile_photo` avec le motif dans une
+unique transaction PostgreSQL.
+
 PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
 générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
 admin audité. Les collections admin et blocages renvoient toujours `photo: null`. Les appels S3 réseau sont bornés
@@ -197,7 +204,8 @@ et applique la baseline dans une transaction.
 
 La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
 colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
-bornée et l’outbox générique. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
+bornée et l’outbox générique. `004_admin_photo_reconciliation` étend la liste fermée des actions d’audit pour la
+relance opérateur. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
 
 La compatibilité est sans perte :
 
@@ -272,8 +280,9 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
    gestionnaire de secrets et procédures de rotation/révocation.
 3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
    accès personnels ou actions de sûreté.
-4. Ajouter métriques, tableaux de bord et alertes sur latences, erreurs, pools, rate limits, OTP, Stripe, S3,
-   Scylla, retard de maintenance et dead letters. Déployer et superviser réellement les workers maintenance/outbox.
+4. Compléter les métriques déjà présentes pour `user_photo` par une collecte d’observabilité sur les latences,
+   erreurs, pools, rate limits, OTP, Stripe, S3 et Scylla, puis définir les alertes. Déployer et superviser réellement
+   les workers maintenance/outbox.
 5. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
    puis gérer explicitement la perte de réponse réseau.
 6. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.

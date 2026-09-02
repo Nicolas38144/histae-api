@@ -34,6 +34,25 @@ export class OutboxRepository {
     return result.rowCount === 1;
   }
 
+  async requeue(
+    database: Queryable,
+    event: NewOutboxEvent,
+  ): Promise<void> {
+    await database.query(`
+      INSERT INTO outbox_event (id, event_type, aggregate_id, payload)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (event_type, aggregate_id) DO UPDATE
+      SET status = 'pending', attempts = 0,
+        available_at = clock_timestamp(), locked_at = NULL, locked_by = NULL,
+        last_error_code = NULL, processed_at = NULL
+    `, [
+      randomUUID(),
+      event.eventType,
+      event.aggregateId,
+      event.payload ?? {},
+    ]);
+  }
+
   async claimBatch(
     workerId: string,
     now: Date,

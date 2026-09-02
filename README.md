@@ -93,6 +93,8 @@ mais jamais d’URL. Une activation atomique rend au plus une photo visible par 
 incertain, la maintenance supprime ensuite l’objet orphelin. Les suppressions après remplacement ou demande
 utilisateur sont inscrites dans une outbox PostgreSQL au sein de la transaction métier, puis exécutées de façon
 asynchrone avec reprise exponentielle et dead-letter après dix tentatives.
+La console admin expose des métriques de cycle de vie et une file de réconciliation paginée. Une relance manuelle
+ne révèle ni clé objet ni image, refuse les photos saines et crée une trace d’audit avec son motif.
 
 ## Authentification OTP
 
@@ -109,7 +111,7 @@ numéros acceptés utilisent actuellement le format français E.164, par exemple
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo et son outbox. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox et l’action d’audit de réconciliation. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
 | `pnpm run db:reset-scylla` | Vide les décisions de découverte du ScyllaDB local. |

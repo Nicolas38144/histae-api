@@ -50,7 +50,56 @@ describe('AdminService', () => {
     const service = new AdminService(repository as never, config as never, photos as never);
 
     await expect(service.metrics('last_7_days')).resolves.toBe(expected);
-    expect(repository.metrics).toHaveBeenCalledWith('terms-v1', 'privacy-v1', 'last_7_days');
+    expect(repository.metrics).toHaveBeenCalledWith(
+      'terms-v1',
+      'privacy-v1',
+      'last_7_days',
+      expect.any(Date),
+    );
+  });
+
+  it('maps technical reconciliation rows without exposing object keys', async () => {
+    const repository = { listPhotoReconciliation: jest.fn().mockResolvedValue([{
+      id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+      status: 'deleting',
+      size_bytes: 100,
+      width: 10,
+      height: 10,
+      created_at: new Date('2030-01-01T00:00:00.000Z'),
+      updated_at: new Date('2030-01-01T01:00:00.000Z'),
+      outbox_status: 'dead_letter',
+      outbox_attempts: 10,
+      outbox_available_at: new Date('2030-01-01T01:00:00.000Z'),
+      outbox_locked_at: null,
+      outbox_last_error_code: 'object_storage_unavailable',
+      issue: 'deletion_dead_letter',
+      cursor_at: '2030-01-01T01:00:00.000Z',
+    }]) };
+    const service = new AdminService(repository as never, config as never, photos as never);
+
+    const result = await service.photoReconciliation('dead_letter', 20, 0);
+    expect(result).toEqual({
+      items: [expect.objectContaining({
+        photo_id: '11111111-1111-4111-8111-111111111111',
+        issue: 'deletion_dead_letter',
+      })],
+      next_cursor: null,
+    });
+    expect(result.items[0]).not.toHaveProperty('id');
+    expect(result.items[0]).not.toHaveProperty('cursor_at');
+    expect(result.items[0]).not.toHaveProperty('object_key');
+  });
+
+  it('maps unsafe photo reconciliation attempts to a conflict', async () => {
+    const repository = { reconcilePhoto: jest.fn().mockResolvedValue('not_actionable') };
+    const service = new AdminService(repository as never, config as never, photos as never);
+
+    await expect(service.reconcilePhoto('photo', 'Relance opérateur', 'admin', 'admin'))
+      .rejects.toEqual(expect.objectContaining({
+        status: 409,
+        code: 'photo_reconciliation_not_allowed',
+      }));
   });
 
   it('loads only the revenue aggregate for a period change', async () => {
