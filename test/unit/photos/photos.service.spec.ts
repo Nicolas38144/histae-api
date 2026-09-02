@@ -5,8 +5,8 @@ import { ObjectStorageUnavailableError } from '../../../src/storage/object-stora
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const OLD_PHOTO = {
   id: '22222222-2222-4222-8222-222222222222',
-  user_id: USER_ID,
-  object_key: `profile-photos/${USER_ID}/22222222-2222-4222-8222-222222222222.webp`,
+  userId: USER_ID,
+  objectKey: `profile-photos/${USER_ID}/22222222-2222-4222-8222-222222222222.webp`,
   status: 'deleting',
 };
 const UPLOAD = {
@@ -86,7 +86,7 @@ describe('PhotosService', () => {
     await expect(service.upload(USER_ID, UPLOAD)).resolves.toBe(
       'https://storage.test/signed',
     );
-    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.object_key);
+    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.objectKey);
     expect(repository.completeDeletion).not.toHaveBeenCalled();
   });
 
@@ -104,7 +104,7 @@ describe('PhotosService', () => {
     );
 
     await expect(service.delete(USER_ID)).resolves.toBeUndefined();
-    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.object_key);
+    expect(storage.delete).toHaveBeenCalledWith(OLD_PHOTO.objectKey);
     expect(repository.completeDeletion).toHaveBeenCalledWith(OLD_PHOTO.id);
   });
 
@@ -162,7 +162,7 @@ describe('PhotosService', () => {
     const secondPhoto = {
       ...OLD_PHOTO,
       id: '33333333-3333-4333-8333-333333333333',
-      object_key: `profile-photos/${USER_ID}/33333333-3333-4333-8333-333333333333.webp`,
+      objectKey: `profile-photos/${USER_ID}/33333333-3333-4333-8333-333333333333.webp`,
     };
     repository.beginAccountDeletion.mockResolvedValue([
       OLD_PHOTO,

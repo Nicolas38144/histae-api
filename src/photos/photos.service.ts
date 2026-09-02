@@ -11,11 +11,14 @@ import {
   InvalidPhotoError,
   PhotoProcessorService,
   PhotoTooLargeError,
+  type ProcessedPhoto,
   type UploadedPhoto,
 } from './photo-processor.service';
 import { PhotoObject, PhotosRepository } from './photos.repository';
 
 const PROFILE_PHOTO_TTL_SECONDS = 300;
+const PROFILE_PHOTO_CACHE_CONTROL =
+  `private, max-age=${PROFILE_PHOTO_TTL_SECONDS}`;
 const PROFILE_PHOTO_KEY_PATTERN =
   /^profile-photos\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.webp$/i;
 
@@ -50,7 +53,7 @@ export class PhotosService {
       );
     }
 
-    let processed: Awaited<ReturnType<PhotoProcessorService['toWebp']>>;
+    let processed: ProcessedPhoto;
     try {
       processed = await this.photoProcessor.toWebp(upload);
     } catch (error: unknown) {
@@ -97,7 +100,7 @@ export class PhotosService {
         key: objectKey,
         body: processed.body,
         contentType: processed.mimeType,
-        cacheControl: 'private, max-age=300',
+        cacheControl: PROFILE_PHOTO_CACHE_CONTROL,
       });
     } catch (error: unknown) {
       this.throwStorageUnavailable(error, 'upload');
@@ -136,10 +139,12 @@ export class PhotosService {
     }
 
     try {
-      await this.objectStorage.delete(deletion.photo.object_key);
-      await this.photosRepository.completeDeletion(deletion.photo.id);
+      await this.removePhoto(deletion.photo);
     } catch (error: unknown) {
-      this.throwStorageUnavailable(error, 'delete');
+      if (error instanceof ObjectStorageUnavailableError) {
+        this.throwStorageUnavailable(error, 'delete');
+      }
+      throw error;
     }
   }
 
@@ -149,11 +154,10 @@ export class PhotosService {
 
     for (const photo of photos) {
       try {
-        await this.objectStorage.delete(photo.object_key);
-        await this.photosRepository.completeDeletion(photo.id);
+        await this.removePhoto(photo);
       } catch (error: unknown) {
         failures += 1;
-        this.logStorageFailure(error, 'account deletion');
+        this.logPhotoOperationFailure(error, 'account deletion');
       }
     }
 
@@ -189,12 +193,16 @@ export class PhotosService {
   private async cleanupPreviousPhotos(photos: PhotoObject[]): Promise<void> {
     for (const photo of photos) {
       try {
-        await this.objectStorage.delete(photo.object_key);
-        await this.photosRepository.completeDeletion(photo.id);
+        await this.removePhoto(photo);
       } catch (error: unknown) {
-        this.logStorageFailure(error, 'old photo cleanup');
+        this.logPhotoOperationFailure(error, 'old photo cleanup');
       }
     }
+  }
+
+  private async removePhoto(photo: PhotoObject): Promise<void> {
+    await this.objectStorage.delete(photo.objectKey);
+    await this.photosRepository.completeDeletion(photo.id);
   }
 
   private profilePhotoKey(userId: string, photoId: string): string {
@@ -202,7 +210,7 @@ export class PhotosService {
   }
 
   private throwStorageUnavailable(error: unknown, operation: string): never {
-    this.logStorageFailure(error, operation);
+    this.logPhotoOperationFailure(error, operation);
     throw apiError(
       503,
       'photo_storage_unavailable',
@@ -210,12 +218,12 @@ export class PhotosService {
     );
   }
 
-  private logStorageFailure(error: unknown, operation: string): void {
+  private logPhotoOperationFailure(error: unknown, operation: string): void {
     if (error instanceof ObjectStorageUnavailableError) {
       this.logger.warn(`Photo storage ${operation} failed`);
       return;
     }
 
-    this.logger.error(`Unexpected photo storage ${operation} failure`);
+    this.logger.error(`Unexpected photo ${operation} failure`);
   }
 }

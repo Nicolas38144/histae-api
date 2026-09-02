@@ -89,8 +89,8 @@ describe('PhotosRepository', () => {
   it('atomically retires the previous ready photo and activates the candidate', async () => {
     const previous = {
       id: '33333333-3333-4333-8333-333333333333',
-      user_id: USER_ID,
-      object_key: `profile-photos/${USER_ID}/33333333-3333-4333-8333-333333333333.webp`,
+      userId: USER_ID,
+      objectKey: `profile-photos/${USER_ID}/33333333-3333-4333-8333-333333333333.webp`,
       status: 'deleting',
     };
     const client = {
@@ -115,8 +115,8 @@ describe('PhotosRepository', () => {
   it('claims stale uploads and failed deletions for idempotent cleanup', async () => {
     const photo = {
       id: PHOTO_ID,
-      user_id: USER_ID,
-      object_key: OBJECT_KEY,
+      userId: USER_ID,
+      objectKey: OBJECT_KEY,
       status: 'deleting',
     };
     const database = { query: jest.fn().mockResolvedValue({ rows: [photo] }) };

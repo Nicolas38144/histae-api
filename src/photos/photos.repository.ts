@@ -1,13 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService, type Queryable } from '../database/database.service';
 
 export const PHOTO_STATUSES = ['pending', 'processing', 'ready', 'deleting'] as const;
 export type PhotoStatus = typeof PHOTO_STATUSES[number];
 
 export type PhotoObject = {
   id: string;
-  user_id: string;
-  object_key: string;
+  userId: string;
+  objectKey: string;
   status: PhotoStatus;
 };
 
@@ -34,14 +34,9 @@ export class PhotosRepository {
 
   async createProcessing(photo: ProcessingPhoto): Promise<CreationResult> {
     return this.database.transaction(async (client) => {
-      const profile = await client.query<{ user_id: string }>(`
-        SELECT profile.user_id
-        FROM user_profile AS profile
-        JOIN user_account AS account ON account.user_id = profile.user_id
-        WHERE profile.user_id = $1 AND account.deleted_at IS NULL
-        FOR UPDATE OF profile
-      `, [photo.userId]);
-      if (!profile.rows[0]) return 'profile_not_found';
+      if (!await this.lockActiveProfile(client, photo.userId)) {
+        return 'profile_not_found';
+      }
 
       const activeUpload = await client.query(`
         SELECT 1 FROM user_photo
@@ -77,14 +72,9 @@ export class PhotosRepository {
 
   async activate(photoId: string, userId: string): Promise<{ activated: boolean; previous: PhotoObject[] }> {
     return this.database.transaction(async (client) => {
-      const profile = await client.query<{ user_id: string }>(`
-        SELECT profile.user_id
-        FROM user_profile AS profile
-        JOIN user_account AS account ON account.user_id = profile.user_id
-        WHERE profile.user_id = $1 AND account.deleted_at IS NULL
-        FOR UPDATE OF profile
-      `, [userId]);
-      if (!profile.rows[0]) return { activated: false, previous: [] };
+      if (!await this.lockActiveProfile(client, userId)) {
+        return { activated: false, previous: [] };
+      }
 
       const candidate = await client.query(`
         SELECT 1 FROM user_photo
@@ -99,7 +89,7 @@ export class PhotosRepository {
         UPDATE user_photo
         SET status = 'deleting', updated_at = clock_timestamp()
         WHERE user_id = $1 AND status = 'ready'
-        RETURNING id, user_id, object_key, status
+        RETURNING id, user_id AS "userId", object_key AS "objectKey", status
       `, [userId]);
       const activated = await client.query(`
         UPDATE user_photo
@@ -112,20 +102,15 @@ export class PhotosRepository {
 
   async beginDelete(userId: string): Promise<DeleteResult> {
     return this.database.transaction(async (client) => {
-      const profile = await client.query<{ user_id: string }>(`
-        SELECT profile.user_id
-        FROM user_profile AS profile
-        JOIN user_account AS account ON account.user_id = profile.user_id
-        WHERE profile.user_id = $1 AND account.deleted_at IS NULL
-        FOR UPDATE OF profile
-      `, [userId]);
-      if (!profile.rows[0]) return { profileFound: false };
+      if (!await this.lockActiveProfile(client, userId)) {
+        return { profileFound: false };
+      }
 
       const deleted = await client.query<PhotoObject>(`
         UPDATE user_photo
         SET status = 'deleting', updated_at = clock_timestamp()
         WHERE user_id = $1 AND status = 'ready'
-        RETURNING id, user_id, object_key, status
+        RETURNING id, user_id AS "userId", object_key AS "objectKey", status
       `, [userId]);
       return { profileFound: true, photo: deleted.rows[0] };
     });
@@ -136,7 +121,7 @@ export class PhotosRepository {
       UPDATE user_photo
       SET status = 'deleting', updated_at = clock_timestamp()
       WHERE user_id = $1
-      RETURNING id, user_id, object_key, status
+      RETURNING id, user_id AS "userId", object_key AS "objectKey", status
     `, [userId])).rows;
   }
 
@@ -166,7 +151,22 @@ export class PhotosRepository {
       SET status = 'deleting', updated_at = $1
       FROM candidates
       WHERE photo.id = candidates.id
-      RETURNING photo.id, photo.user_id, photo.object_key, photo.status
+      RETURNING photo.id, photo.user_id AS "userId",
+        photo.object_key AS "objectKey", photo.status
     `, [now, staleBefore, retryBefore, limit])).rows;
+  }
+
+  private async lockActiveProfile(
+    database: Queryable,
+    userId: string,
+  ): Promise<boolean> {
+    const profile = await database.query(`
+      SELECT profile.user_id
+      FROM user_profile AS profile
+      JOIN user_account AS account ON account.user_id = profile.user_id
+      WHERE profile.user_id = $1 AND account.deleted_at IS NULL
+      FOR UPDATE OF profile
+    `, [userId]);
+    return profile.rows.length > 0;
   }
 }

@@ -54,7 +54,7 @@ export class PhotosMaintenanceService
 
       for (const photo of photos) {
         try {
-          await this.storage.delete(photo.object_key);
+          await this.storage.delete(photo.objectKey);
           await this.photos.completeDeletion(photo.id);
           totals.cleaned += 1;
         } catch {

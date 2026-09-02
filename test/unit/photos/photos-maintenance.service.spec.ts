@@ -2,8 +2,8 @@ import { PhotosMaintenanceService } from '../../../src/photos/photos-maintenance
 
 const PHOTO = {
   id: '22222222-2222-4222-8222-222222222222',
-  user_id: '11111111-1111-4111-8111-111111111111',
-  object_key: 'profile-photos/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222.webp',
+  userId: '11111111-1111-4111-8111-111111111111',
+  objectKey: 'profile-photos/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222.webp',
   status: 'deleting',
 };
 
@@ -23,7 +23,7 @@ describe('PhotosMaintenanceService', () => {
     );
 
     await expect(service.runOnce()).resolves.toEqual({ cleaned: 1, failed: 0 });
-    expect(storage.delete).toHaveBeenCalledWith(PHOTO.object_key);
+    expect(storage.delete).toHaveBeenCalledWith(PHOTO.objectKey);
     expect(repository.completeDeletion).toHaveBeenCalledWith(PHOTO.id);
   });
 
