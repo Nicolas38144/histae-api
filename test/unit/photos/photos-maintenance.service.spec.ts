@@ -21,6 +21,7 @@ describe('PhotosMaintenanceService', () => {
       repository as never,
       storage as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     await expect(service.runOnce()).resolves.toEqual({
@@ -45,6 +46,7 @@ describe('PhotosMaintenanceService', () => {
       repository as never,
       storage as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     await expect(service.runOnce()).resolves.toEqual({
@@ -55,3 +57,7 @@ describe('PhotosMaintenanceService', () => {
     expect(repository.completeDeletion).not.toHaveBeenCalled();
   });
 });
+
+function tracker(): { track: jest.Mock } {
+  return { track: jest.fn(async (_job, work: () => Promise<unknown>) => work()) };
+}

@@ -55,6 +55,18 @@ describe('HTTP lifecycle security', () => {
     expect(enforce).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it('records the normalized route and response latency', async () => {
+    const app = Fastify();
+    const metrics = { recordHttp: jest.fn() };
+    registerHttpLifecycle(app, limits(), config(), metrics as never);
+    app.get('/api/users/:id', async () => ({ ok: true }));
+
+    await app.inject({ method: 'GET', url: '/api/users/123' });
+
+    expect(metrics.recordHttp).toHaveBeenCalledWith('GET', '/api/users/:id', 200, expect.any(Number));
+    await app.close();
+  });
 });
 
 function limits(enforce = jest.fn().mockResolvedValue(undefined)): never {

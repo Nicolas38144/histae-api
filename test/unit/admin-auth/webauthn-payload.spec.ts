@@ -1,5 +1,7 @@
 import { authenticationCredential, registrationCredential } from '../../../src/admin-auth/webauthn-payload';
 
+const AUTHENTICATOR_DATA_FIXTURE = Buffer.alloc(37).toString('base64url');
+
 describe('WebAuthn response parser', () => {
   it('accepts the browser authentication shape and preserves no unknown fields', () => {
     expect(authenticationCredential({
@@ -8,7 +10,7 @@ describe('WebAuthn response parser', () => {
       type: 'public-key',
       response: {
         clientDataJSON: 'Y2xpZW50',
-        authenticatorData: 'YXV0aGVudGljYXRvcg',
+        authenticatorData: AUTHENTICATOR_DATA_FIXTURE,
         signature: 'c2lnbmF0dXJl',
         userHandle: null,
       },
@@ -24,7 +26,7 @@ describe('WebAuthn response parser', () => {
       type: 'public-key',
       response: {
         clientDataJSON: 'Y2xpZW50',
-        authenticatorData: 'YXV0aGVudGljYXRvcg',
+        authenticatorData: AUTHENTICATOR_DATA_FIXTURE,
         signature: 'c2lnbmF0dXJl',
       },
       clientExtensionResults: {},

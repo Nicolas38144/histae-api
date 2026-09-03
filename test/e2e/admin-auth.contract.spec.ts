@@ -44,6 +44,15 @@ describe('Native administrator WebAuthn HTTP contract', () => {
     revokeCredential: jest.fn().mockResolvedValue(undefined),
     revokeOtherSessions: jest.fn().mockResolvedValue(2),
     revokeSession: jest.fn().mockResolvedValue(undefined),
+    sessions: jest.fn().mockResolvedValue([{
+      id: SESSION_ID, credential_id: CREDENTIAL_ID, credential_name: 'Clé principale', current: true,
+    }]),
+    revokeSelectedSession: jest.fn().mockResolvedValue(undefined),
+    renameCredential: jest.fn().mockResolvedValue(undefined),
+    authEvents: jest.fn().mockResolvedValue({
+      items: [{ id: CHALLENGE_ID, event_type: 'login_succeeded', created_at: authenticatedAt.toISOString() }],
+      next_cursor: null,
+    }),
   };
   const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
   const config = {
@@ -175,6 +184,23 @@ describe('Native administrator WebAuthn HTTP contract', () => {
     expect(auth.authenticate).not.toHaveBeenCalled();
   });
 
+  it('manages named credentials, individual sessions and bounded authentication history', async () => {
+    const renamed = await inject({
+      method: 'PATCH', url: `/api/admin/auth/credentials/${CREDENTIAL_ID}`, payload: { name: 'Portable' },
+    });
+    const sessions = await inject({ method: 'GET', url: '/api/admin/auth/sessions' });
+    const revoked = await inject({ method: 'DELETE', url: `/api/admin/auth/sessions/${CHALLENGE_ID}` });
+    const events = await inject({ method: 'GET', url: '/api/admin/auth/events?limit=20' });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(auth.renameCredential).toHaveBeenCalledWith(ADMIN_ID, CREDENTIAL_ID, SESSION_ID, 'Portable');
+    expect(sessions.json()).toEqual([expect.objectContaining({ id: SESSION_ID, current: true })]);
+    expect(revoked.statusCode).toBe(204);
+    expect(auth.revokeSelectedSession).toHaveBeenCalledWith(ADMIN_ID, CHALLENGE_ID, SESSION_ID);
+    expect(events.json()).toEqual({ events: [expect.objectContaining({ event_type: 'login_succeeded' })], next_cursor: null });
+    expect(auth.authEvents).toHaveBeenCalledWith(ADMIN_ID, 20, undefined);
+  });
+
   it('revokes the current session and expires the cookie on logout', async () => {
     const response = await inject({ method: 'POST', url: '/api/admin/auth/logout' });
 
@@ -184,7 +210,7 @@ describe('Native administrator WebAuthn HTTP contract', () => {
   });
 
   function inject(input: {
-    method: 'GET' | 'POST' | 'DELETE';
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
     url: string;
     payload?: Record<string, unknown>;
   }): Promise<{

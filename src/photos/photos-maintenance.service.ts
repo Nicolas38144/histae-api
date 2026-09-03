@@ -5,6 +5,7 @@ import { ConfigService } from '../config/config.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import { PHOTO_PROCESSING_STALE_AFTER_MILLIS } from './photos.constants';
 import { PhotosRepository } from './photos.repository';
+import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 
 const HOUR = 60 * 60 * 1_000;
 const DELETION_RETRY_AFTER = 5 * 60 * 1_000;
@@ -28,6 +29,7 @@ export class PhotosMaintenanceService
     private readonly photos: PhotosRepository,
     private readonly storage: ObjectStorageService,
     private readonly config: ConfigService,
+    private readonly tracker: MaintenanceTrackerService,
   ) {}
 
   onModuleInit(): void {
@@ -42,6 +44,14 @@ export class PhotosMaintenanceService
   }
 
   async runOnce(): Promise<PhotoMaintenanceResult> {
+    return this.tracker.track(
+      'photos',
+      () => this.performMaintenance(),
+      (result) => result.cleaned + result.failed + result.expiredIdempotencyRecords,
+    );
+  }
+
+  private async performMaintenance(): Promise<PhotoMaintenanceResult> {
     const totals: PhotoMaintenanceResult = {
       cleaned: 0,
       failed: 0,

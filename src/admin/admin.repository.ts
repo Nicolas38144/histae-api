@@ -5,7 +5,7 @@ import type { OutboxStatus } from '../outbox/outbox.models';
 import { OutboxRepository } from '../outbox/outbox.repository';
 import type {
   AdminMessageRow,
-  AdminMetrics,
+  AdminBusinessMetrics,
   AdminPhotoMetrics,
   AdminPhotoReconciliationRow,
   AdminRevenue,
@@ -207,7 +207,8 @@ export class AdminRepository {
           WHEN event.status = 'processing' THEN 'deletion_processing'
           WHEN event.status = 'pending' AND event.attempts > 0 THEN 'deletion_retry_scheduled'
           WHEN event.status = 'pending' THEN 'deletion_queued'
-          WHEN event.status = 'completed' THEN 'deletion_event_completed'
+            WHEN event.status = 'completed' THEN 'deletion_event_completed'
+            WHEN event.status = 'discarded' THEN 'deletion_event_discarded'
           ELSE 'deletion_event_missing'
         END AS issue,
         to_char(photo.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
@@ -348,8 +349,8 @@ export class AdminRepository {
     privacyVersion: string,
     revenuePeriod: RevenuePeriod,
     photoStaleBefore: Date,
-  ): Promise<AdminMetrics> {
-    const users = (await this.database.query<AdminMetrics['users']>(`
+  ): Promise<AdminBusinessMetrics> {
+    const users = (await this.database.query<AdminBusinessMetrics['users']>(`
       SELECT count(*)::int AS total,
         count(*) FILTER (WHERE NOT is_banned)::int AS active,
         count(*) FILTER (WHERE is_banned)::int AS banned,
@@ -362,15 +363,15 @@ export class AdminRepository {
         ))::int AS onboarded
       FROM user_account WHERE deleted_at IS NULL
     `, [termsVersion, privacyVersion])).rows[0] ?? { total: 0, active: 0, banned: 0, onboarded: 0, created_last_30_days: 0 };
-    const moderation = (await this.database.query<AdminMetrics['moderation']>(`
+    const moderation = (await this.database.query<AdminBusinessMetrics['moderation']>(`
       SELECT (SELECT count(*)::int FROM user_report WHERE status = 'pending') AS pending_reports,
         (SELECT count(*)::int FROM content_moderation_case WHERE status = 'pending') AS pending_content,
         (SELECT count(*)::int FROM data_subject_request WHERE status IN ('pending', 'in_progress')) AS open_data_requests
     `)).rows[0] ?? { pending_reports: 0, pending_content: 0, open_data_requests: 0 };
-    const matchRows = (await this.database.query<{ status: keyof AdminMetrics['matches']; count: number }>(`
+    const matchRows = (await this.database.query<{ status: keyof AdminBusinessMetrics['matches']; count: number }>(`
       SELECT status, count(*)::int AS count FROM match_init GROUP BY status
     `)).rows;
-    const matches: AdminMetrics['matches'] = { active: 0, awaiting_continuation: 0, confirmed: 0, expired: 0, ended: 0 };
+    const matches: AdminBusinessMetrics['matches'] = { active: 0, awaiting_continuation: 0, confirmed: 0, expired: 0, ended: 0 };
     for (const row of matchRows) matches[row.status] = row.count;
     const messages = (await this.database.query<{ total: number }>('SELECT count(*)::int AS total FROM chat_message')).rows[0] ?? { total: 0 };
     const photos = (await this.database.query<AdminPhotoMetrics>(`

@@ -23,6 +23,37 @@ export type AdminCredential = {
   current: boolean;
 };
 
+export type AdminSessionSummary = {
+  id: string;
+  credential_id: string;
+  credential_name: string;
+  authenticated_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  current: boolean;
+};
+
+export const ADMIN_AUTH_EVENT_TYPES = [
+  'bootstrap_issued',
+  'bootstrap_registered',
+  'login_succeeded',
+  'credential_added',
+  'credential_renamed',
+  'credential_revoked',
+  'session_revoked',
+  'other_sessions_revoked',
+  'logout',
+] as const;
+export type AdminAuthEventType = typeof ADMIN_AUTH_EVENT_TYPES[number];
+
+export type AdminAuthEvent = {
+  id: string;
+  event_type: AdminAuthEventType;
+  credential_id: string | null;
+  session_id: string | null;
+  created_at: string;
+};
+
 export type RegistrationOptions = {
   challenge_id: string;
   options: PublicKeyCredentialCreationOptionsJSON;

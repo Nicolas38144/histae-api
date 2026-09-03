@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import type { OtpSms, SmsDeliveryReceipt } from './sms-delivery';
 import { SmsDelivery, SmsDeliveryError } from './sms-delivery';
+import { OperationalMetricsService } from '../operations/operational-metrics.service';
 
 type SweegoSuccess = {
   transaction_id: string;
@@ -10,11 +11,19 @@ type SweegoSuccess = {
 
 @Injectable()
 export class SweegoSmsService extends SmsDelivery {
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly metrics?: OperationalMetricsService,
+  ) {
     super();
   }
 
   async sendOtp(message: OtpSms): Promise<SmsDeliveryReceipt> {
+    const operation = () => this.deliver(message);
+    return this.metrics?.measure('sweego', operation) ?? operation();
+  }
+
+  private async deliver(message: OtpSms): Promise<SmsDeliveryReceipt> {
     if (this.config.sms.provider !== 'sweego') throw new SmsDeliveryError('not_configured');
 
     let response: Response;

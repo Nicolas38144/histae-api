@@ -1,5 +1,6 @@
 import type { MatchStatus, MessageRow } from '../matches/matches.models';
 import type { ConsentType, LookingFor, Sex } from '../users/users.models';
+import type { OperationalSnapshot } from '../operations/operations.models';
 
 export const ADMIN_USER_STATUSES = ['active', 'banned'] as const;
 export type AdminUserStatus = typeof ADMIN_USER_STATUSES[number];
@@ -39,7 +40,8 @@ export type PhotoReconciliationIssue =
   | 'deletion_retry_scheduled'
   | 'deletion_dead_letter'
   | 'deletion_event_missing'
-  | 'deletion_event_completed';
+  | 'deletion_event_completed'
+  | 'deletion_event_discarded';
 
 export type AdminPhotoReconciliationRow = {
   id: string;
@@ -50,7 +52,7 @@ export type AdminPhotoReconciliationRow = {
   height: number | null;
   created_at: Date;
   updated_at: Date;
-  outbox_status: 'pending' | 'processing' | 'completed' | 'dead_letter' | null;
+  outbox_status: 'pending' | 'processing' | 'completed' | 'dead_letter' | 'discarded' | null;
   outbox_attempts: number | null;
   outbox_available_at: Date | null;
   outbox_locked_at: Date | null;
@@ -128,6 +130,9 @@ export type AdminMetrics = {
   photos: AdminPhotoMetrics;
   subscriptions: Array<{ plan: string; users: number }>;
   revenue: AdminRevenue;
+  operations: OperationalSnapshot;
 };
+
+export type AdminBusinessMetrics = Omit<AdminMetrics, 'operations'>;
 
 export type AdminMessageRow = MessageRow & { cursor_at: string };

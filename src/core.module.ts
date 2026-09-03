@@ -14,6 +14,10 @@ import { OutboxRepository } from './outbox/outbox.repository';
 import { OutboxWorkerService } from './outbox/outbox-worker.service';
 import { PhotoModerationService } from './moderation/photo-moderation.service';
 import { TextModerationService } from './moderation/text-moderation.service';
+import { MaintenanceStatusRepository } from './operations/maintenance-status.repository';
+import { MaintenanceTrackerService } from './operations/maintenance-tracker.service';
+import { OperationalMetricsService } from './operations/operational-metrics.service';
+import { OperationalStatusService } from './operations/operational-status.service';
 
 @Global()
 @Module({
@@ -33,6 +37,10 @@ import { TextModerationService } from './moderation/text-moderation.service';
     OutboxWorkerService,
     PhotoModerationService,
     TextModerationService,
+    OperationalMetricsService,
+    MaintenanceStatusRepository,
+    MaintenanceTrackerService,
+    OperationalStatusService,
   ],
   exports: [
     ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService,
@@ -40,6 +48,8 @@ import { TextModerationService } from './moderation/text-moderation.service';
     PhotosMaintenanceService,
     OutboxRepository, OutboxWorkerService,
     PhotoModerationService, TextModerationService,
+    OperationalMetricsService, MaintenanceStatusRepository,
+    MaintenanceTrackerService, OperationalStatusService,
   ],
 })
 export class CoreModule {}

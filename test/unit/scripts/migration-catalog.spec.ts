@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(7);
+    expect(migrations).toHaveLength(8);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -53,6 +53,12 @@ describe('PostgreSQL migration catalog', () => {
     expect(adminWebAuthn.sql).toContain('CREATE TABLE admin_webauthn_credential');
     expect(adminWebAuthn.sql).toContain('CREATE TABLE admin_session');
     expect(adminWebAuthn.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const internalOperations = await loadMigration(migrations[7]);
+    expect(internalOperations.sql).toContain('-- source: 008_internal_operations.sql');
+    expect(internalOperations.sql).toContain('CREATE TABLE maintenance_job_status');
+    expect(internalOperations.sql).toContain('CREATE TABLE outbox_operator_action');
+    expect(internalOperations.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

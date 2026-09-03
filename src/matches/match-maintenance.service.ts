@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import type { MaintenanceResult } from './matches.models';
 import { MatchesRepository } from './matches.repository';
+import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 
 const HOUR = 60 * 60 * 1_000;
 
@@ -11,7 +12,11 @@ export class MatchMaintenanceService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MatchMaintenanceService.name);
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly matches: MatchesRepository, private readonly config: ConfigService) {}
+  constructor(
+    private readonly matches: MatchesRepository,
+    private readonly config: ConfigService,
+    private readonly tracker: MaintenanceTrackerService,
+  ) {}
 
   onModuleInit(): void {
     if (this.config.maintenanceMode !== 'api') return;
@@ -25,7 +30,11 @@ export class MatchMaintenanceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async runOnce(): Promise<MaintenanceResult | undefined> {
-    return this.matches.runMaintenanceAsLeader(new Date());
+    return this.tracker.track(
+      'matches',
+      () => this.matches.runMaintenanceAsLeader(new Date()),
+      (result) => result ? result.opened + result.expired + result.purged : 0,
+    );
   }
 
   private async execute(): Promise<void> {

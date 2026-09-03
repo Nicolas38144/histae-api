@@ -19,6 +19,7 @@ import type {
 } from './admin.models';
 import { AdminRepository } from './admin.repository';
 import { PhotosService } from '../photos/photos.service';
+import { OperationalStatusService } from '../operations/operational-status.service';
 
 type AdminRole = 'admin' | 'superadmin';
 
@@ -28,6 +29,7 @@ export class AdminService {
     private readonly admin: AdminRepository,
     private readonly config: ConfigService,
     private readonly photos: PhotosService,
+    private readonly operations: OperationalStatusService,
   ) {}
 
   async listUsers(
@@ -73,13 +75,14 @@ export class AdminService {
     if (result === 'forbidden') throw apiError(403, 'admin_action_forbidden', 'The administrator cannot change this account.');
   }
 
-  metrics(revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
-    return this.admin.metrics(
+  async metrics(revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
+    const [metrics, operations] = await Promise.all([this.admin.metrics(
       this.config.legal.termsVersion,
       this.config.legal.privacyVersion,
       revenuePeriod,
       stalePhotoCutoff(),
-    );
+    ), this.operations.snapshot()]);
+    return { ...metrics, operations };
   }
 
   revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {

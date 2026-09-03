@@ -1,20 +1,23 @@
-import { Controller, Delete, Get, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { userId } from '../auth/auth.guard';
-import { ValidatedBody, ValidatedParams } from '../common/http/validated-request.decorator';
+import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { AdminSessionGuard, RecentAdminAuthenticationGuard } from './admin-auth.guard';
-import type { AdminAuthSession, AdminCredential, AuthenticationOptions, RegistrationOptions } from './admin-auth.models';
+import type { AdminAuthEvent, AdminAuthSession, AdminCredential, AdminSessionSummary, AuthenticationOptions, RegistrationOptions } from './admin-auth.models';
 import { AdminAuthService } from './admin-auth.service';
 import { adminSessionCookie, expiredAdminSessionCookie } from './admin-session-cookie';
 import {
   AdditionalCredentialVerifyDto,
+  AdminAuthEventsQueryDto,
   AdminCredentialIdParamDto,
+  AdminSessionIdParamDto,
   AuthenticationVerifyDto,
   BootstrapRegistrationOptionsDto,
   BootstrapRegistrationVerifyDto,
+  RenameAdminCredentialDto,
 } from './dto/admin-auth.dto';
 
 const AUTH_ERROR = { code: 'invalid_admin_auth_request', message: 'The administrator authentication request is invalid.' };
@@ -134,6 +137,43 @@ export class AdminAuthController {
   ): Promise<void> {
     const session = adminSession(request);
     await this.auth.revokeCredential(userId(request), params.id, session.id, session.credentialId);
+  }
+
+  @Patch('credentials/:id')
+  @UseGuards(AdminSessionGuard, RecentAdminAuthenticationGuard)
+  async renameCredential(
+    @ValidatedParams({ code: 'invalid_admin_credential_id', message: 'The administrator credential ID is invalid.' }) params: AdminCredentialIdParamDto,
+    @ValidatedBody(AUTH_ERROR) body: RenameAdminCredentialDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ message: string }> {
+    await this.auth.renameCredential(userId(request), params.id, adminSession(request).id, body.name);
+    return { message: 'administrator credential renamed' };
+  }
+
+  @Get('sessions')
+  @UseGuards(AdminSessionGuard)
+  sessions(@Req() request: AuthenticatedRequest): Promise<AdminSessionSummary[]> {
+    return this.auth.sessions(userId(request), adminSession(request).id);
+  }
+
+  @Delete('sessions/:id')
+  @UseGuards(AdminSessionGuard, RecentAdminAuthenticationGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeSelectedSession(
+    @ValidatedParams({ code: 'invalid_admin_session_id', message: 'The administrator session ID is invalid.' }) params: AdminSessionIdParamDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<void> {
+    await this.auth.revokeSelectedSession(userId(request), params.id, adminSession(request).id);
+  }
+
+  @Get('events')
+  @UseGuards(AdminSessionGuard)
+  async events(
+    @ValidatedQuery(AUTH_ERROR) query: AdminAuthEventsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ events: AdminAuthEvent[]; next_cursor: string | null }> {
+    const page = await this.auth.authEvents(userId(request), query.limit, query.cursor);
+    return { events: page.items, next_cursor: page.next_cursor };
   }
 
   @Post('sessions/revoke-others')

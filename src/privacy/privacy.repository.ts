@@ -256,6 +256,11 @@ export class PrivacyRepository {
       WHERE created_at <= $1::timestamptz - INTERVAL '1 year'
       ORDER BY created_at LIMIT $2
     )`, [now, batchSize]);
+    const expiredOutboxOperatorActions = await database.query(`DELETE FROM outbox_operator_action WHERE id IN (
+      SELECT id FROM outbox_operator_action
+      WHERE created_at <= $1::timestamptz - INTERVAL '1 year'
+      ORDER BY created_at LIMIT $2
+    )`, [now, batchSize]);
     return {
       stale_presences: stalePresences.rowCount ?? 0,
       expired_presences: expiredPresences.rowCount ?? 0,
@@ -272,6 +277,7 @@ export class PrivacyRepository {
       expired_admin_webauthn_bootstraps: expiredAdminBootstraps.rowCount ?? 0,
       expired_admin_sessions: expiredAdminSessions.rowCount ?? 0,
       expired_admin_auth_events: expiredAdminAuthEvents.rowCount ?? 0,
+      expired_outbox_operator_actions: expiredOutboxOperatorActions.rowCount ?? 0,
     };
   }
 }

@@ -43,6 +43,9 @@ export const migrations = [{
 }, {
   version: '007_native_admin_webauthn',
   filenames: ['007_native_admin_webauthn.sql'],
+}, {
+  version: '008_internal_operations',
+  filenames: ['008_internal_operations.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

@@ -12,6 +12,7 @@ import {
 import { OUTBOX_LOCK_TIMEOUT_MILLIS } from './outbox.constants';
 import type { OutboxEvent, OutboxWorkerResult } from './outbox.models';
 import { OutboxRepository } from './outbox.repository';
+import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -20,6 +21,7 @@ const BATCH_SIZE = 50;
 const HANDLER_CONCURRENCY = 5;
 const MAX_ATTEMPTS = 10;
 const MAX_RETRY_DELAY_MILLIS = 60_000;
+const STATUS_RECORD_INTERVAL_MILLIS = 60_000;
 
 @Injectable()
 export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
@@ -28,12 +30,14 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private polling = false;
   private lastCompletedPurgeAt?: number;
+  private lastStatusRecordedAt?: number;
 
   constructor(
     private readonly outbox: OutboxRepository,
     private readonly photos: PhotosRepository,
     private readonly storage: ObjectStorageService,
     private readonly config: ConfigService,
+    private readonly tracker: MaintenanceTrackerService,
   ) {}
 
   onModuleInit(): void {
@@ -127,8 +131,25 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     if (this.polling) return;
     this.polling = true;
     try {
-      await this.runOnce();
+      const now = new Date();
+      const shouldRecord = this.lastStatusRecordedAt === undefined
+        || now.getTime() - this.lastStatusRecordedAt >= STATUS_RECORD_INTERVAL_MILLIS;
+      if (shouldRecord) {
+        await this.tracker.track(
+          'outbox',
+          () => this.runOnce(now),
+          (result) => result.claimed + result.purged,
+        );
+        this.lastStatusRecordedAt = now.getTime();
+      } else {
+        await this.runOnce(now);
+      }
     } catch (error: unknown) {
+      if (this.lastStatusRecordedAt !== undefined
+        && Date.now() - this.lastStatusRecordedAt < STATUS_RECORD_INTERVAL_MILLIS) {
+        await this.tracker.recordFailure('outbox', error);
+        this.lastStatusRecordedAt = Date.now();
+      }
       this.logger.error(
         'Outbox polling failed',
         error instanceof Error ? error.stack : undefined,

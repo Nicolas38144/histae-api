@@ -29,6 +29,7 @@ describe('OutboxWorkerService', () => {
       photos as never,
       storage as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     await expect(worker.runOnce(new Date('2026-09-02T10:00:00.000Z')))
@@ -60,6 +61,7 @@ describe('OutboxWorkerService', () => {
       photos as never,
       storage as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     const result = await worker.runOnce();
@@ -85,6 +87,7 @@ describe('OutboxWorkerService', () => {
       photos as never,
       storage as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     const result = await worker.runOnce();
@@ -108,6 +111,7 @@ describe('OutboxWorkerService', () => {
       { findDeleting: jest.fn().mockRejectedValue(new Error('database')) } as never,
       {} as never,
       { maintenanceMode: 'disabled' } as never,
+      tracker() as never,
     );
 
     const result = await worker.runOnce();
@@ -123,4 +127,8 @@ function outboxMock(events: unknown[]): Record<string, jest.Mock> {
     reschedule: jest.fn().mockResolvedValue('pending'),
     purgeCompleted: jest.fn().mockResolvedValue(2),
   };
+}
+
+function tracker(): { track: jest.Mock } {
+  return { track: jest.fn(async (_job, work: () => Promise<unknown>) => work()) };
 }

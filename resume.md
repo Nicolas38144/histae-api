@@ -21,6 +21,7 @@ Le socle fonctionnel principal est implémenté :
 - photos privées normalisées en WebP dans un stockage objet compatible S3 ;
 - qualité et modération des photos, bios et réponses libres avec file de revue auditée ;
 - health checks, migrations contrôlées et tests réels des stockages.
+- observabilité interne, suivi persistant des maintenances et récupération auditée des dead letters.
 
 Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
 consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. La migration
@@ -33,6 +34,8 @@ qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashb
 La migration `006_content_moderation` sépare ensuite le statut éditorial du statut technique et crée la file de
 revue centrale pour les photos, bios et réponses. `007_native_admin_webauthn` sépare enfin totalement le dashboard
 du parcours OTP : passkeys découvrables, sessions serveur courtes et audit d’authentification, sans SSO externe.
+`008_internal_operations` ajoute enfin les états de maintenance, la résolution explicite et auditée des dead
+letters, ainsi que les événements nécessaires à la gestion détaillée des passkeys et sessions.
 
 ## 2. Architecture
 
@@ -68,7 +71,7 @@ pas une dépendance applicative : changer de fournisseur revient à modifier le
 
 Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`,
 `privacy`, `profile-questions`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
-`database`, `ratelimit`, `redis`, `scylla` et `storage`.
+`database`, `operations`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 La convention est : contrôleur pour HTTP, DTO pour la validation stricte des entrées, service pour les règles métier, repository
 ou store pour SQL/CQL et mapper/model pour les représentations publiques.
@@ -118,6 +121,8 @@ proxies autorisés, sinon une adresse transmise par le client pourrait fausser l
   passkey. Les mutations vérifient l’origine exacte contre les requêtes intersites.
 - En développement, WebAuthn utilise `http://localhost:5173` et le RP ID `localhost` derrière le proxy Vite `/api`.
   La production exige une origine HTTPS et un cookie `__Host-…; Secure`.
+- Le dashboard peut renommer les passkeys, lister/révoquer une session active et consulter un historique paginé.
+  Ces représentations excluent systématiquement secrets, hashes et clés publiques.
 
 Le rate limiting est global par IP et renforcé sur WebAuthn admin, OTP, refresh, feed, swipe, message, export,
 signalement, photo, facturation et webhook Stripe. Les clés de compteurs sont HMACées. Le fallback mémoire non-production purge ses
@@ -200,6 +205,11 @@ objet ni image. `POST /api/admin/photo-reconciliation/:id/retry` refuse les phot
 puis rend l’objet invisible, remet `photo.delete` en file et inscrit `admin_reconcile_photo` avec le motif dans une
 unique transaction PostgreSQL.
 
+La file `/api/admin/outbox/dead-letters` ne révèle ni payload ni agrégat. Relancer ou abandonner un événement
+exige une authentification récente et écrit `outbox_operator_action` sous le même verrou transactionnel. Un
+`photo.delete` ne peut être abandonné que si sa ligne `user_photo` a déjà disparu ; les événements résolus sont
+purgés après sept jours et leur audit opérateur après un an.
+
 PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
 générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
 admin audité. Les collections admin et blocages renvoient toujours `photo: null`. Les appels S3 réseau sont bornés
@@ -251,7 +261,8 @@ relance opérateur. `005_profile_questions` ajoute le catalogue administrable et
 `006_content_moderation` ajoute les cas centraux, les signaux automatisés, la revue optimiste et les actions
 d’audit associées. `007_native_admin_webauthn` ajoute les enrôlements temporaires, credentials publics, challenges,
 sessions opaques et événements d’authentification admin. Une base neuve applique donc la baseline puis ces migrations
-dans l’ordre.
+dans l’ordre. `008_internal_operations` ajoute la résolution/audit outbox, l’état de maintenance et enrichit
+l’historique WebAuthn.
 
 La compatibilité est sans perte :
 
@@ -277,13 +288,18 @@ La maintenance peut fonctionner dans l’API, dans un worker séparé ou être d
 présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
 signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`. Elle réconcilie
 également les challenges/enrôlements WebAuthn consommés ou expirés, sessions admin obsolètes et audits de plus d’un
-an. Elle réconcilie aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
+an, ainsi que les actions opérateur outbox de plus d’un an. Elle réconcilie aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
 dont la suppression S3 doit être retentée.
 
 L’outbox est consommée chaque seconde par l’API lorsque `MAINTENANCE_MODE=api`. Pour séparer le trafic HTTP des
 effets externes, `MAINTENANCE_MODE=worker pnpm run outbox:work` lance un consommateur dédié et arrêtable proprement.
-Les événements terminés sont purgés après sept jours ; les dead letters restent visibles pour diagnostic et
-rejeu opérateur futur.
+Les événements terminés ou explicitement abandonnés sont purgés après sept jours ; les dead letters restent
+visibles jusqu’à une décision opérateur.
+
+Les métriques opérationnelles restent en mémoire avec une cardinalité de routes bornée. Elles agrègent latences,
+erreurs HTTP, `401`/`403`/`429`/`5xx`, dépendances, mémoire, event loop et pool PostgreSQL. Le snapshot admin les
+combine aux profondeurs outbox et aux derniers états persistants des jobs `matches`, `photos`, `privacy` et
+`outbox`, avec indicateurs `missing` et `overdue`.
 
 En local, les Compose sont séparés pour ScyllaDB, Redis, SeaweedFS et l’analyse photo. Le Compose objet lie l’API S3 à
 `127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de
@@ -331,9 +347,8 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
    procédure d’enrôlement/récupération hors bande et alertes sur les connexions et actions de sûreté.
 4. Calibrer les seuils photo et les règles texte sur un corpus représentatif, mesurer faux positifs, faux négatifs
    et biais, formaliser toutes les catégories interdites, le SLA de revue et une procédure d’appel.
-5. Compléter les métriques déjà présentes pour `user_photo` et la file de modération par une collecte d’observabilité sur les latences,
-   erreurs, pools, rate limits, OTP, Stripe, S3 et Scylla, puis définir les alertes. Déployer et superviser réellement
-   les workers maintenance/outbox.
+5. Brancher les métriques internes déjà présentes sur le mécanisme d’alertes retenu en production et superviser
+   réellement les workers maintenance/outbox.
 6. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
    puis gérer explicitement la perte de réponse réseau.
 7. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.
@@ -353,6 +368,6 @@ Finaliser avec le DPO/juriste l’AIPD, les durées des comptes inactifs, les so
 sauvegardes lors d’un effacement et les textes/versionnements de production. Ces choix ne doivent pas être inventés
 dans le code.
 
-À court terme, le meilleur prochain lot côté API est le suivi Sweego et l’observabilité. Le socle métier n’a pas
+À court terme, le meilleur prochain lot côté API est le suivi asynchrone Sweego. Le socle métier n’a pas
 besoin d’une nouvelle réécriture générale ; les risques principaux sont désormais les procédures de récupération
 WebAuthn et les garanties opérationnelles des services externes.

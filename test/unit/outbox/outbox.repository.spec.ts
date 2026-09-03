@@ -96,4 +96,34 @@ describe('OutboxRepository', () => {
       10,
     )).resolves.toBe(expected);
   });
+
+  it('retries a dead letter under lock and writes the operator audit first', async () => {
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ id: EVENT_ID, event_type: 'photo.delete', aggregate_id: PHOTO_ID, status: 'dead_letter' }] })
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 1 }) };
+    const database = { transaction: jest.fn(async (work) => work(client)) };
+    const repository = new OutboxRepository(database as never);
+
+    await expect(repository.retryDeadLetter(EVENT_ID, {
+      userId: WORKER_ID, role: 'admin',
+    }, 'Incident resolved')).resolves.toBe('updated');
+
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[1]?.[0]).toContain('INSERT INTO outbox_operator_action');
+    expect(client.query.mock.calls[2]?.[0]).toContain("SET status = 'pending'");
+  });
+
+  it('refuses to discard a deletion while its private photo record still exists', async () => {
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ id: EVENT_ID, event_type: 'photo.delete', aggregate_id: PHOTO_ID, status: 'dead_letter' }] })
+      .mockResolvedValueOnce({ rows: [{ exists: 1 }] }) };
+    const database = { transaction: jest.fn(async (work) => work(client)) };
+    const repository = new OutboxRepository(database as never);
+
+    await expect(repository.discardDeadLetter(EVENT_ID, {
+      userId: WORKER_ID, role: 'superadmin',
+    }, 'No aggregate')).resolves.toBe('discard_not_allowed');
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
 });

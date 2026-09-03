@@ -121,6 +121,9 @@ utilisateur sont inscrites dans une outbox PostgreSQL au sein de la transaction 
 asynchrone avec reprise exponentielle et dead-letter après dix tentatives.
 La console admin expose des métriques de cycle de vie et une file de réconciliation paginée. Une relance manuelle
 ne révèle ni clé objet ni image, refuse les photos saines et crée une trace d’audit avec son motif.
+Les dead letters disposent également d’une file technique sans payload : une relance ou un abandon sûr exige une
+authentification WebAuthn récente et produit un audit transactionnel. Une suppression photo ne peut pas être
+abandonnée tant que sa ligne technique référence encore l’objet privé.
 
 Les profils disposent aussi d’un catalogue de questions administrable. Chaque utilisateur peut enregistrer jusqu’à
 trois réponses ordonnées via un remplacement atomique. Elles sont exposées sur son profil, dans la découverte et
@@ -149,6 +152,13 @@ dans l’authenticator. PostgreSQL ne conserve que la clé publique, le compteur
 hachés et les événements d’audit. La session est transmise par cookie `HttpOnly`, `SameSite=Strict`, avec expiration
 inactive de 30 minutes et absolue de 8 heures par défaut. Toute mutation admin impose en plus l’origine WebAuthn
 exacte. En production, l’origine doit être HTTPS et le cookie devient `Secure` avec le préfixe `__Host-`.
+Chaque administrateur peut renommer ses passkeys, consulter ses sessions actives, révoquer une session précise et
+parcourir un historique de sécurité paginé. Aucune de ces vues ne contient de secret de session ou de clé publique.
+
+`GET /api/admin/metrics` fournit sans composant supplémentaire les compteurs et latences HTTP du processus, les
+statuts sensibles, les résultats des appels aux dépendances configurées, le pool PostgreSQL, l’outbox et les
+dernières exécutions de maintenance. Les métriques volatiles repartent à zéro au redémarrage ; les exécutions de
+maintenance et l’état de l’outbox sont conservés dans PostgreSQL pour signaler un worker manquant ou en retard.
 
 ## Commandes principales
 
@@ -157,7 +167,7 @@ exacte. En production, l’origine doit être HTTPS et le cookie devient `Secure
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération et WebAuthn administrateur. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération, WebAuthn administrateur et le suivi opérationnel. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run admin:webauthn:bootstrap -- <uuid>` | Crée pour un administrateur actif un jeton à usage unique permettant d’enregistrer sa première passkey. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |

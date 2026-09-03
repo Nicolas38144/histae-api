@@ -54,4 +54,5 @@ export type PrivacyMaintenanceResult = {
   expired_admin_webauthn_bootstraps: number;
   expired_admin_sessions: number;
   expired_admin_auth_events: number;
+  expired_outbox_operator_actions: number;
 };

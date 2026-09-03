@@ -158,6 +158,62 @@ describe('AdminAuthService', () => {
     await expect(service.revokeCredential(USER_ID, CHALLENGE_ID, SESSION_ID, CREDENTIAL_UUID))
       .resolves.toBeUndefined();
   });
+
+  it('lists active sessions without token material and marks the current one', async () => {
+    const repository = { activeSessions: jest.fn().mockResolvedValue([{
+      id: SESSION_ID,
+      credential_id: CREDENTIAL_UUID,
+      credential_name: 'Clé principale',
+      authenticated_at: new Date('2030-01-01T00:00:00.000Z'),
+      last_seen_at: new Date('2030-01-01T00:05:00.000Z'),
+      expires_at: new Date('2030-01-01T00:30:00.000Z'),
+      token_hash: Buffer.from('must-not-leak'),
+    }]) };
+    const service = new AdminAuthService(repository as never, config as never);
+
+    const result = await service.sessions(USER_ID, SESSION_ID);
+    expect(result).toEqual([expect.objectContaining({ id: SESSION_ID, current: true, credential_name: 'Clé principale' })]);
+    expect(result[0]).not.toHaveProperty('token_hash');
+  });
+
+  it('renames a credential and revokes a selected non-current session', async () => {
+    const repository = {
+      renameCredential: jest.fn().mockResolvedValue(true),
+      revokeSelectedSession: jest.fn().mockResolvedValue(true),
+    };
+    const service = new AdminAuthService(repository as never, config as never);
+
+    await expect(service.renameCredential(USER_ID, CREDENTIAL_UUID, SESSION_ID, '  Portable  '))
+      .resolves.toBeUndefined();
+    expect(repository.renameCredential).toHaveBeenCalledWith(USER_ID, CREDENTIAL_UUID, SESSION_ID, 'Portable');
+    await expect(service.revokeSelectedSession(USER_ID, CHALLENGE_ID, SESSION_ID)).resolves.toBeUndefined();
+    expect(repository.revokeSelectedSession).toHaveBeenCalledWith(USER_ID, CHALLENGE_ID, SESSION_ID);
+  });
+
+  it('never lets the selected-session route revoke the current session', async () => {
+    const repository = { revokeSelectedSession: jest.fn() };
+    const service = new AdminAuthService(repository as never, config as never);
+    await expect(service.revokeSelectedSession(USER_ID, SESSION_ID, SESSION_ID))
+      .rejects.toEqual(expect.objectContaining({ status: 409, code: 'current_admin_session' }));
+    expect(repository.revokeSelectedSession).not.toHaveBeenCalled();
+  });
+
+  it('returns bounded authentication history with cursor pagination', async () => {
+    const repository = { authEvents: jest.fn().mockResolvedValue([{
+      id: CHALLENGE_ID,
+      event_type: 'login_succeeded',
+      credential_id: CREDENTIAL_UUID,
+      session_id: SESSION_ID,
+      created_at: new Date('2030-01-01T00:00:00.000Z'),
+    }]) };
+    const service = new AdminAuthService(repository as never, config as never);
+
+    await expect(service.authEvents(USER_ID, 20)).resolves.toEqual({
+      items: [expect.objectContaining({ id: CHALLENGE_ID, event_type: 'login_succeeded' })],
+      next_cursor: null,
+    });
+    expect(repository.authEvents).toHaveBeenCalledWith(USER_ID, 21, undefined);
+  });
 });
 
 function authenticationPayload(): Record<string, unknown> {

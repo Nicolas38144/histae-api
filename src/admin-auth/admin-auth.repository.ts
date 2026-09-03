@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { DatabaseService } from '../database/database.service';
-import type { AdminRole } from './admin-auth.models';
+import type { AdminAuthEventType, AdminRole } from './admin-auth.models';
+import type { KeysetCursor } from '../common/pagination';
 
 export type BootstrapRow = QueryResultRow & {
   id: string;
@@ -61,14 +62,22 @@ export type NewSession = {
 
 export type CredentialRevocationResult = 'revoked' | 'not_found' | 'last_credential';
 
-type AdminAuthEventType =
-  | 'bootstrap_issued'
-  | 'bootstrap_registered'
-  | 'login_succeeded'
-  | 'credential_added'
-  | 'credential_revoked'
-  | 'other_sessions_revoked'
-  | 'logout';
+export type SessionSummaryRow = QueryResultRow & {
+  id: string;
+  credential_id: string;
+  credential_name: string;
+  authenticated_at: Date;
+  last_seen_at: Date;
+  expires_at: Date;
+};
+
+export type AuthEventRow = QueryResultRow & {
+  id: string;
+  event_type: AdminAuthEventType;
+  credential_id: string | null;
+  session_id: string | null;
+  created_at: Date;
+};
 
 @Injectable()
 export class AdminAuthRepository {
@@ -258,6 +267,66 @@ export class AdminAuthRepository {
       await this.insertEvent(client, userId, null, currentSessionId, 'other_sessions_revoked');
       return result.rowCount ?? 0;
     });
+  }
+
+  async activeSessions(userId: string): Promise<SessionSummaryRow[]> {
+    return (await this.database.query<SessionSummaryRow>(`
+      SELECT session.id, session.credential_id, credential.name AS credential_name,
+        session.authenticated_at, session.last_seen_at,
+        LEAST(session.idle_expires_at, session.absolute_expires_at) AS expires_at
+      FROM admin_session AS session
+      JOIN admin_webauthn_credential AS credential ON credential.id = session.credential_id
+      WHERE session.user_id = $1 AND session.revoked_at IS NULL
+        AND session.idle_expires_at > clock_timestamp()
+        AND session.absolute_expires_at > clock_timestamp()
+        AND credential.revoked_at IS NULL
+      ORDER BY session.last_seen_at DESC, session.id DESC
+    `, [userId])).rows;
+  }
+
+  async revokeSelectedSession(
+    userId: string,
+    targetSessionId: string,
+    currentSessionId: string,
+  ): Promise<boolean> {
+    return this.database.transaction(async (client) => {
+      const result = await client.query(`
+        UPDATE admin_session SET revoked_at = clock_timestamp()
+        WHERE id = $1 AND user_id = $2 AND id <> $3 AND revoked_at IS NULL
+          AND idle_expires_at > clock_timestamp() AND absolute_expires_at > clock_timestamp()
+      `, [targetSessionId, userId, currentSessionId]);
+      if (result.rowCount !== 1) return false;
+      await this.insertEvent(client, userId, null, targetSessionId, 'session_revoked');
+      return true;
+    });
+  }
+
+  async renameCredential(
+    userId: string,
+    credentialId: string,
+    currentSessionId: string,
+    name: string,
+  ): Promise<boolean> {
+    return this.database.transaction(async (client) => {
+      const result = await client.query(`
+        UPDATE admin_webauthn_credential SET name = $3
+        WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+      `, [credentialId, userId, name]);
+      if (result.rowCount !== 1) return false;
+      await this.insertEvent(client, userId, credentialId, currentSessionId, 'credential_renamed');
+      return true;
+    });
+  }
+
+  async authEvents(userId: string, limit: number, cursor?: KeysetCursor): Promise<AuthEventRow[]> {
+    return (await this.database.query<AuthEventRow>(`
+      SELECT id, event_type, credential_id, session_id, created_at
+      FROM admin_auth_event
+      WHERE user_id = $1
+        AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2
+    `, [userId, limit, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
   async revokeCredential(

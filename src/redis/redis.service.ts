@@ -1,7 +1,8 @@
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { createClient } from 'redis';
 import { ConfigService } from '../config/config.service';
+import { OperationalMetricsService } from '../operations/operational-metrics.service';
 
 type RedisClient = ReturnType<typeof createClient>;
 
@@ -11,7 +12,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly client: RedisClient;
   private readonly subscribers = new Set<RedisClient>();
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly metrics?: OperationalMetricsService,
+  ) {
     const protocol = config.redis.tls ? 'rediss' : 'redis';
     this.client = createClient({
       url: `${protocol}://${config.redis.address}/${config.redis.db}`,
@@ -79,12 +83,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private async withTimeout<T>(work: Promise<T>): Promise<T> {
     let timeout: NodeJS.Timeout | undefined;
     try {
-      return await Promise.race([
+      const operation = () => Promise.race([
         work,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error('Redis command timed out')), this.config.redis.commandTimeoutMillis);
         }),
       ]);
+      return await (this.metrics?.measure('redis', operation) ?? operation());
     } finally {
       if (timeout) clearTimeout(timeout);
     }

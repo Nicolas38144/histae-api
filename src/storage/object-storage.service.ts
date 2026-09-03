@@ -1,7 +1,8 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, Optional } from '@nestjs/common';
 import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '../config/config.service';
+import { OperationalMetricsService } from '../operations/operational-metrics.service';
 
 const OBJECT_STORAGE_REQUEST_TIMEOUT_MILLIS = 10_000;
 
@@ -24,7 +25,10 @@ export class ObjectStorageService implements OnModuleDestroy {
   private readonly client: S3Client;
   private readonly bucket: string;
 
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService,
+    @Optional() private readonly metrics?: OperationalMetricsService,
+  ) {
     this.bucket = config.objectStorage.bucket;
     this.client = new S3Client({
       endpoint: config.objectStorage.endpoint,
@@ -77,7 +81,7 @@ export class ObjectStorageService implements OnModuleDestroy {
 
   private async execute<T>(operation: Promise<T>): Promise<T> {
     try {
-      return await operation;
+      return await (this.metrics?.measure('object_storage', () => operation) ?? operation);
     } catch (error) {
       throw new ObjectStorageUnavailableError(error);
     }

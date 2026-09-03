@@ -24,7 +24,7 @@ Avant chaque nouvelle version juridique :
 - documenter l’hébergeur objet de production, sa région, les transferts éventuels, le chiffrement, les habilitations, les sauvegardes, la purge des photos remplacées ou supprimées, la rétention de 24 h des empreintes d’idempotence et le traitement des dead letters `photo.delete`, y compris les habilitations et motifs de relance `admin_reconcile_photo` ;
 - faire approuver la gouvernance des comptes administratifs : deux passkeys distinctes par personne, contrôle de
   l’accès à la commande d’enrôlement, procédure de récupération hors bande, révocation lors d’un départ et revue
-  des événements de connexion/révocation conservés un an ;
+  des événements de connexion, renommage et révocation conservés un an ;
 - intégrer `sharp`/libvips, `heic-decode`/libheif-js, le SDK AWS v3, OpenCV, FastAPI et le modèle ONNX de modération
   à l’inventaire des composants ; vérifier leurs licences, provenance, intégrité et mises à jour de sécurité avant livraison ;
 - enregistrer l’approbation dans un système durable (ticket signé, procès-verbal ou registre DPO) et placer son identifiant dans `LEGAL_REVIEW_REFERENCE` ;

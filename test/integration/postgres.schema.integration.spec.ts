@@ -60,6 +60,7 @@ describe('PostgreSQL schema contract', () => {
       'profile_question', 'user_profile_answer', 'content_moderation_case',
       'admin_webauthn_bootstrap', 'admin_webauthn_credential',
       'admin_webauthn_challenge', 'admin_session', 'admin_auth_event',
+      'outbox_operator_action', 'maintenance_job_status',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -697,6 +698,45 @@ describe('PostgreSQL schema contract', () => {
     }
   });
 
+  it('recovers and safely discards dead letters with transactional operator audits', async () => {
+    const aggregateId = randomUUID();
+    const adminId = randomUUID();
+    const otherId = randomUUID();
+    const workerId = randomUUID();
+    const claimAt = new Date(Date.now() + 1_000);
+    const outbox = new OutboxRepository(databaseFor(pool) as never);
+    await insertAccounts(pool, adminId, otherId);
+    await pool.query("UPDATE user_account SET role = 'admin' WHERE user_id = $1", [adminId]);
+
+    try {
+      await outbox.enqueue(databaseFor(pool) as never, { eventType: 'photo.delete', aggregateId });
+      let claimed = await outbox.claimBatch(workerId, claimAt, new Date(0), 1);
+      await outbox.reschedule(claimed[0]!.id, workerId, claimAt, 'handler_failed', 1);
+
+      await expect(outbox.retryDeadLetter(claimed[0]!.id, {
+        userId: adminId, role: 'admin',
+      }, 'Storage restored')).resolves.toBe('updated');
+      claimed = await outbox.claimBatch(workerId, claimAt, new Date(0), 1);
+      await outbox.reschedule(claimed[0]!.id, workerId, claimAt, 'handler_failed', 1);
+      await expect(outbox.discardDeadLetter(claimed[0]!.id, {
+        userId: adminId, role: 'admin',
+      }, 'Aggregate already absent')).resolves.toBe('updated');
+
+      const event = await pool.query<{ status: string; resolution_reason: string; resolved_by: string }>(`
+        SELECT status, resolution_reason, resolved_by FROM outbox_event WHERE id = $1
+      `, [claimed[0]!.id]);
+      const actions = await pool.query<{ action: string }>(`
+        SELECT action FROM outbox_operator_action WHERE outbox_event_id = $1 ORDER BY created_at
+      `, [claimed[0]!.id]);
+      expect(event.rows[0]).toEqual({ status: 'discarded', resolution_reason: 'Aggregate already absent', resolved_by: adminId });
+      expect(actions.rows).toEqual([{ action: 'retry' }, { action: 'discard' }]);
+    } finally {
+      await pool.query('DELETE FROM outbox_operator_action WHERE administrator_id = $1', [adminId]);
+      await pool.query('DELETE FROM outbox_event WHERE aggregate_id = $1', [aggregateId]);
+      await deleteAccounts(pool, adminId, otherId);
+    }
+  });
+
   it('activates only provider-accepted OTPs and preserves an older code after delivery failure', async () => {
     const repository = new AuthRepository(databaseFor(pool) as never);
     const phoneHash = 'otp-test-' + randomUUID();
@@ -830,6 +870,7 @@ describe('PostgreSQL schema contract', () => {
         expired_admin_webauthn_bootstraps: expect.any(Number),
         expired_admin_sessions: expect.any(Number),
         expired_admin_auth_events: expect.any(Number),
+        expired_outbox_operator_actions: expect.any(Number),
       });
     } finally {
       await client.query('ROLLBACK');

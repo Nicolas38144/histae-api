@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import type { PrivacyMaintenanceResult } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
+import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 
 const DAY = 24 * 60 * 60 * 1_000;
 const BATCH_SIZE = 1_000;
@@ -13,7 +14,11 @@ export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy 
   private readonly logger = new Logger(PrivacyMaintenanceService.name);
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly privacy: PrivacyRepository, private readonly config: ConfigService) {}
+  constructor(
+    private readonly privacy: PrivacyRepository,
+    private readonly config: ConfigService,
+    private readonly tracker: MaintenanceTrackerService,
+  ) {}
 
   onModuleInit(): void {
     if (this.config.maintenanceMode !== 'api') return;
@@ -27,6 +32,14 @@ export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy 
   }
 
   async runOnce(): Promise<PrivacyMaintenanceResult | undefined> {
+    return this.tracker.track(
+      'privacy',
+      () => this.performMaintenance(),
+      (result) => result ? Object.values(result).reduce((total, count) => total + count, 0) : 0,
+    );
+  }
+
+  private async performMaintenance(): Promise<PrivacyMaintenanceResult | undefined> {
     let totals: PrivacyMaintenanceResult | undefined;
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch += 1) {
       const result = await this.privacy.runMaintenanceAsLeader(new Date(), BATCH_SIZE);

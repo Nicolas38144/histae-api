@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from '../api-error';
 import type { ConfigService } from '../../config/config.service';
 import type { RateLimitService } from '../../ratelimit/rate-limit.service';
+import type { OperationalMetricsService } from '../../operations/operational-metrics.service';
 import { requestPath } from './request-path';
 
 type HttpRuntimeConfig = Pick<ConfigService, 'env' | 'rateLimit'>;
@@ -13,6 +14,7 @@ export function registerHttpLifecycle(
   fastify: FastifyInstance,
   limits: RateLimitService,
   config: HttpRuntimeConfig,
+  metrics?: OperationalMetricsService,
   logger = new Logger('HTTP'),
 ): void {
   const requestStarts = new WeakMap<FastifyRequest, bigint>();
@@ -38,6 +40,12 @@ export function registerHttpLifecycle(
   fastify.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStarts.get(request);
     const durationMs = startedAt ? Number(process.hrtime.bigint() - startedAt) / 1_000_000 : 0;
+    metrics?.recordHttp(
+      request.method,
+      request.routeOptions.url ?? '<unmatched>',
+      reply.statusCode,
+      durationMs,
+    );
     const details = `${request.method} ${requestPath(request.url)} ${reply.statusCode} request_id=${request.id} duration_ms=${durationMs.toFixed(1)}`;
     if (reply.statusCode >= 500) logger.error(details);
     else if (reply.statusCode >= 400) logger.warn(details);

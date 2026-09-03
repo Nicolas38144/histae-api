@@ -10,6 +10,8 @@ import {
   type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { ApiError, apiError } from '../common/api-error';
+import { normalizePrintableText } from '../common/normalize-printable-text';
+import { cursorPage, decodeCursor, type CursorPage } from '../common/pagination';
 import { ConfigService } from '../config/config.service';
 import {
   AdminAuthRepository,
@@ -19,8 +21,10 @@ import {
   type NewSession,
 } from './admin-auth.repository';
 import type {
+  AdminAuthEvent,
   AdminAuthSession,
   AdminCredential,
+  AdminSessionSummary,
   AuthenticationOptions,
   RegistrationOptions,
   SessionCreation,
@@ -153,6 +157,54 @@ export class AdminAuthService {
       last_used_at: credential.last_used_at?.toISOString() ?? null,
       current: credential.id === currentCredentialId,
     }));
+  }
+
+  async sessions(userId: string, currentSessionId: string): Promise<AdminSessionSummary[]> {
+    return (await this.repository.activeSessions(userId)).map((session) => ({
+      id: session.id,
+      credential_id: session.credential_id,
+      credential_name: session.credential_name,
+      authenticated_at: session.authenticated_at.toISOString(),
+      last_seen_at: session.last_seen_at.toISOString(),
+      expires_at: session.expires_at.toISOString(),
+      current: session.id === currentSessionId,
+    }));
+  }
+
+  async revokeSelectedSession(userId: string, targetSessionId: string, currentSessionId: string): Promise<void> {
+    if (targetSessionId === currentSessionId) {
+      throw apiError(409, 'current_admin_session', 'The current administrator session cannot be revoked here.');
+    }
+    if (!await this.repository.revokeSelectedSession(userId, targetSessionId, currentSessionId)) {
+      throw apiError(404, 'admin_session_not_found', 'The administrator session was not found.');
+    }
+  }
+
+  async renameCredential(
+    userId: string,
+    credentialId: string,
+    currentSessionId: string,
+    inputName: string,
+  ): Promise<void> {
+    if (!await this.repository.renameCredential(userId, credentialId, currentSessionId, normalizedName(inputName))) {
+      throw apiError(404, 'admin_credential_not_found', 'The administrator credential was not found.');
+    }
+  }
+
+  async authEvents(userId: string, limit: number, rawCursor?: string): Promise<CursorPage<AdminAuthEvent>> {
+    if (limit < 1 || limit > 100) invalidAuthHistoryRequest();
+    const rows = await this.repository.authEvents(userId, limit + 1, decodeCursor(rawCursor));
+    const page = cursorPage(rows, limit, (row) => row.created_at);
+    return {
+      items: page.items.map((event) => ({
+        id: event.id,
+        event_type: event.event_type,
+        credential_id: event.credential_id,
+        session_id: event.session_id,
+        created_at: event.created_at.toISOString(),
+      })),
+      next_cursor: page.next_cursor,
+    };
   }
 
   async revokeCredential(
@@ -304,9 +356,8 @@ function parseBootstrapToken(token: string): { id: string; secret: string } {
 }
 
 function normalizedName(value: string): string {
-  const normalized = value.normalize('NFKC').trim();
-  if (!normalized || normalized.length > 100 || Buffer.byteLength(normalized) > 200
-    || hasControlCharacters(normalized)) {
+  const normalized = normalizePrintableText(value, { minLength: 1, maxLength: 100, maxBytes: 200 });
+  if (!normalized) {
     throw apiError(400, 'invalid_admin_credential_name', 'The administrator credential name is invalid.');
   }
   return normalized;
@@ -329,13 +380,6 @@ function uuidBytes(uuid: string): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(new ArrayBuffer(16));
   result.set(Buffer.from(uuid.replaceAll('-', ''), 'hex'));
   return result;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.charCodeAt(0);
-    return code <= 31 || code === 127;
-  });
 }
 
 function sessionView(row: ActiveSessionRow): AdminAuthSession {
@@ -365,4 +409,8 @@ function invalidRegistration(): never {
 
 function invalidAuthentication(): never {
   throw apiError(401, 'webauthn_authentication_failed', 'The WebAuthn authentication could not be verified.');
+}
+
+function invalidAuthHistoryRequest(): never {
+  throw apiError(400, 'invalid_admin_auth_request', 'The administrator authentication request is invalid.');
 }

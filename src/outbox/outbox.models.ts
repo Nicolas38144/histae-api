@@ -4,7 +4,8 @@ export type OutboxStatus =
   | 'pending'
   | 'processing'
   | 'completed'
-  | 'dead_letter';
+  | 'dead_letter'
+  | 'discarded';
 
 export type OutboxEvent = {
   id: string;
@@ -29,4 +30,30 @@ export type OutboxWorkerResult = {
   retried: number;
   deadLettered: number;
   purged: number;
+};
+
+export type DeadLetterRow = {
+  id: string;
+  event_type: OutboxEventType;
+  attempts: number;
+  last_error_code: string | null;
+  created_at: Date;
+  dead_lettered_at: Date;
+};
+
+export type DeadLetter = Omit<DeadLetterRow, 'id'> & { event_id: string };
+
+export type OutboxOperator = {
+  userId: string;
+  role: 'admin' | 'superadmin';
+};
+
+export type OutboxOperatorResult = 'updated' | 'not_found' | 'not_dead_letter' | 'discard_not_allowed';
+
+export type OutboxStatusSnapshot = {
+  pending: number;
+  processing: number;
+  dead_letter: number;
+  discarded: number;
+  oldest_pending_at: Date | null;
 };

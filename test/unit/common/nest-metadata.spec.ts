@@ -65,12 +65,19 @@ import { ModerationController } from '../../../src/moderation/moderation.control
 import { ModerationRepository } from '../../../src/moderation/moderation.repository';
 import { ModerationService } from '../../../src/moderation/moderation.service';
 import { PhotoModerationService } from '../../../src/moderation/photo-moderation.service';
+import { OutboxAdminController } from '../../../src/outbox/outbox-admin.controller';
+import { OutboxAdminService } from '../../../src/outbox/outbox-admin.service';
+import { MaintenanceStatusRepository } from '../../../src/operations/maintenance-status.repository';
+import { MaintenanceTrackerService } from '../../../src/operations/maintenance-tracker.service';
+import { OperationalStatusService } from '../../../src/operations/operational-status.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
   PhotosRepository, PhotosService, PhotosMaintenanceService,
   OutboxRepository, OutboxWorkerService,
+  OutboxAdminController, OutboxAdminService,
+  MaintenanceStatusRepository, MaintenanceTrackerService, OperationalStatusService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,

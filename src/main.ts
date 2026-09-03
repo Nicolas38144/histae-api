@@ -10,6 +10,7 @@ import { registerHttpLifecycle } from './common/http/http-lifecycle';
 import { applicationConfig } from './config/config.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 import { MAX_PHOTO_UPLOAD_BYTES } from './photos/photo-processor.service';
+import { OperationalMetricsService } from './operations/operational-metrics.service';
 
 async function bootstrap(): Promise<void> {
   // Build config before Fastify so trust-proxy and the 1 MiB body cap apply to every route.
@@ -36,9 +37,10 @@ async function bootstrap(): Promise<void> {
     });
   }
   const limits = app.get(RateLimitService);
+  const metrics = app.get(OperationalMetricsService);
   const logger = new Logger('HTTP');
   const fastify = app.getHttpAdapter().getInstance();
-  registerHttpLifecycle(fastify, limits, config, logger);
+  registerHttpLifecycle(fastify, limits, config, metrics, logger);
   await app.listen(config.port, '0.0.0.0');
   logger.log(`Histae API listening on port ${config.port} (${config.env})`);
 }

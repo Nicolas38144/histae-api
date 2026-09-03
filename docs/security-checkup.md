@@ -72,6 +72,12 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - La file admin ne contient aucun texte, objet ou lien. Le détail exige un motif audité avant signature éventuelle,
   une version optimiste protège les décisions concurrentes et la revue photo exige une checklist complète. Le rejet
   d’une photo rend l’objet invisible et écrit sa suppression dans l’outbox au sein de la transaction de revue.
+- Les métriques HTTP et dépendances restent agrégées en mémoire avec une cardinalité bornée, sans identifiant
+  utilisateur. PostgreSQL conserve uniquement le dernier état normalisé des maintenances afin de détecter un job
+  absent, bloqué ou en retard.
+- Les dead letters sont listées sans payload, agrégat ni clé objet. Relance et abandon sont verrouillés et audités
+  transactionnellement après authentification récente ; une suppression photo encore référencée ne peut pas être
+  abandonnée. Les passkeys peuvent être renommées et les sessions gérées individuellement sans exposer de secret.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -86,10 +92,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 4. **Stockages de production** : choisir une cible S3 compatible durable, privée, versionnée ou sauvegardée,
    supervisée et testée en restauration. Déployer PostgreSQL, Redis et ScyllaDB avec TLS, authentification,
    redondance et sauvegardes vérifiées.
-5. **Observabilité** : les états `user_photo`, traitements bloqués, suppressions sans événement actif et dead letters
-   sont désormais agrégés pour le dashboard. Ajouter la collecte et les alertes sur les `401/403/429/5xx`, les
-   échecs OTP/Stripe/S3, les accès administratifs, la saturation des pools et les retards de maintenance, sans
-   journaliser de données sensibles.
+5. **Observabilité** : l’API agrège désormais `401/403/429/5xx`, latences, dépendances, pool PostgreSQL, outbox et
+   retards de maintenance. Il reste à raccorder ce snapshot interne au système d’alertes retenu en production et
+   à définir seuils, astreinte et runbooks, sans journaliser de données sensibles.
 6. **Validation offensive** : faire réaliser un pentest authentifié couvrant IDOR/BOLA, élévation de privilèges,
    concurrence, abuse cases OTP, webhooks Stripe, multipart/HEIC et URLs signées. Ajouter SAST, secret scanning et
    audit de dépendances récurrent dans la chaîne de livraison lorsque celle-ci sera définie.
@@ -112,8 +117,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 49 suites, 299 cas réussis ;
-- tests e2e Fastify : 12 suites, 72 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 46 cas réussis ;
-- migrations PostgreSQL : `007_native_admin_webauthn` ajoutée au catalogue, vérifiée dans un schéma temporaire vide et appliquée sans destruction sur `histae-dev`.
+- tests unitaires : 53 suites, 320 cas réussis ;
+- tests e2e Fastify : 13 suites, 76 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 47 cas réussis ;
+- migrations PostgreSQL : `008_internal_operations` ajoutée au catalogue, vérifiée dans un schéma temporaire vide et appliquée sans destruction sur `histae-dev`.
 - état Docker local : SeaweedFS, Redis, ScyllaDB et le service de modération photo déclarés `healthy`; une analyse WebP authentifiée réelle a renvoyé des scores valides.
