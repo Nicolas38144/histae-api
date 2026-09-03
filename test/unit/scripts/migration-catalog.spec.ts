@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(8);
+    expect(migrations).toHaveLength(9);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -59,6 +59,12 @@ describe('PostgreSQL migration catalog', () => {
     expect(internalOperations.sql).toContain('CREATE TABLE maintenance_job_status');
     expect(internalOperations.sql).toContain('CREATE TABLE outbox_operator_action');
     expect(internalOperations.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const sqlPerformance = await loadMigration(migrations[8]);
+    expect(sqlPerformance.sql).toContain('-- source: 009_sql_performance_indexes.sql');
+    expect(sqlPerformance.sql).toContain('idx_match_init_user1_activity');
+    expect(sqlPerformance.sql).toContain('idx_user_presence_updated');
+    expect(sqlPerformance.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

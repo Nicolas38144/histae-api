@@ -160,6 +160,10 @@ statuts sensibles, les résultats des appels aux dépendances configurées, le p
 dernières exécutions de maintenance. Les métriques volatiles repartent à zéro au redémarrage ; les exécutions de
 maintenance et l’état de l’outbox sont conservés dans PostgreSQL pour signaler un worker manquant ou en retard.
 
+Les chemins SQL critiques (feed, matchs, recherche admin, exports et rétention) sont alignés avec des index dédiés
+par la migration `009_sql_performance_indexes`. La méthode, les choix d’index et les plans locaux mesurés sont
+documentés dans [`docs/sql-performance.md`](docs/sql-performance.md).
+
 ## Commandes principales
 
 | Commande | Description |
@@ -167,7 +171,7 @@ maintenance et l’état de l’outbox sont conservés dans PostgreSQL pour sign
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération, WebAuthn administrateur et le suivi opérationnel. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération, WebAuthn administrateur, le suivi opérationnel et les index de performance SQL. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run admin:webauthn:bootstrap -- <uuid>` | Crée pour un administrateur actif un jeton à usage unique permettant d’enregistrer sa première passkey. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |

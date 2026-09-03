@@ -129,11 +129,20 @@ export class OutboxRepository {
     const result = await this.database.query(`
       DELETE FROM outbox_event
       WHERE id IN (
-        SELECT id
-        FROM outbox_event
-        WHERE (status = 'completed' AND processed_at <= $1)
-           OR (status = 'discarded' AND resolved_at <= $1)
-        ORDER BY COALESCE(processed_at, resolved_at), id
+        SELECT id FROM (
+          (SELECT id, processed_at AS cleanup_at
+          FROM outbox_event
+          WHERE status = 'completed' AND processed_at <= $1
+          ORDER BY processed_at, id
+          LIMIT $2)
+          UNION ALL
+          (SELECT id, resolved_at AS cleanup_at
+          FROM outbox_event
+          WHERE status = 'discarded' AND resolved_at <= $1
+          ORDER BY resolved_at, id
+          LIMIT $2)
+        ) AS candidates
+        ORDER BY cleanup_at, id
         LIMIT $2
       )
     `, [before, limit]);

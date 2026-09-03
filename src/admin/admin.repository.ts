@@ -36,6 +36,7 @@ export class AdminRepository {
     termsVersion: string,
     privacyVersion: string,
   ): Promise<AdminUserRow[]> {
+    const searchedUserId = uuidSearch(search) ? search : null;
     return (await this.database.query<AdminUserRow>(`
       SELECT account.user_id AS id, account.role, account.is_banned, account.banned_at, account.created_at,
         profile.firstname, profile.birthdate, profile.sex, NULL::text AS photo,
@@ -62,11 +63,23 @@ export class AdminRepository {
       WHERE account.deleted_at IS NULL
         AND ($1::text IS NULL OR ($1 = 'banned' AND account.is_banned) OR ($1 = 'active' AND NOT account.is_banned))
         AND ($2::text IS NULL OR account.role = $2)
-        AND ($3 = '' OR profile.firstname ILIKE '%' || $3 || '%' OR account.user_id::text = $3)
+        AND ($3 = '' OR profile.firstname ILIKE '%' || $3 || '%'
+          OR account.user_id = $10::uuid)
         AND ($6::timestamptz IS NULL OR (account.created_at, account.user_id) < ($6::timestamptz, $7::uuid))
       ORDER BY account.created_at DESC, account.user_id DESC
       LIMIT $4 OFFSET $5
-    `, [status ?? null, role ?? null, search, limit, offset, cursor?.at ?? null, cursor?.id ?? null, termsVersion, privacyVersion])).rows;
+    `, [
+      status ?? null,
+      role ?? null,
+      search,
+      limit,
+      offset,
+      cursor?.at ?? null,
+      cursor?.id ?? null,
+      termsVersion,
+      privacyVersion,
+      searchedUserId,
+    ])).rows;
   }
 
   async userDetail(
@@ -400,13 +413,18 @@ export class AdminRepository {
       deletion_without_active_event: 0,
     };
     const subscriptions = (await this.database.query<{ plan: string; users: number }>(`
-      SELECT plan.code AS plan,
-        count(account.user_id) FILTER (WHERE COALESCE(subscription.plan, 'free') = plan.code)::int AS users
+      WITH account_plans AS MATERIALIZED (
+        SELECT COALESCE(subscription.plan, 'free') AS plan,
+          count(*)::int AS users
+        FROM user_account AS account
+        LEFT JOIN user_subscription AS subscription ON subscription.user_id = account.user_id
+        WHERE account.deleted_at IS NULL
+        GROUP BY COALESCE(subscription.plan, 'free')
+      )
+      SELECT plan.code AS plan, COALESCE(account_plans.users, 0)::int AS users
       FROM subscription_plan AS plan
-      CROSS JOIN user_account AS account
-      LEFT JOIN user_subscription AS subscription ON subscription.user_id = account.user_id
-      WHERE account.deleted_at IS NULL
-      GROUP BY plan.code ORDER BY plan.code
+      LEFT JOIN account_plans ON account_plans.plan = plan.code
+      ORDER BY plan.code
     `)).rows;
     const revenue = await this.revenue(revenuePeriod);
     return { users, moderation, matches, messages, photos, subscriptions, revenue };
@@ -459,4 +477,8 @@ export class AdminRepository {
 function dateOnly(value: Date | string | null): string | null {
   if (value === null) return null;
   return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
+function uuidSearch(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

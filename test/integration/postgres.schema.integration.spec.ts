@@ -304,6 +304,16 @@ describe('PostgreSQL schema contract', () => {
       'uq_admin_webauthn_bootstrap_active_user', 'idx_admin_webauthn_bootstrap_expiry',
       'idx_admin_webauthn_credential_user', 'idx_admin_webauthn_challenge_expiry',
       'idx_admin_session_user', 'idx_admin_session_expiry', 'idx_admin_auth_event_user',
+      'idx_user_account_active_created', 'idx_user_profile_discovery',
+      'idx_user_profile_firstname_trgm', 'idx_user_presence_updated',
+      'idx_user_photo_reconciliation', 'idx_content_moderation_updated',
+      'idx_content_moderation_type_updated', 'idx_match_init_user1_activity',
+      'idx_match_init_user2_activity', 'idx_chat_message_sender_created',
+      'idx_user_report_reporter_created', 'idx_user_block_blocker_created',
+      'idx_consent_withdrawn', 'idx_dsr_requested', 'idx_dsr_completed',
+      'idx_admin_auth_event_created', 'idx_admin_webauthn_challenge_consumed',
+      'idx_admin_webauthn_bootstrap_consumed', 'idx_outbox_operator_action_created',
+      'idx_user_subscription_plan_updated', 'idx_admin_session_revoked',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -1592,7 +1602,8 @@ describe('PostgreSQL schema contract', () => {
         last_message_content: 'latest message',
       }));
 
-      await pool.query('UPDATE match_state SET revealed = true WHERE match_id = $1', [matchId]);
+      await expect(repository.recordReveal(matchId, viewerId)).resolves.toEqual({ ok: true, value: false });
+      await expect(repository.recordReveal(matchId, otherId)).resolves.toEqual({ ok: true, value: true });
       const stillModerated = await repository.listDetailedForUser(viewerId, 20, 0);
       expect(stillModerated[0]).toEqual(expect.objectContaining({
         other_bio: null,

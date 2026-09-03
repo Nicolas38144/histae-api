@@ -262,7 +262,9 @@ relance opérateur. `005_profile_questions` ajoute le catalogue administrable et
 d’audit associées. `007_native_admin_webauthn` ajoute les enrôlements temporaires, credentials publics, challenges,
 sessions opaques et événements d’authentification admin. Une base neuve applique donc la baseline puis ces migrations
 dans l’ordre. `008_internal_operations` ajoute la résolution/audit outbox, l’état de maintenance et enrichit
-l’historique WebAuthn.
+l’historique WebAuthn. `009_sql_performance_indexes` aligne ensuite les index sur le feed, la pagination des matchs,
+les recherches administratives, les exports et les purges bornées. Les réécritures et plans mesurés sont détaillés
+dans `docs/sql-performance.md`.
 
 La compatibilité est sans perte :
 

@@ -45,6 +45,9 @@ describe('PrivacyRepository maintenance', () => {
     expect(query.mock.calls[5][0]).toContain("INTERVAL '5 years'");
     expect(query.mock.calls[7][0]).toContain("INTERVAL '1 year'");
     expect(query.mock.calls[13][0]).toContain("INTERVAL '24 hours'");
+    expect(query.mock.calls[11][0]).toContain('UNION ALL');
+    expect(query.mock.calls[12][0]).toContain('UNION ALL');
+    expect(query.mock.calls[13][0]).toContain('UNION ALL');
     expect(query.mock.calls[14][0]).toContain("INTERVAL '1 year'");
     expect(query.mock.calls[15][0]).toContain("INTERVAL '1 year'");
   });

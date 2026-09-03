@@ -76,6 +76,20 @@ describe('OutboxRepository', () => {
     expect(database.query).not.toHaveBeenCalled();
   });
 
+  it('bounds completed and discarded cleanup branches before merging them', async () => {
+    const database = { query: jest.fn().mockResolvedValue({ rowCount: 7 }) };
+    const repository = new OutboxRepository(database as never);
+    const before = new Date('2026-09-02T10:00:00.000Z');
+
+    await expect(repository.purgeCompleted(before, 100)).resolves.toBe(7);
+    const [sql, values] = database.query.mock.calls[0]!;
+    expect(sql).toContain("status = 'completed'");
+    expect(sql).toContain("status = 'discarded'");
+    expect(sql).toContain('UNION ALL');
+    expect(sql.match(/LIMIT \$2/g)).toHaveLength(3);
+    expect(values).toEqual([before, 100]);
+  });
+
   it.each([
     ['pending', 'pending'],
     ['dead_letter', 'dead_letter'],

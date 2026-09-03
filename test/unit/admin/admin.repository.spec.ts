@@ -1,5 +1,29 @@
 import { AdminRepository } from '../../../src/admin/admin.repository';
 
+describe('AdminRepository SQL access path', () => {
+  it('binds an exact UUID search without casting the indexed account column', async () => {
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const database = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const repository = new AdminRepository(database as never, {} as never);
+
+    await repository.listUsers(
+      undefined,
+      undefined,
+      userId,
+      21,
+      0,
+      undefined,
+      'terms-v1',
+      'privacy-v1',
+    );
+
+    const [sql, values] = database.query.mock.calls[0]!;
+    expect(sql).toContain('account.user_id = $10::uuid');
+    expect(sql).not.toContain('account.user_id::text');
+    expect(values[9]).toBe(userId);
+  });
+});
+
 describe('AdminRepository account safety', () => {
   it('prevents an administrator from banning another administrator', async () => {
     const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ role: 'admin' }] }) };

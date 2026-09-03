@@ -83,7 +83,7 @@ Respecter autant que possible la séparation suivante :
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les migrations incrémentales `002_user_photo_lifecycle` à `008_internal_operations` ajoutent le cycle photo, l’idempotence/outbox, la réconciliation, les questions, la modération, WebAuthn admin puis le suivi des maintenances et la récupération auditée des dead letters. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle` à `009_sql_performance_indexes` ajoutent le cycle photo, l’idempotence/outbox, la réconciliation, les questions, la modération, WebAuthn admin, le suivi des maintenances/récupération auditée des dead letters puis les chemins d’index SQL. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -119,7 +119,7 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 3 septembre 2026, les migrations jusqu’à `008_internal_operations` sont cataloguées ; consulter `test.md` pour l’état exact de leur application et les validations réelles. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, les décisions opérateur transactionnelles/auditées, la suppression en cascade des réponses, la revue photo et l’invalidation d’une session quand sa passkey est révoquée.
+Au 3 septembre 2026, les migrations jusqu’à `009_sql_performance_indexes` sont cataloguées ; consulter `test.md` pour l’état exact de leur application et les validations réelles. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, les décisions opérateur transactionnelles/auditées, la suppression en cascade des réponses, la revue photo et l’invalidation d’une session quand sa passkey est révoquée. `docs/sql-performance.md` décrit l’audit des requêtes et les plans mesurés.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 

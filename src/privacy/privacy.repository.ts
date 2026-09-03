@@ -236,20 +236,45 @@ export class PrivacyRepository {
       SELECT id FROM account_deletion_token WHERE expires_at <= $1::timestamptz ORDER BY expires_at LIMIT $2
     )`, [now, batchSize]);
     const expiredAdminChallenges = await database.query(`DELETE FROM admin_webauthn_challenge WHERE id IN (
-      SELECT id FROM admin_webauthn_challenge
-      WHERE consumed_at IS NOT NULL OR expires_at <= $1::timestamptz
-      ORDER BY expires_at LIMIT $2
+      SELECT id FROM (
+        (SELECT id, expires_at FROM admin_webauthn_challenge
+        WHERE consumed_at IS NOT NULL
+        ORDER BY expires_at, id LIMIT $2)
+        UNION ALL
+        (SELECT id, expires_at FROM admin_webauthn_challenge
+        WHERE consumed_at IS NULL AND expires_at <= $1::timestamptz
+        ORDER BY expires_at, id LIMIT $2)
+      ) AS candidates
+      ORDER BY expires_at, id LIMIT $2
     )`, [now, batchSize]);
     const expiredAdminBootstraps = await database.query(`DELETE FROM admin_webauthn_bootstrap WHERE id IN (
-      SELECT id FROM admin_webauthn_bootstrap
-      WHERE consumed_at IS NOT NULL OR expires_at <= $1::timestamptz
-      ORDER BY expires_at LIMIT $2
+      SELECT id FROM (
+        (SELECT id, expires_at FROM admin_webauthn_bootstrap
+        WHERE consumed_at IS NOT NULL
+        ORDER BY expires_at, id LIMIT $2)
+        UNION ALL
+        (SELECT id, expires_at FROM admin_webauthn_bootstrap
+        WHERE consumed_at IS NULL AND expires_at <= $1::timestamptz
+        ORDER BY expires_at, id LIMIT $2)
+      ) AS candidates
+      ORDER BY expires_at, id LIMIT $2
     )`, [now, batchSize]);
     const expiredAdminSessions = await database.query(`DELETE FROM admin_session WHERE id IN (
-      SELECT id FROM admin_session
-      WHERE absolute_expires_at <= $1::timestamptz
-        OR (revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - INTERVAL '24 hours')
-      ORDER BY absolute_expires_at LIMIT $2
+      SELECT id FROM (
+        (SELECT id, absolute_expires_at AS cleanup_at
+        FROM admin_session
+        WHERE absolute_expires_at <= $1::timestamptz
+        ORDER BY absolute_expires_at, id
+        LIMIT $2)
+        UNION ALL
+        (SELECT id, revoked_at AS cleanup_at
+        FROM admin_session
+        WHERE revoked_at <= $1::timestamptz - INTERVAL '24 hours'
+          AND absolute_expires_at > $1::timestamptz
+        ORDER BY revoked_at, id
+        LIMIT $2)
+      ) AS candidates
+      ORDER BY cleanup_at, id LIMIT $2
     )`, [now, batchSize]);
     const expiredAdminAuthEvents = await database.query(`DELETE FROM admin_auth_event WHERE id IN (
       SELECT id FROM admin_auth_event

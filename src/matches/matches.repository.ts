@@ -20,6 +20,52 @@ import type {
 
 const MAINTENANCE_LOCK = 37_142_581;
 const MATCH_PURGE_MS = 30 * 24 * 60 * 60 * 1_000;
+const MATCH_PAGE_CTE = `
+  page AS MATERIALIZED (
+    SELECT participant_matches.*
+    FROM (
+      (SELECT match_record.id, match_record.user1_id, match_record.user2_id,
+        match_record.status, match_record.expires_at, match_record.purge_after,
+        match_record.continuation_initiator_id, match_record.created_at,
+        match_record.last_message_at, match_record.user2_id AS other_user_id,
+        COALESCE(match_record.last_message_at, match_record.created_at) AS activity_at
+      FROM match_init AS match_record
+      WHERE match_record.user1_id = $1 AND match_record.status <> 'ended'
+        AND NOT EXISTS (
+          SELECT 1 FROM user_block
+          WHERE (blocker_id = $1 AND blocked_id = match_record.user2_id)
+             OR (blocker_id = match_record.user2_id AND blocked_id = $1)
+        )
+        AND ($4::timestamptz IS NULL OR
+          (COALESCE(match_record.last_message_at, match_record.created_at), match_record.id)
+            < ($4::timestamptz, $5::uuid))
+      ORDER BY COALESCE(match_record.last_message_at, match_record.created_at) DESC,
+        match_record.id DESC
+      LIMIT ($2::integer + $3::integer))
+      UNION ALL
+      (SELECT match_record.id, match_record.user1_id, match_record.user2_id,
+        match_record.status, match_record.expires_at, match_record.purge_after,
+        match_record.continuation_initiator_id, match_record.created_at,
+        match_record.last_message_at, match_record.user1_id AS other_user_id,
+        COALESCE(match_record.last_message_at, match_record.created_at) AS activity_at
+      FROM match_init AS match_record
+      WHERE match_record.user2_id = $1 AND match_record.status <> 'ended'
+        AND NOT EXISTS (
+          SELECT 1 FROM user_block
+          WHERE (blocker_id = $1 AND blocked_id = match_record.user1_id)
+             OR (blocker_id = match_record.user1_id AND blocked_id = $1)
+        )
+        AND ($4::timestamptz IS NULL OR
+          (COALESCE(match_record.last_message_at, match_record.created_at), match_record.id)
+            < ($4::timestamptz, $5::uuid))
+      ORDER BY COALESCE(match_record.last_message_at, match_record.created_at) DESC,
+        match_record.id DESC
+      LIMIT ($2::integer + $3::integer))
+    ) AS participant_matches
+    ORDER BY activity_at DESC, id DESC
+    LIMIT $2 OFFSET $3
+  )
+`;
 
 @Injectable()
 export class MatchesRepository {
@@ -65,23 +111,17 @@ export class MatchesRepository {
 
   async listForUser(userId: string, limit: number, offset: number, cursor?: KeysetCursor): Promise<CursorMatchRow[]> {
     return (await this.database.query<CursorMatchRow>(`
+      WITH ${MATCH_PAGE_CTE}
       SELECT id, user1_id, user2_id, status, expires_at, purge_after, continuation_initiator_id, created_at, last_message_at,
-        to_char(COALESCE(last_message_at, created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
-      FROM match_init
-      WHERE (user1_id = $1 OR user2_id = $1)
-        AND status <> 'ended'
-        AND NOT EXISTS (
-          SELECT 1 FROM user_block
-          WHERE (blocker_id = $1 AND blocked_id IN (user1_id, user2_id))
-             OR (blocked_id = $1 AND blocker_id IN (user1_id, user2_id))
-        )
-        AND ($4::timestamptz IS NULL OR (COALESCE(last_message_at, created_at), id) < ($4::timestamptz, $5::uuid))
-      ORDER BY COALESCE(last_message_at, created_at) DESC, id DESC LIMIT $2 OFFSET $3
+        to_char(activity_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
+      FROM page
+      ORDER BY activity_at DESC, id DESC
     `, [userId, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
   async listDetailedForUser(userId: string, limit: number, offset: number, cursor?: KeysetCursor): Promise<UserMatchRow[]> {
     return (await this.database.query<UserMatchRow>(`
+      WITH ${MATCH_PAGE_CTE}
       SELECT match_record.id, match_record.user1_id, match_record.user2_id, match_record.status,
         match_record.expires_at, match_record.purge_after, match_record.continuation_initiator_id,
         match_record.created_at, match_record.last_message_at,
@@ -106,9 +146,9 @@ export class MatchesRepository {
         latest.read_at AS last_message_read_at,
         to_char(COALESCE(match_record.last_message_at, match_record.created_at) AT TIME ZONE 'UTC',
           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
-      FROM match_init AS match_record
+      FROM page AS match_record
       JOIN user_profile AS other_profile
-        ON other_profile.user_id = CASE WHEN match_record.user1_id = $1 THEN match_record.user2_id ELSE match_record.user1_id END
+        ON other_profile.user_id = match_record.other_user_id
       LEFT JOIN user_photo AS other_photo
         ON other_photo.user_id = other_profile.user_id AND other_photo.status = 'ready'
         AND EXISTS (
@@ -152,17 +192,7 @@ export class MatchesRepository {
         FROM chat_message AS message
         WHERE message.match_id = match_record.id AND message.sender_id <> $1 AND message.read_at IS NULL
       ) AS unread ON true
-      WHERE (match_record.user1_id = $1 OR match_record.user2_id = $1)
-        AND match_record.status <> 'ended'
-        AND NOT EXISTS (
-          SELECT 1 FROM user_block
-          WHERE (blocker_id = $1 AND blocked_id IN (match_record.user1_id, match_record.user2_id))
-             OR (blocked_id = $1 AND blocker_id IN (match_record.user1_id, match_record.user2_id))
-        )
-        AND ($4::timestamptz IS NULL OR
-          (COALESCE(match_record.last_message_at, match_record.created_at), match_record.id) < ($4::timestamptz, $5::uuid))
-      ORDER BY COALESCE(match_record.last_message_at, match_record.created_at) DESC, match_record.id DESC
-      LIMIT $2 OFFSET $3
+      ORDER BY match_record.activity_at DESC, match_record.id DESC
     `, [userId, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
@@ -189,16 +219,21 @@ export class MatchesRepository {
     return this.database.transaction(async (client) => {
       const available = await this.lockMessagingMatch(client, matchId, userId);
       if (!available.ok) return available;
-      const updated = await client.query(`
-        UPDATE match_state SET revealed = true
-        WHERE match_id = $1 AND user_id = $2
+      const result = await client.query<{ updated: boolean; revealed: boolean }>(`
+        WITH updated AS (
+          UPDATE match_state SET revealed = true
+          WHERE match_id = $1 AND user_id = $2
+          RETURNING match_id
+        )
+        SELECT EXISTS (SELECT 1 FROM updated) AS updated,
+          COALESCE((
+            SELECT count(*) = 2 AND bool_and(state.revealed OR state.user_id = $2)
+            FROM match_state AS state
+            WHERE state.match_id = (SELECT match_id FROM updated)
+          ), false) AS revealed
       `, [matchId, userId]);
-      if (updated.rowCount !== 1) return { ok: false, reason: 'not_found' };
-      const state = await client.query<{ revealed: boolean }>(`
-        SELECT count(*) = 2 AND bool_and(revealed) AS revealed
-        FROM match_state WHERE match_id = $1
-      `, [matchId]);
-      return { ok: true, value: state.rows[0]?.revealed === true };
+      if (!result.rows[0]?.updated) return { ok: false, reason: 'not_found' };
+      return { ok: true, value: result.rows[0].revealed };
     });
   }
 
@@ -282,18 +317,28 @@ export class MatchesRepository {
     return this.database.transaction(async (client) => {
       const available = await this.lockMessagingMatch(client, matchId, userId);
       if (!available.ok) return available;
-      const through = await client.query<{ id: string; created_at: Date }>(`
-        SELECT id, created_at FROM chat_message WHERE id = $1 AND match_id = $2
-      `, [messageId, matchId]);
-      const boundary = through.rows[0];
-      if (!boundary) return { ok: true, value: undefined };
-      const updated = await client.query(`
-        UPDATE chat_message SET read_at = COALESCE(read_at, clock_timestamp())
-        WHERE match_id = $1 AND sender_id <> $2 AND read_at IS NULL
-          AND (created_at, id) <= ($3::timestamptz, $4::uuid)
-      `, [matchId, userId, boundary.created_at, boundary.id]);
+      const result = await client.query<{ boundary_exists: boolean; updated_count: number }>(`
+        WITH boundary AS (
+          SELECT id, created_at
+          FROM chat_message
+          WHERE id = $2 AND match_id = $1
+        ), updated AS (
+          UPDATE chat_message AS message
+          SET read_at = clock_timestamp()
+          FROM boundary
+          WHERE message.match_id = $1 AND message.sender_id <> $3
+            AND message.read_at IS NULL
+            AND (message.created_at, message.id) <= (boundary.created_at, boundary.id)
+          RETURNING message.id
+        )
+        SELECT EXISTS (SELECT 1 FROM boundary) AS boundary_exists,
+          count(*)::integer AS updated_count
+        FROM updated
+      `, [matchId, messageId, userId]);
+      const update = result.rows[0]!;
+      if (!update.boundary_exists) return { ok: true, value: undefined };
       return { ok: true, value: {
-        updated_count: updated.rowCount ?? 0,
+        updated_count: update.updated_count,
         participant_ids: [available.value.user1_id, available.value.user2_id],
         read_through_message_id: messageId,
       } };
@@ -370,15 +415,17 @@ export class MatchesRepository {
 
   async recordContinuationConsent(matchId: string, userId: string): Promise<ContinuationResult> {
     return this.database.transaction(async (client) => {
-      const header = await client.query<Pick<MatchRow, 'status' | 'expires_at' | 'continuation_initiator_id'>>(`
-        SELECT status, expires_at, continuation_initiator_id
+      const header = await client.query<Pick<MatchRow, 'status' | 'expires_at' | 'continuation_initiator_id'> & { database_now: Date }>(`
+        SELECT status, expires_at, continuation_initiator_id,
+          clock_timestamp() AS database_now
         FROM match_init
         WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
         FOR UPDATE
       `, [matchId, userId]);
-      let match = header.rows[0];
-      if (!match) return 'not_found';
-      const now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now;
+      const initial = header.rows[0];
+      if (!initial) return 'not_found';
+      const now = initial.database_now;
+      let match: Pick<MatchRow, 'status' | 'expires_at' | 'continuation_initiator_id'> = initial;
       if (match.status === 'active') {
         if (new Date(match.expires_at).getTime() > now.getTime()) return 'not_available_yet';
         const opened = await client.query<Pick<MatchRow, 'status' | 'expires_at' | 'continuation_initiator_id'>>(`
@@ -435,15 +482,18 @@ export class MatchesRepository {
   }
 
   private async lockMessagingMatch(client: PoolClient, matchId: string, userId: string): Promise<MatchCommandResult<MatchRow>> {
-    const locked = await client.query<MatchRow>(`
-      SELECT id, user1_id, user2_id, status, expires_at, purge_after, continuation_initiator_id, created_at, last_message_at
+    const locked = await client.query<MatchRow & { database_now: Date }>(`
+      SELECT id, user1_id, user2_id, status, expires_at, purge_after,
+        continuation_initiator_id, created_at, last_message_at,
+        clock_timestamp() AS database_now
       FROM match_init
       WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
       FOR UPDATE
     `, [matchId, userId]);
-    let match = locked.rows[0];
-    if (!match) return { ok: false, reason: 'not_found' };
-    const now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now;
+    const initial = locked.rows[0];
+    if (!initial) return { ok: false, reason: 'not_found' };
+    const now = initial.database_now;
+    let match: MatchRow = initial;
     if (match.status === 'active' && new Date(match.expires_at).getTime() <= now.getTime()) {
       const opened = await client.query<MatchRow>(`
         UPDATE match_init
