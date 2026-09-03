@@ -122,6 +122,31 @@ describe('ConfigService SMS configuration', () => {
     expect(() => new ConfigService()).toThrow('config: CORS_ORIGINS');
   });
 
+  it('uses a localhost WebAuthn relying party in development', () => {
+    expect(new ConfigService().adminAuth).toEqual(expect.objectContaining({
+      origin: 'http://localhost:5173',
+      rpId: 'localhost',
+      cookieName: 'histae_admin_session',
+      secureCookie: false,
+      challengeTtlMillis: 300_000,
+      sessionIdleTtlMillis: 1_800_000,
+      sessionAbsoluteTtlMillis: 28_800_000,
+    }));
+  });
+
+  it('requires a matching HTTPS WebAuthn origin and RP ID in production', () => {
+    process.env = productionEnvironment({ ADMIN_WEBAUTHN_ORIGIN: '' });
+    expect(() => new ConfigService()).toThrow('config: ADMIN_WEBAUTHN_ORIGIN');
+
+    process.env = productionEnvironment({ ADMIN_WEBAUTHN_RP_ID: 'other.example.com' });
+    expect(() => new ConfigService()).toThrow('config: ADMIN_WEBAUTHN_RP_ID');
+  });
+
+  it('rejects WebAuthn on an insecure non-local origin', () => {
+    process.env = baseEnvironment({ ADMIN_WEBAUTHN_ORIGIN: 'http://admin.histae.test' });
+    expect(() => new ConfigService()).toThrow('config: ADMIN_WEBAUTHN_ORIGIN');
+  });
+
   it('accepts an explicit trusted-proxy IP and CIDR list', () => {
     process.env = baseEnvironment({ TRUST_PROXY: '127.0.0.1,10.0.0.0/8,2001:db8::/32' });
     expect(new ConfigService().trustProxy).toEqual(['127.0.0.1', '10.0.0.0/8', '2001:db8::/32']);
@@ -287,6 +312,8 @@ function productionEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
     LOCATION_CONSENT_VERSION: 'v1',
     LOCATION_CONSENT_URL: 'https://example.com/location',
     LEGAL_REVIEW_REFERENCE: 'test-review',
+    ADMIN_WEBAUTHN_ORIGIN: 'https://admin.histae.test',
+    ADMIN_WEBAUTHN_RP_ID: 'admin.histae.test',
     ...stripeEnvironment({ STRIPE_SECRET_KEY: 'sk_live_histaeSecret' }),
     ...overrides,
   });

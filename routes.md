@@ -9,9 +9,9 @@ Mise à jour : 3 septembre 2026. Toutes les routes ci-dessous sont préfixées p
 - Taille maximale d’un corps JSON : **1 Mio**.
 - L’upload photo est la seule entrée multipart : `Idempotency-Key: <UUID v4>` et un fichier de **500 000 octets maximum** dans le champ `photo`.
 - Les erreurs suivent le format `{ "error": { "code", "message" } }`.
-- Une route « authentifiée » requiert `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
+- Une route « authentifiée » requiert le JWT mobile `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
 - Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, `POST /auth/logout`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
-- Une route « admin » accepte les rôles `admin` et `superadmin`.
+- Une route « admin » exige une session WebAuthn administrateur dans le cookie `HttpOnly` dédié et accepte les rôles `admin` et `superadmin`. Un JWT mobile, même émis pour un compte administratif, n’est pas accepté.
 - `limit` est un entier de 1 à 100 (20 par défaut). Les listes volumineuses renvoient `next_cursor`; passez-le ensuite dans `cursor`. `offset` reste accepté pour compatibilité, mais est déprécié et doit valoir `0` avec un curseur.
 - Un rate limit global par IP est actif et partagé dans Redis entre les instances de l’API. Les clés Redis sont pseudonymisées par HMAC. En cas de dépassement : `429 rate_limit_exceeded` avec l’en-tête `Retry-After` ; Redis indisponible produit `503 rate_limit_unavailable`.
 - `X-Request-ID` est renvoyé dans chaque réponse. Un UUID v4 fourni par le client est conservé ; toute autre valeur est remplacée.
@@ -54,13 +54,42 @@ Le client mobile n’envoie jamais de Product ID, Price ID, montant, devise, dur
 
 Erreurs spécifiques : `billing_unavailable`, `invalid_stripe_signature`, `stripe_mode_mismatch`, `invalid_stripe_event`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded` et `billing_webhook_rate_limit_exceeded`.
 
+## Authentification WebAuthn administrateur
+
+Cette authentification est native à Histae et ne dépend ni de Cloudflare, ni d’un SSO, ni d’un fournisseur
+d’identité. En développement, le relying party est `localhost`, l’origine exacte est `http://localhost:5173` et le
+dashboard passe par son proxy même-origine `/api`. Il ne faut pas ouvrir le dashboard via `127.0.0.1`. En production,
+`ADMIN_WEBAUTHN_ORIGIN` doit être une origine HTTPS exacte et `ADMIN_WEBAUTHN_RP_ID` son hôte ou un suffixe de domaine
+valide.
+
+| Méthode | Route | Accès | Entrée | Réponse et règles |
+| --- | --- | --- | --- | --- |
+| POST | `/admin/auth/login/options` | Public, 10 requêtes/5 min/IP par défaut | — | `200 { "challenge_id", "options" }`. Crée un challenge de cinq minutes pour une passkey découvrable et exige la vérification de l’utilisateur. |
+| POST | `/admin/auth/login/verify` | Public, même limite | `{ "challenge_id", "credential" }` | `200 { "user_id", "role", "authenticated_at", "expires_at" }` et cookie de session `HttpOnly`, `SameSite=Strict`. Vérifie le challenge à usage unique, l’origine, le RP ID, la signature, le compteur et le rôle actif. Le secret de session n’est jamais présent dans le JSON. |
+| POST | `/admin/auth/bootstrap/options` | Public, même limite | `{ "bootstrap_token": "uuid:secret" }` | `200 { "challenge_id", "options" }`. Le jeton est créé hors bande et audité par `pnpm run admin:webauthn:bootstrap -- <user_uuid>`, expire après quinze minutes par défaut et cible un compte admin actif. |
+| POST | `/admin/auth/bootstrap/verify` | Public, même limite | `{ "bootstrap_token", "challenge_id", "credential", "name" }` | `201` avec la session et le même cookie. Consomme atomiquement le jeton, enregistre la clé publique et ouvre la première session. |
+| GET | `/admin/auth/session` | Admin | — | Retourne la session courante après relecture du compte, de la passkey et des expirations en PostgreSQL. |
+| POST | `/admin/auth/logout` | Admin | — | `204`, révoque la session serveur et expire le cookie. Toutes les mutations admin exigent l’en-tête `Origin` égal à l’origine WebAuthn configurée. |
+| GET | `/admin/auth/credentials` | Admin | — | Liste les passkeys actives sans clé publique et marque celle de la session courante. |
+| POST | `/admin/auth/credentials/options` | Admin, authentification WebAuthn de moins de 10 min | — | Crée les options d’une passkey supplémentaire en excluant les credentials existants. |
+| POST | `/admin/auth/credentials/verify` | Admin, authentification récente | `{ "challenge_id", "credential", "name" }` | `201`, enregistre la passkey vérifiée. |
+| DELETE | `/admin/auth/credentials/:id` | Admin, authentification récente | UUID | `204`. Interdit la passkey courante et la dernière passkey active ; révoque les autres sessions après suppression. |
+| POST | `/admin/auth/sessions/revoke-others` | Admin, authentification récente | — | `200 { "revoked_sessions" }`, conserve uniquement la session courante. |
+
+La session expire après 30 minutes d’inactivité et au plus 8 heures par défaut. Seuls les hashes SHA-256 des jetons
+d’enrôlement, challenges et sessions sont persistés. Les erreurs principales sont
+`invalid_or_expired_admin_bootstrap`, `invalid_or_expired_webauthn_challenge`, `webauthn_registration_failed`,
+`webauthn_authentication_failed`, `admin_session_invalid`, `admin_reauthentication_required`,
+`invalid_admin_request_origin`, `last_admin_credential`, `current_admin_credential` et
+`admin_auth_rate_limit_exceeded`.
+
 ## Console d’administration
 
-Toutes ces routes exigent un compte `admin` ou `superadmin`. Les consultations de données personnelles et les actions de sûreté sont inscrites dans `data_access_log`. Les numéros de téléphone, leurs empreintes et les coordonnées précises ne sont jamais exposés au dashboard.
+Toutes ces routes exigent la session WebAuthn d’un compte `admin` ou `superadmin`. Les consultations de données personnelles et les actions de sûreté sont inscrites dans `data_access_log`. Les numéros de téléphone, leurs empreintes et les coordonnées précises ne sont jamais exposés au dashboard.
 
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
-| GET | `/admin/me` | — | `200 { "user_id", "role" }`. Sert à vérifier le rôle après l’authentification OTP. |
+| GET | `/admin/me` | — | `200 { "user_id", "role" }`. Alias métier protégé par la session WebAuthn ; le dashboard utilise normalement `/admin/auth/session`. |
 | GET | `/admin/metrics` | `revenue_period` optionnel, mêmes valeurs que `/admin/revenue` (défaut : `month_to_date`) | Synthèse initiale des comptes, files de modération, matchs, messages, abonnements et états `user_photo`, avec le CA estimé de la période initiale. Les métriques incluent `moderation.pending_content`, les quatre états photo, les traitements bloqués depuis 30 minutes, les dead letters et les suppressions sans événement actif. Aucun indicateur ne contient de donnée personnelle. |
 | GET | `/admin/revenue` | `revenue_period=last_7_days\|last_30_days\|month_to_date\|previous_month\|year_to_date\|all_time` (défaut : `month_to_date`) | Recalcule uniquement le CA estimé : nombre d’abonnements Premium mis à jour sur la période × tarif mensuel Premium courant. Cette estimation n’est ni un registre d’encaissements ni un bénéfice comptable. |
 | GET | `/admin/photo-reconciliation` | `status=all\|stale_processing\|deleting\|dead_letter` (défaut : `all`) ; `limit`, `cursor` (`offset` déprécié) | File paginée des traitements photo anciens et suppressions en cours. Retourne les UUID photo/utilisateur, états, métadonnées techniques, diagnostic et état outbox, mais jamais `object_key`, URL signée ou image. |
@@ -73,7 +102,7 @@ Toutes ces routes exigent un compte `admin` ou `superadmin`. Les consultations d
 | PATCH | `/admin/users/:id/status` | `{ "is_banned", "reason"?: "…" }`. Le motif est obligatoire pour bannir. | Bannit ou débannit le compte. Un bannissement révoque immédiatement tous ses refresh tokens. Un admin ne peut agir que sur un rôle `user`; un superadmin ne peut agir ni sur lui-même ni sur un autre superadmin. |
 | GET | `/admin/matches/:id/messages` | UUID ; `reason` obligatoire ; `limit`, `cursor` (`offset` déprécié) | Conversation paginée pour modération. L’accès est journalisé pour les deux participants. |
 
-Les administrateurs s’authentifient par les mêmes routes OTP que les autres comptes. Le dashboard vérifie ensuite le rôle avec `/admin/me` et refuse toute session qui n’est pas administrative.
+Les routes OTP/JWT restent réservées au parcours mobile et ne donnent accès à aucune route admin.
 
 ## Compte utilisateur
 

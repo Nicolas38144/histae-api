@@ -40,6 +40,9 @@ export const migrations = [{
 }, {
   version: '006_content_moderation',
   filenames: ['006_content_moderation.sql'],
+}, {
+  version: '007_native_admin_webauthn',
+  filenames: ['007_native_admin_webauthn.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

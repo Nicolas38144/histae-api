@@ -8,7 +8,8 @@ L’API expose des routes JSON sous le préfixe `/api` et s’appuie sur :
 - **ScyllaDB** pour les décisions de découverte ;
 - **Redis** pour les limites de débit distribuées ;
 - un **stockage objet compatible S3** pour les photos privées ;
-- **Sweego** pour l’envoi des codes OTP par SMS.
+- **Sweego** pour l’envoi des codes OTP par SMS ;
+- **WebAuthn natif** pour l’authentification forte du dashboard administrateur.
 
 ## Prérequis
 
@@ -68,6 +69,8 @@ OBJECT_STORAGE_FORCE_PATH_STYLE=true
 PHOTO_MODERATION_PROVIDER=local_http
 PHOTO_MODERATION_ENDPOINT=http://127.0.0.1:8090
 PHOTO_MODERATION_TOKEN=change-me-with-at-least-32-bytes
+ADMIN_WEBAUTHN_ORIGIN=http://localhost:5173
+ADMIN_WEBAUTHN_RP_ID=localhost
 ```
 
 Revenez dans PowerShell pour préparer ScyllaDB et lancer l’API :
@@ -78,6 +81,19 @@ pnpm run start:dev
 ```
 
 L’API écoute par défaut sur `http://localhost:8080/api`.
+
+En développement, le dashboard doit être ouvert avec **`http://localhost:5173`** et appeler l’API via son proxy
+`/api`. WebAuthn autorise HTTP pour `localhost`, mais pas pour `127.0.0.1` ni pour un autre nom sans HTTPS. Après
+avoir promu un compte existant au rôle `admin` ou `superadmin`, appliquez la migration puis générez son jeton
+d’enrôlement temporaire :
+
+```powershell
+pnpm run admin:webauthn:bootstrap -- <uuid-du-compte-admin>
+```
+
+Le jeton n’est affiché qu’une fois, expire après quinze minutes par défaut et sert à enregistrer la première
+passkey depuis l’écran de connexion du dashboard. Conservez ensuite au moins deux passkeys, idéalement dont une
+clé de sécurité physique de secours.
 
 Le Compose objet exécute SeaweedFS `weed mini`, crée le bucket privé, vérifie `/healthz` toutes les dix secondes et n’expose l’API S3 que sur
 `127.0.0.1:8333`. Le code applicatif utilise exclusivement le contrat S3 du SDK AWS v3 : un remplacement par un
@@ -119,13 +135,20 @@ automatiquement. Le dashboard possède une file centrale : la liste ne contient
 du détail exige un motif audité et la décision exige un motif. Une photo refusée passe immédiatement à `deleting`
 et sa suppression objet est confiée à l’outbox.
 
-## Authentification OTP
+## Authentification
 
-L’authentification combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte
-associé au téléphone ou crée un compte `user` s’il n’existe pas encore.
+L’application mobile combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte
+associé au téléphone ou crée un compte `user` s’il n’existe pas encore. Ces JWT mobiles ne sont jamais acceptés
+par les routes administratives.
 
 La livraison réelle des SMS nécessite `SMS_PROVIDER=sweego` et les identifiants Sweego correspondants. Les
 numéros acceptés utilisent actuellement le format français E.164, par exemple `+33612345678`.
+
+Le dashboard utilise exclusivement WebAuthn, sans SSO ni fournisseur d’identité externe. Les clés privées restent
+dans l’authenticator. PostgreSQL ne conserve que la clé publique, le compteur, les challenges et secrets de session
+hachés et les événements d’audit. La session est transmise par cookie `HttpOnly`, `SameSite=Strict`, avec expiration
+inactive de 30 minutes et absolue de 8 heures par défaut. Toute mutation admin impose en plus l’origine WebAuthn
+exacte. En production, l’origine doit être HTTPS et le cookie devient `Secure` avec le préfixe `__Host-`.
 
 ## Commandes principales
 
@@ -134,7 +157,8 @@ numéros acceptés utilisent actuellement le format français E.164, par exemple
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil et la modération des contenus. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération et WebAuthn administrateur. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run admin:webauthn:bootstrap -- <uuid>` | Crée pour un administrateur actif un jeton à usage unique permettant d’enregistrer sa première passkey. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
 | `pnpm run db:reset-scylla` | Vide les décisions de découverte du ScyllaDB local. |
@@ -148,7 +172,8 @@ Les commandes de réinitialisation refusent les environnements et cibles non loc
 Avec `MAINTENANCE_MODE=api`, l’API consomme elle-même l’outbox, ce qui convient au développement mono-instance.
 En production, utilisez `MAINTENANCE_MODE=disabled` sur les processus HTTP et déployez au moins un processus
 `MAINTENANCE_MODE=worker pnpm run outbox:work`. La commande périodique `maintenance:run` reste nécessaire pour
-les rétentions générales et sert de filet de réconciliation aux photos abandonnées.
+les rétentions générales — y compris challenges, enrôlements, sessions et audits WebAuthn expirés — et sert de filet
+de réconciliation aux photos abandonnées.
 
 ## Qualité et tests
 

@@ -1,5 +1,6 @@
 import { Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import {
@@ -12,7 +13,7 @@ import type { ModerationCase, ModerationDetail } from './moderation.models';
 import { ModerationService } from './moderation.service';
 
 @Controller('api/admin/content-moderation')
-@UseGuards(JwtActiveGuard, AdminGuard)
+@UseGuards(AdminSessionGuard)
 export class ModerationController {
   constructor(private readonly moderation: ModerationService) {}
 

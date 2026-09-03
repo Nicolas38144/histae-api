@@ -10,7 +10,7 @@ de test : consulter respectivement `routes.md` et `test.md` pour ces inventaire
 Histae API est un backend NestJS 11/Fastify 5 en TypeScript strict pour l’application mobile de rencontres Histae.
 Le socle fonctionnel principal est implémenté :
 
-- authentification par OTP SMS et rotation des sessions ;
+- authentification mobile par OTP SMS/JWT et authentification administrateur WebAuthn native ;
 - onboarding, profil, questions/réponses guidées, préférences, traits et consentements ;
 - découverte distribuée, swipes et création de match par like réciproque ;
 - cycle de vie des matchs, révélation mutuelle, continuation et messagerie ;
@@ -31,7 +31,8 @@ complet est dans `docs/security-checkup.md`. La migration `004_admin_photo_recon
 qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard. La migration
 `005_profile_questions` fournit un catalogue initial administrable et jusqu’à trois réponses ordonnées par profil.
 La migration `006_content_moderation` sépare ensuite le statut éditorial du statut technique et crée la file de
-revue centrale pour les photos, bios et réponses.
+revue centrale pour les photos, bios et réponses. `007_native_admin_webauthn` sépare enfin totalement le dashboard
+du parcours OTP : passkeys découvrables, sessions serveur courtes et audit d’authentification, sans SSO externe.
 
 ## 2. Architecture
 
@@ -39,6 +40,7 @@ revue centrale pour les photos, bios et réponses.
 
 - Node.js 22+, pnpm 11.22.0, TypeScript strict ;
 - NestJS 11 sur Fastify 5 ;
+- SimpleWebAuthn côté serveur pour le standard WebAuthn administrateur ;
 - PostgreSQL via `pg` ;
 - ScyllaDB via `cassandra-driver` ;
 - Redis pour le rate limiting et le relais Pub/Sub SSE ;
@@ -108,9 +110,17 @@ proxies autorisés, sinon une adresse transmise par le client pourrait fausser l
   pour l’index et AES-256-GCM avec nonce/tag pour la valeur récupérable.
 - Les administrateurs ont des contrôles de rôle en base. Les accès aux détails personnels et conversations
   exigent un motif et créent une trace dans `data_access_log`.
+- Les routes admin refusent les JWT mobiles et exigent une passkey WebAuthn avec vérification utilisateur. Les clés
+  privées ne quittent jamais l’authenticator ; seuls la clé publique, le compteur, les secrets opaques hashés et les
+  événements d’authentification sont stockés.
+- Les sessions admin vivent dans un cookie `HttpOnly; SameSite=Strict`, expirent après 30 minutes d’inactivité et
+  8 heures au maximum, sont relues dans PostgreSQL à chaque requête et deviennent invalides avec le compte ou la
+  passkey. Les mutations vérifient l’origine exacte contre les requêtes intersites.
+- En développement, WebAuthn utilise `http://localhost:5173` et le RP ID `localhost` derrière le proxy Vite `/api`.
+  La production exige une origine HTTPS et un cookie `__Host-…; Secure`.
 
-Le rate limiting est global par IP et renforcé sur OTP, refresh, feed, swipe, message, export, signalement, photo,
-facturation et webhook Stripe. Les clés de compteurs sont HMACées. Le fallback mémoire non-production purge ses
+Le rate limiting est global par IP et renforcé sur WebAuthn admin, OTP, refresh, feed, swipe, message, export,
+signalement, photo, facturation et webhook Stripe. Les clés de compteurs sont HMACées. Le fallback mémoire non-production purge ses
 entrées expirées.
 
 ### Consentements et confidentialité
@@ -237,9 +247,11 @@ et applique la baseline dans une transaction.
 La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
 colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
 bornée et l’outbox générique. `004_admin_photo_reconciliation` étend la liste fermée des actions d’audit pour la
-relance opérateur. `005_profile_questions` ajoute le catalogue administrable et les réponses en cascade. Une base
+relance opérateur. `005_profile_questions` ajoute le catalogue administrable et les réponses en cascade.
 `006_content_moderation` ajoute les cas centraux, les signaux automatisés, la revue optimiste et les actions
-d’audit associées. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
+d’audit associées. `007_native_admin_webauthn` ajoute les enrôlements temporaires, credentials publics, challenges,
+sessions opaques et événements d’authentification admin. Une base neuve applique donc la baseline puis ces migrations
+dans l’ordre.
 
 La compatibilité est sans perte :
 
@@ -264,7 +276,8 @@ activé et le bucket objet. La fermeture Nest libère les pools/clients.
 La maintenance peut fonctionner dans l’API, dans un worker séparé ou être désactivée. Elle expire notamment les
 présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
 signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`. Elle réconcilie
-aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
+également les challenges/enrôlements WebAuthn consommés ou expirés, sessions admin obsolètes et audits de plus d’un
+an. Elle réconcilie aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
 dont la suppression S3 doit être retentée.
 
 L’outbox est consommée chaque seconde par l’API lorsque `MAINTENANCE_MODE=api`. Pour séparer le trafic HTTP des
@@ -314,8 +327,8 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
    réplication, réparation et montée de version ScyllaDB. Prévoir Redis hautement disponible.
 2. Déployer une chaîne TLS complète avec reverse proxy/WAF, IP/CIDR de confiance précis, protection DDoS,
    gestionnaire de secrets et procédures de rotation/révocation.
-3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
-   accès personnels ou actions de sûreté.
+3. Formaliser l’exploitation de WebAuthn : deux passkeys minimum par administrateur, clé physique de secours,
+   procédure d’enrôlement/récupération hors bande et alertes sur les connexions et actions de sûreté.
 4. Calibrer les seuils photo et les règles texte sur un corpus représentatif, mesurer faux positifs, faux négatifs
    et biais, formaliser toutes les catégories interdites, le SLA de revue et une procédure d’appel.
 5. Compléter les métriques déjà présentes pour `user_photo` et la file de modération par une collecte d’observabilité sur les latences,
@@ -341,5 +354,5 @@ sauvegardes lors d’un effacement et les textes/versionnements de production. C
 dans le code.
 
 À court terme, le meilleur prochain lot côté API est le suivi Sweego et l’observabilité. Le socle métier n’a pas
-besoin d’une nouvelle réécriture générale ; les risques principaux sont désormais l’authentification admin et les
-garanties opérationnelles des services externes.
+besoin d’une nouvelle réécriture générale ; les risques principaux sont désormais les procédures de récupération
+WebAuthn et les garanties opérationnelles des services externes.

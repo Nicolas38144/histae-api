@@ -235,6 +235,27 @@ export class PrivacyRepository {
     const expiredDeletionTokens = await database.query(`DELETE FROM account_deletion_token WHERE id IN (
       SELECT id FROM account_deletion_token WHERE expires_at <= $1::timestamptz ORDER BY expires_at LIMIT $2
     )`, [now, batchSize]);
+    const expiredAdminChallenges = await database.query(`DELETE FROM admin_webauthn_challenge WHERE id IN (
+      SELECT id FROM admin_webauthn_challenge
+      WHERE consumed_at IS NOT NULL OR expires_at <= $1::timestamptz
+      ORDER BY expires_at LIMIT $2
+    )`, [now, batchSize]);
+    const expiredAdminBootstraps = await database.query(`DELETE FROM admin_webauthn_bootstrap WHERE id IN (
+      SELECT id FROM admin_webauthn_bootstrap
+      WHERE consumed_at IS NOT NULL OR expires_at <= $1::timestamptz
+      ORDER BY expires_at LIMIT $2
+    )`, [now, batchSize]);
+    const expiredAdminSessions = await database.query(`DELETE FROM admin_session WHERE id IN (
+      SELECT id FROM admin_session
+      WHERE absolute_expires_at <= $1::timestamptz
+        OR (revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - INTERVAL '24 hours')
+      ORDER BY absolute_expires_at LIMIT $2
+    )`, [now, batchSize]);
+    const expiredAdminAuthEvents = await database.query(`DELETE FROM admin_auth_event WHERE id IN (
+      SELECT id FROM admin_auth_event
+      WHERE created_at <= $1::timestamptz - INTERVAL '1 year'
+      ORDER BY created_at LIMIT $2
+    )`, [now, batchSize]);
     return {
       stale_presences: stalePresences.rowCount ?? 0,
       expired_presences: expiredPresences.rowCount ?? 0,
@@ -247,6 +268,10 @@ export class PrivacyRepository {
       expired_reports: expiredReports.rowCount ?? 0,
       expired_account_tombstones: expiredTombstones.rowCount ?? 0,
       expired_account_deletion_tokens: expiredDeletionTokens.rowCount ?? 0,
+      expired_admin_webauthn_challenges: expiredAdminChallenges.rowCount ?? 0,
+      expired_admin_webauthn_bootstraps: expiredAdminBootstraps.rowCount ?? 0,
+      expired_admin_sessions: expiredAdminSessions.rowCount ?? 0,
+      expired_admin_auth_events: expiredAdminAuthEvents.rowCount ?? 0,
     };
   }
 }

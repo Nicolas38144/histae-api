@@ -29,7 +29,7 @@ Ne dupliquer ni profils ni autres données personnelles de référence dans Scyl
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
@@ -48,6 +48,10 @@ Respecter autant que possible la séparation suivante :
 - Les téléphones sont actuellement limités au format français E.164. Ne jamais persister ni journaliser le numéro en clair.
 - Les access tokens sont des JWT HS256 typés `access`. Les rôles et l'état du compte sont relus depuis PostgreSQL ; ne jamais faire confiance à un rôle fourni par le client ou par un ancien token.
 - Les refresh tokens et les OTP sont rotatifs/à usage unique selon les transactions et verrous existants. Préserver l'idempotence des envois OTP.
+- L’OTP/JWT authentifie le client mobile uniquement. Toute route administrative doit utiliser `AdminSessionGuard` et ne doit jamais accepter un JWT mobile, même pour un compte de rôle `admin`.
+- L’authentification admin est WebAuthn native : vérification utilisateur et credential découvrable obligatoires, challenge et bootstrap à usage unique, origine/RP ID exacts, compteur vérifié, session opaque hashée en base et cookie `HttpOnly; SameSite=Strict`. Toute mutation admin doit refuser une origine différente de `ADMIN_WEBAUTHN_ORIGIN`.
+- En développement WebAuthn utilise exclusivement `http://localhost:5173` avec le RP ID `localhost` et le proxy Vite `/api`; ne pas substituer `127.0.0.1`. En production, imposer HTTPS et le cookie `__Host-…; Secure`.
+- La gestion des passkeys et des autres sessions exige une authentification récente. Ne jamais permettre de révoquer la passkey de la session courante ni la dernière passkey active.
 - Les routes utilisateur normales exigent les CGU et la notice courantes. Les routes indispensables à l'onboarding, à la déconnexion et aux droits RGPD restent accessibles selon `routes.md`.
 - Le sexe et les préférences exigent le consentement aux données sensibles ; la présence exige le consentement de localisation. Leur retrait doit déclencher l'effacement immédiat documenté.
 - Les transitions de match, la continuation, les quotas, l'expiration et l'envoi idempotent des messages doivent rester atomiques.
@@ -77,7 +81,7 @@ Respecter autant que possible la séparation suivante :
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox`, `004_admin_photo_reconciliation`, `005_profile_questions` et `006_content_moderation` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, l’action d’audit de relance opérateur, le catalogue/réponses de profil, puis les cas et audits de modération. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox`, `004_admin_photo_reconciliation`, `005_profile_questions`, `006_content_moderation` et `007_native_admin_webauthn` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, l’action d’audit de relance opérateur, le catalogue/réponses de profil, les cas et audits de modération, puis les credentials, challenges, enrôlements, sessions et audits WebAuthn admin. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -113,7 +117,7 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 3 septembre 2026, les migrations jusqu’à `006_content_moderation` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, la relance admin transactionnelle/auditée, la suppression en cascade des réponses et la revue photo auditée avec suppression outbox. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
+Au 3 septembre 2026, les migrations jusqu’à `007_native_admin_webauthn` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, la relance admin transactionnelle/auditée, la suppression en cascade des réponses, la revue photo auditée avec suppression outbox et l’invalidation d’une session quand sa passkey est révoquée. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 

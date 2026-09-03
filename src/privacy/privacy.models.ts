@@ -50,4 +50,8 @@ export type PrivacyMaintenanceResult = {
   expired_reports: number;
   expired_account_tombstones: number;
   expired_account_deletion_tokens: number;
+  expired_admin_webauthn_challenges: number;
+  expired_admin_webauthn_bootstraps: number;
+  expired_admin_sessions: number;
+  expired_admin_auth_events: number;
 };

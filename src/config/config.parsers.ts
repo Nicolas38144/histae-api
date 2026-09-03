@@ -116,6 +116,30 @@ export function webOrigins(value: string, environment: Environment): string[] {
   return origins;
 }
 
+export function webAuthnOrigin(value: string, environment: Environment): string {
+  try {
+    const parsed = new URL(value);
+    const developmentLocalhost = environment !== 'production'
+      && parsed.protocol === 'http:'
+      && parsed.hostname === 'localhost';
+    if (parsed.origin !== value || (parsed.protocol !== 'https:' && !developmentLocalhost)) throw new Error();
+    return parsed.origin;
+  } catch {
+    throw new Error('config: ADMIN_WEBAUTHN_ORIGIN must be an exact HTTPS origin, or HTTP localhost outside production');
+  }
+}
+
+export function webAuthnRpId(value: string, origin: string, environment: Environment): string {
+  const normalized = value.trim().toLowerCase();
+  const hostname = new URL(origin).hostname.toLowerCase();
+  const isLocalhost = environment !== 'production' && normalized === 'localhost';
+  const isDomain = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized);
+  if ((!isLocalhost && !isDomain) || (hostname !== normalized && !hostname.endsWith(`.${normalized}`))) {
+    throw new Error('config: ADMIN_WEBAUTHN_RP_ID must equal the WebAuthn origin host or one of its registrable domain suffixes');
+  }
+  return normalized;
+}
+
 export function smsSenderId(value: string): string {
   if (!/^[A-Za-z0-9]{3,11}$/.test(value)) {
     throw new Error('config: SWEEGO_SMS_SENDER_ID must contain 3 to 11 letters or digits');

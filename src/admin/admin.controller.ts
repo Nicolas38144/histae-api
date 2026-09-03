@@ -1,5 +1,6 @@
 import { Controller, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import type { PublicMessage } from '../matches/matches.mapper';
@@ -20,7 +21,7 @@ import {
 } from './dto/admin.dto';
 
 @Controller('api/admin')
-@UseGuards(JwtActiveGuard, AdminGuard)
+@UseGuards(AdminSessionGuard)
 
 export class AdminController {
   constructor(private readonly admin: AdminService) {}

@@ -85,18 +85,6 @@ export class JwtActiveGuard implements CanActivate {
   }
 }
 
-@Injectable()
-export class AdminGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    if (!request.auth) throw apiError(401, 'authentication_required', 'A valid access token is required.');
-    if (request.auth.account.role !== 'admin' && request.auth.account.role !== 'superadmin') {
-      throw apiError(403, 'admin_required', 'Administrator access is required.');
-    }
-    return true;
-  }
-}
-
 export function userId(request: AuthenticatedRequest): string {
   if (!request.auth) throw apiError(401, 'authentication_required', 'A valid access token is required.');
   return request.auth.userId;

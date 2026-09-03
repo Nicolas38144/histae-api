@@ -6,7 +6,7 @@ import {
   internalHttpOrigin, legalUrl, limit, maintenanceMode, numberInRange,
   objectStorageBucket, objectStorageEndpoint, objectStorageRegion, optionalBoolean,
   parseEnvironment, photoModerationProvider, required, smsProvider,
-  smsRegion, smsSenderId, stripeReturnUrl, trustProxy, webOrigins,
+  smsRegion, smsSenderId, stripeReturnUrl, trustProxy, webAuthnOrigin, webAuthnRpId, webOrigins,
   type BillingProvider, type Environment, type LimitPolicy, type MaintenanceMode,
   type PhotoModerationProvider, type SmsProvider,
 } from './config.parsers';
@@ -68,6 +68,19 @@ export type PhotoModerationConfig = {
   nsfwReviewThreshold: number;
 };
 
+export type AdminAuthConfig = {
+  rpId: string;
+  origin: string;
+  rpName: string;
+  challengeTtlMillis: number;
+  bootstrapTtlMillis: number;
+  sessionIdleTtlMillis: number;
+  sessionAbsoluteTtlMillis: number;
+  recentAuthenticationMillis: number;
+  cookieName: string;
+  secureCookie: boolean;
+};
+
 export type ScyllaConfig = {
   enabled: boolean;
   contactPoints: string[];
@@ -119,6 +132,7 @@ export class ConfigService {
   readonly billing: BillingConfig;
   readonly objectStorage: ObjectStorageConfig;
   readonly photoModeration: PhotoModerationConfig;
+  readonly adminAuth: AdminAuthConfig;
   readonly legal: {
     termsVersion: string;
     privacyVersion: string;
@@ -146,12 +160,59 @@ export class ConfigService {
     swipe: LimitPolicy;
     billing: LimitPolicy;
     billingWebhook: LimitPolicy;
+    adminAuth: LimitPolicy;
   };
 
   constructor() {
     dotenv.config();
     this.env = parseEnvironment(process.env.ENV);
     this.port = integer(envOr('PORT', '8080'), 'PORT', 1, 65535);
+    const adminAuthOrigin = webAuthnOrigin(
+      envOr('ADMIN_WEBAUTHN_ORIGIN', this.env === 'production' ? '' : 'http://localhost:5173'),
+      this.env,
+    );
+    const adminAuthRpId = webAuthnRpId(
+      envOr('ADMIN_WEBAUTHN_RP_ID', new URL(adminAuthOrigin).hostname),
+      adminAuthOrigin,
+      this.env,
+    );
+    const adminAuthRpName = envOr('ADMIN_WEBAUTHN_RP_NAME', 'Histae Administration');
+    if (adminAuthRpName.length > 64 || [...adminAuthRpName].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127;
+    })) {
+      throw new Error('config: ADMIN_WEBAUTHN_RP_NAME must contain 1 to 64 printable characters');
+    }
+    const challengeTtlMillis = duration(envOr('ADMIN_WEBAUTHN_CHALLENGE_TTL', '5m'), 'ADMIN_WEBAUTHN_CHALLENGE_TTL');
+    const bootstrapTtlMillis = duration(envOr('ADMIN_WEBAUTHN_BOOTSTRAP_TTL', '15m'), 'ADMIN_WEBAUTHN_BOOTSTRAP_TTL');
+    const sessionIdleTtlMillis = duration(envOr('ADMIN_SESSION_IDLE_TTL', '30m'), 'ADMIN_SESSION_IDLE_TTL');
+    const sessionAbsoluteTtlMillis = duration(envOr('ADMIN_SESSION_ABSOLUTE_TTL', '8h'), 'ADMIN_SESSION_ABSOLUTE_TTL');
+    const recentAuthenticationMillis = duration(envOr('ADMIN_RECENT_AUTH_TTL', '10m'), 'ADMIN_RECENT_AUTH_TTL');
+    if (challengeTtlMillis < 60_000 || challengeTtlMillis > 10 * 60_000) {
+      throw new Error('config: ADMIN_WEBAUTHN_CHALLENGE_TTL must be between 1m and 10m');
+    }
+    if (bootstrapTtlMillis < 5 * 60_000 || bootstrapTtlMillis > 60 * 60_000) {
+      throw new Error('config: ADMIN_WEBAUTHN_BOOTSTRAP_TTL must be between 5m and 1h');
+    }
+    if (sessionIdleTtlMillis < 5 * 60_000 || sessionIdleTtlMillis > 2 * 60 * 60_000
+      || sessionAbsoluteTtlMillis < sessionIdleTtlMillis || sessionAbsoluteTtlMillis > 24 * 60 * 60_000) {
+      throw new Error('config: administrator session TTLs are outside the allowed range');
+    }
+    if (recentAuthenticationMillis > sessionIdleTtlMillis) {
+      throw new Error('config: ADMIN_RECENT_AUTH_TTL must not exceed ADMIN_SESSION_IDLE_TTL');
+    }
+    this.adminAuth = {
+      rpId: adminAuthRpId,
+      origin: adminAuthOrigin,
+      rpName: adminAuthRpName,
+      challengeTtlMillis,
+      bootstrapTtlMillis,
+      sessionIdleTtlMillis,
+      sessionAbsoluteTtlMillis,
+      recentAuthenticationMillis,
+      cookieName: this.env === 'production' ? '__Host-histae_admin_session' : 'histae_admin_session',
+      secureCookie: this.env === 'production',
+    };
     const jwtSecret = required('JWT_SECRET');
     if (Buffer.byteLength(jwtSecret) < 32) throw new Error('config: JWT_SECRET must contain at least 32 bytes');
     const encryptionKey = required('PHONE_ENCRYPTION_KEY');
@@ -413,6 +474,7 @@ export class ConfigService {
       swipe: limit('RATE_LIMIT_SWIPE', 120, '1m'),
       billing: limit('RATE_LIMIT_BILLING', 10, '1m'),
       billingWebhook: limit('RATE_LIMIT_BILLING_WEBHOOK', 300, '1m'),
+      adminAuth: limit('RATE_LIMIT_ADMIN_AUTH', 10, '5m'),
     };
   }
 }

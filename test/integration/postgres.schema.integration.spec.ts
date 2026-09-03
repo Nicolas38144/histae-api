@@ -19,6 +19,7 @@ import { OutboxRepository } from '../../src/outbox/outbox.repository';
 import { PhotosRepository } from '../../src/photos/photos.repository';
 import { ProfileQuestionsRepository } from '../../src/profile-questions/profile-questions.repository';
 import { ModerationRepository } from '../../src/moderation/moderation.repository';
+import { AdminAuthRepository } from '../../src/admin-auth/admin-auth.repository';
 import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
@@ -57,6 +58,8 @@ describe('PostgreSQL schema contract', () => {
       'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
       'user_photo', 'photo_upload_request', 'outbox_event',
       'profile_question', 'user_profile_answer', 'content_moderation_case',
+      'admin_webauthn_bootstrap', 'admin_webauthn_credential',
+      'admin_webauthn_challenge', 'admin_session', 'admin_auth_event',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -103,6 +106,9 @@ describe('PostgreSQL schema contract', () => {
         profileQuestions: boolean;
         profileAnswers: boolean;
         moderationCases: boolean;
+        adminCredentials: boolean;
+        adminSessions: boolean;
+        adminAuthEvents: boolean;
         seededQuestions: number;
         plans: number;
       }>(`
@@ -115,6 +121,9 @@ describe('PostgreSQL schema contract', () => {
           to_regclass($6) IS NOT NULL AS "profileQuestions",
           to_regclass($7) IS NOT NULL AS "profileAnswers",
           to_regclass($8) IS NOT NULL AS "moderationCases",
+          to_regclass($9) IS NOT NULL AS "adminCredentials",
+          to_regclass($10) IS NOT NULL AS "adminSessions",
+          to_regclass($11) IS NOT NULL AS "adminAuthEvents",
           (SELECT count(*)::integer FROM subscription_plan) AS plans,
           (SELECT count(*)::integer FROM profile_question) AS "seededQuestions"
       `, [
@@ -126,6 +135,9 @@ describe('PostgreSQL schema contract', () => {
         `${schema}.profile_question`,
         `${schema}.user_profile_answer`,
         `${schema}.content_moderation_case`,
+        `${schema}.admin_webauthn_credential`,
+        `${schema}.admin_session`,
+        `${schema}.admin_auth_event`,
       ]);
       expect(contract.rows[0]).toEqual({
         account: true,
@@ -136,6 +148,9 @@ describe('PostgreSQL schema contract', () => {
         profileQuestions: true,
         profileAnswers: true,
         moderationCases: true,
+        adminCredentials: true,
+        adminSessions: true,
+        adminAuthEvents: true,
         plans: 2,
         seededQuestions: 15,
       });
@@ -200,6 +215,44 @@ describe('PostgreSQL schema contract', () => {
     }
   });
 
+  it('invalidates an administrator session as soon as its WebAuthn credential is revoked', async () => {
+    const userId = randomUUID();
+    const tokenHash = Buffer.alloc(32, 7);
+    const repository = new AdminAuthRepository(databaseFor(pool) as never);
+    try {
+      await pool.query(`
+        INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
+        VALUES ($1, 'admin', $2, $3)
+      `, [userId, `test-${userId}`, Buffer.alloc(0)]);
+      const credential = await pool.query<{ id: string }>(`
+        INSERT INTO admin_webauthn_credential (
+          user_id, credential_id, public_key, counter, device_type, backed_up, transports, name
+        ) VALUES ($1, $2, $3, 0, 'singleDevice', false, ARRAY['internal'], 'Clé de test')
+        RETURNING id
+      `, [userId, `credential_${userId.replaceAll('-', '')}`, Buffer.from([1, 2, 3])]);
+      await pool.query(`
+        INSERT INTO admin_session (
+          user_id, credential_id, token_hash, idle_expires_at, absolute_expires_at
+        ) VALUES (
+          $1, $2, $3, clock_timestamp() + INTERVAL '30 minutes',
+          clock_timestamp() + INTERVAL '8 hours'
+        )
+      `, [userId, credential.rows[0]!.id, tokenHash]);
+
+      await expect(repository.activeSession(tokenHash, 1_800_000)).resolves.toEqual(expect.objectContaining({
+        user_id: userId,
+        role: 'admin',
+      }));
+      await pool.query(
+        'UPDATE admin_webauthn_credential SET revoked_at = clock_timestamp() WHERE id = $1',
+        [credential.rows[0]!.id],
+      );
+      await expect(repository.activeSession(tokenHash, 1_800_000)).resolves.toBeUndefined();
+    } finally {
+      await deleteAccounts(pool, userId);
+    }
+  });
+
   it('calculates the Premium revenue estimate from the catalog price and selected period', async () => {
     const repositoryDatabase = databaseFor(pool);
     const repository = new AdminRepository(
@@ -247,6 +300,9 @@ describe('PostgreSQL schema contract', () => {
       'idx_photo_upload_request_expires', 'idx_outbox_event_due',
       'idx_outbox_event_stale_lock', 'idx_outbox_event_completed',
       'idx_content_moderation_queue', 'idx_content_moderation_user',
+      'uq_admin_webauthn_bootstrap_active_user', 'idx_admin_webauthn_bootstrap_expiry',
+      'idx_admin_webauthn_credential_user', 'idx_admin_webauthn_challenge_expiry',
+      'idx_admin_session_user', 'idx_admin_session_expiry', 'idx_admin_auth_event_user',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -770,6 +826,10 @@ describe('PostgreSQL schema contract', () => {
         expired_reports: expect.any(Number),
         expired_account_tombstones: expect.any(Number),
         expired_account_deletion_tokens: expect.any(Number),
+        expired_admin_webauthn_challenges: expect.any(Number),
+        expired_admin_webauthn_bootstraps: expect.any(Number),
+        expired_admin_sessions: expect.any(Number),
+        expired_admin_auth_events: expect.any(Number),
       });
     } finally {
       await client.query('ROLLBACK');

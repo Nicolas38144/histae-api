@@ -1,5 +1,6 @@
 import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams } from '../common/http/validated-request.decorator';
 import {
@@ -37,13 +38,13 @@ export class ProfileQuestionsController {
   }
 
   @Get('admin/profile-questions')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   async listForAdmin(): Promise<{ questions: AdminProfileQuestion[] }> {
     return { questions: await this.questions.listForAdmin() };
   }
 
   @Post('admin/profile-questions')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   @HttpCode(HttpStatus.CREATED)
   create(
     @ValidatedBody({ code: 'invalid_profile_question_payload', message: 'The profile question request body is invalid.' }) body: CreateProfileQuestionDto,
@@ -52,7 +53,7 @@ export class ProfileQuestionsController {
   }
 
   @Patch('admin/profile-questions/:id')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   update(
     @ValidatedParams({ code: 'invalid_profile_question_id', message: 'The profile question ID must be a valid UUID.' }) params: ProfileQuestionIdParamDto,
     @ValidatedBody({ code: 'invalid_profile_question_payload', message: 'The profile question request body is invalid.' }) body: UpdateProfileQuestionDto,
@@ -61,7 +62,7 @@ export class ProfileQuestionsController {
   }
 
   @Delete('admin/profile-questions/:id')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async delete(
     @ValidatedParams({ code: 'invalid_profile_question_id', message: 'The profile question ID must be a valid UUID.' }) params: ProfileQuestionIdParamDto,

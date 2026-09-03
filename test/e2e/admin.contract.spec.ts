@@ -5,7 +5,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 
 import { AdminController } from '../../src/admin/admin.controller';
 import { AdminService } from '../../src/admin/admin.service';
-import { AdminGuard, JwtActiveGuard } from '../../src/auth/auth.guard';
+import { AdminSessionGuard } from '../../src/admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 
@@ -47,10 +47,8 @@ describe('Admin photo reconciliation HTTP contract', () => {
       controllers: [AdminController],
       providers: [{ provide: AdminService, useValue: admin }],
     })
-      .overrideGuard(JwtActiveGuard)
+      .overrideGuard(AdminSessionGuard)
       .useValue(activeGuard)
-      .overrideGuard(AdminGuard)
-      .useValue({ canActivate: () => true })
       .compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     app.useGlobalFilters(new ApiExceptionFilter());

@@ -1,6 +1,7 @@
 import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ValidatedBody, ValidatedParams } from '../common/http/validated-request.decorator';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { TraitsService } from './traits.service';
 import { CreateTraitDto, TraitIdDto, TraitIdParamDto } from './dto/traits.dto';
@@ -48,7 +49,7 @@ export class TraitsController {
   }
 
   @Post('admin/traits')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   @HttpCode(HttpStatus.CREATED)
 
   async create(@ValidatedBody({ code: 'invalid_trait_payload', message: 'The trait request body is invalid.' }) body: CreateTraitDto): Promise<Trait> {
@@ -56,7 +57,7 @@ export class TraitsController {
   }
 
   @Patch('admin/traits/:id')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
 
   async update(
     @ValidatedParams({ code: 'invalid_trait_id', message: 'The trait ID must be a valid UUID.' }) params: TraitIdParamDto,
@@ -67,7 +68,7 @@ export class TraitsController {
   }
 
   @Delete('admin/traits/:id')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
 
   async delete(@ValidatedParams({ code: 'invalid_trait_id', message: 'The trait ID must be a valid UUID.' }) params: TraitIdParamDto): Promise<void> {

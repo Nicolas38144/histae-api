@@ -1,5 +1,9 @@
 import 'reflect-metadata';
 import { AuthController } from '../../../src/auth/auth.controller';
+import { AdminAuthController } from '../../../src/admin-auth/admin-auth.controller';
+import { AdminSessionGuard, RecentAdminAuthenticationGuard } from '../../../src/admin-auth/admin-auth.guard';
+import { AdminAuthRepository } from '../../../src/admin-auth/admin-auth.repository';
+import { AdminAuthService } from '../../../src/admin-auth/admin-auth.service';
 import { JwtActiveGuard } from '../../../src/auth/auth.guard';
 import { AuthRepository } from '../../../src/auth/auth.repository';
 import { AuthService } from '../../../src/auth/auth.service';
@@ -26,7 +30,7 @@ import { PlansController } from '../../../src/plans/plans.controller';
 import { PlansRepository } from '../../../src/plans/plans.repository';
 import { PlansService } from '../../../src/plans/plans.service';
 import { PrivacyMaintenanceService } from '../../../src/privacy/privacy-maintenance.service';
-import { PrivacyController } from '../../../src/privacy/privacy.controller';
+import { AdminPrivacyController, PrivacyController } from '../../../src/privacy/privacy.controller';
 import { PrivacyRepository } from '../../../src/privacy/privacy.repository';
 import { PrivacyService } from '../../../src/privacy/privacy.service';
 import { RateLimitService } from '../../../src/ratelimit/rate-limit.service';
@@ -73,11 +77,13 @@ const injectedClasses = [
   MatchesController, MatchesRepository, MatchesService, MatchMaintenanceService,
   MobileController, MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
+  AdminPrivacyController,
   TraitsController, TraitsRepository, TraitsService,
   ProfileQuestionsController, ProfileQuestionsRepository, ProfileQuestionsService,
   ModerationController, ModerationRepository, ModerationService, PhotoModerationService,
   ReportsController, ReportsRepository, ReportsService,
   AdminController, AdminRepository, AdminService,
+  AdminAuthController, AdminSessionGuard, RecentAdminAuthenticationGuard, AdminAuthRepository, AdminAuthService,
   BillingController, StripeWebhookController, BillingRepository, BillingService, StripeGateway,
 ];
 

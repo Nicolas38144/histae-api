@@ -2,7 +2,8 @@ import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { AdminGuard, JwtActiveGuard } from '../../src/auth/auth.guard';
+import { AdminSessionGuard } from '../../src/admin-auth/admin-auth.guard';
+import { JwtActiveGuard } from '../../src/auth/auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { ProfileQuestionsController } from '../../src/profile-questions/profile-questions.controller';
@@ -53,7 +54,7 @@ describe('Profile questions HTTP contract', () => {
       providers: [{ provide: ProfileQuestionsService, useValue: questions }],
     })
       .overrideGuard(JwtActiveGuard).useValue(activeGuard)
-      .overrideGuard(AdminGuard).useValue({ canActivate: () => true })
+      .overrideGuard(AdminSessionGuard).useValue(activeGuard)
       .compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     app.useGlobalFilters(new ApiExceptionFilter());

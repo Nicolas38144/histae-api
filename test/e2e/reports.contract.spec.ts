@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { JwtActiveGuard } from '../../src/auth/auth.guard';
+import { AdminSessionGuard } from '../../src/admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { ConfigService } from '../../src/config/config.service';
@@ -48,7 +49,10 @@ describe('Reports HTTP contract', () => {
         { provide: RateLimitService, useValue: limits },
         { provide: ConfigService, useValue: { rateLimit: { report: { max: 10, windowMs: 3_600_000 } } } },
       ],
-    }).overrideGuard(JwtActiveGuard).useValue(activeGuard).compile();
+    })
+      .overrideGuard(JwtActiveGuard).useValue(activeGuard)
+      .overrideGuard(AdminSessionGuard).useValue(activeGuard)
+      .compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     app.useGlobalFilters(new ApiExceptionFilter());
     await app.init();

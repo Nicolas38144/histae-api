@@ -1,5 +1,6 @@
 import { Controller, Get, Headers, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import type { ContinuationQuota } from './matches.service';
@@ -30,7 +31,7 @@ export class MatchesController {
   }
 
   @Get('matches/:userId')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
 
   async userMatches(
     @ValidatedParams({ code: 'invalid_user_id', message: 'The user ID must be a valid UUID.' }) params: UserIdParamDto,

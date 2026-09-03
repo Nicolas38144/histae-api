@@ -7,4 +7,15 @@ export type ActiveAccount = {
   onboarding_complete: boolean;
 };
 
-export type AuthenticatedRequest = FastifyRequest & { auth?: { userId: string; account: ActiveAccount } };
+export type AuthenticatedRequest = FastifyRequest & {
+  auth?: {
+    userId: string;
+    account: ActiveAccount;
+    adminSession?: {
+      id: string;
+      credentialId: string;
+      authenticatedAt: Date;
+      expiresAt: Date;
+    };
+  };
+};

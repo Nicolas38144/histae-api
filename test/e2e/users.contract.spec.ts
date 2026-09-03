@@ -4,6 +4,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import multipart from '@fastify/multipart';
 import { JwtActiveGuard } from '../../src/auth/auth.guard';
+import { AdminSessionGuard } from '../../src/admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { PlansController } from '../../src/plans/plans.controller';
@@ -111,7 +112,10 @@ describe('Users HTTP contract', () => {
         { provide: RateLimitService, useValue: limits },
         { provide: ConfigService, useValue: config },
       ],
-    }).overrideGuard(JwtActiveGuard).useValue(activeGuard).compile();
+    })
+      .overrideGuard(JwtActiveGuard).useValue(activeGuard)
+      .overrideGuard(AdminSessionGuard).useValue(activeGuard)
+      .compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     await app.register(multipart, { limits: { fileSize: 500_000, files: 1, fields: 0, parts: 1 } });
     app.useGlobalFilters(new ApiExceptionFilter());

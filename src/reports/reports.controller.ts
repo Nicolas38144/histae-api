@@ -1,5 +1,6 @@
 import { Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { ConfigService } from '../config/config.service';
@@ -25,7 +26,7 @@ export class ReportsController {
   }
 
   @Get('admin/reports')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
 
   async list(
     @ValidatedQuery({ code: 'invalid_report_request', message: 'The report request is invalid.' }) query: ListReportsDto,
@@ -35,7 +36,7 @@ export class ReportsController {
   }
 
   @Patch('admin/reports/:id')
-  @UseGuards(JwtActiveGuard, AdminGuard)
+  @UseGuards(AdminSessionGuard)
 
   async update(
     @ValidatedParams({ code: 'invalid_report_id', message: 'The report ID must be a valid UUID.' }) params: ReportIdParamDto,

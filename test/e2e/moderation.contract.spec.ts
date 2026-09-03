@@ -2,7 +2,7 @@ import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { AdminGuard, JwtActiveGuard } from '../../src/auth/auth.guard';
+import { AdminSessionGuard } from '../../src/admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { ModerationController } from '../../src/moderation/moderation.controller';
@@ -32,8 +32,7 @@ describe('Content moderation HTTP contract', () => {
     const module = await Test.createTestingModule({
       controllers: [ModerationController],
       providers: [{ provide: ModerationService, useValue: moderation }],
-    }).overrideGuard(JwtActiveGuard).useValue(activeGuard)
-      .overrideGuard(AdminGuard).useValue({ canActivate: () => true }).compile();
+    }).overrideGuard(AdminSessionGuard).useValue(activeGuard).compile();
     app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     app.useGlobalFilters(new ApiExceptionFilter());
     await app.init();

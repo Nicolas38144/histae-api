@@ -13,6 +13,7 @@ import { MobileModule } from './mobile/mobile.module';
 import { BillingModule } from './billing/billing.module';
 import { ProfileQuestionsModule } from './profile-questions/profile-questions.module';
 import { ModerationModule } from './moderation/moderation.module';
+import { AdminAuthModule } from './admin-auth/admin-auth.module';
 
-@Module({ imports: [CoreModule, AuthModule, MobileModule, BillingModule, AdminModule, ModerationModule, UsersModule, PrivacyModule, TraitsModule, ProfileQuestionsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
+@Module({ imports: [CoreModule, AuthModule, AdminAuthModule, MobileModule, BillingModule, AdminModule, ModerationModule, UsersModule, PrivacyModule, TraitsModule, ProfileQuestionsModule, ReportsModule, PlansModule, MatchesModule, DiscoveryModule] })
 export class AppModule {}

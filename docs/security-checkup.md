@@ -16,8 +16,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 | Zone | État | Contrôles principaux |
 | --- | --- | --- |
-| Authentification | Satisfaisant | JWT HS256 avec issuer/audience/type, secrets de refresh 256 bits hashés, rotation transactionnelle, OTP HMAC et usage unique. |
-| Autorisation | Satisfaisant | Rôle et état actif relus depuis PostgreSQL, guards admin, onboarding et consentements imposés côté serveur. |
+| Authentification | Satisfaisant | Mobile : JWT/refresh rotatif et OTP HMAC à usage unique. Admin : WebAuthn natif avec vérification utilisateur, challenges à usage unique et sessions serveur opaques. |
+| Autorisation | Satisfaisant | Rôle et état actif relus depuis PostgreSQL, JWT mobile refusé sur les routes admin, guards dédiés, onboarding et consentements imposés côté serveur. |
 | Entrées | Satisfaisant | DTO stricts, whitelist avec rejet des champs inconnus, limites métier, UUID et dates validés. |
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
 | Limites de débit | Satisfaisant | Redis obligatoire en production, clés HMAC, échec fermé, `Retry-After`, limite globale et limites sensibles dédiées. |
@@ -37,6 +37,13 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - `TRUST_PROXY=true` est interdit en production. Il faut fournir les adresses IP ou CIDR exacts des proxies,
   afin qu’un client ne puisse pas usurper son IP et contourner les limites de débit.
 - OpenAPI, Swagger, leurs routes et leur dépendance applicative ont été retirés de tous les environnements.
+- L’authentification du dashboard est séparée de l’OTP mobile. Elle utilise des passkeys WebAuthn découvrables sans
+  fournisseur externe, vérifie l’origine, le RP ID, la présence/vérification utilisateur, la signature et le compteur,
+  et ne conserve en PostgreSQL que les clés publiques et secrets opaques hashés.
+- Les sessions admin utilisent un cookie `HttpOnly; SameSite=Strict`, une expiration inactive et absolue, une
+  révocation serveur et une relecture du rôle, du bannissement et de la passkey. Les mutations exigent l’origine
+  exacte et les opérations sur les passkeys une authentification récente. La dernière passkey et celle de la session
+  courante ne sont pas révocables. L’émission d’un jeton d’enrôlement par la commande locale est elle-même auditée.
 - La liste admin des comptes et la liste des comptes bloqués ne génèrent plus de liens signés vers les photos.
   Le détail admin conserve le motif obligatoire et l’audit avant de produire une éventuelle URL.
 - Le parseur des refresh tokens impose désormais un UUID v4 canonique et exactement 43 caractères base64url.
@@ -69,9 +76,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 ## Risques résiduels et actions avant production
 
-1. **Authentification administrative** : les administrateurs utilisent encore le même OTP SMS que les utilisateurs.
-   Mettre en place une authentification forte distincte (SSO/MFA résistante au phishing), une politique de session
-   admin plus courte et des alertes sur les accès sensibles.
+1. **Récupération administrative** : WebAuthn résiste au phishing mais une perte de tous les authenticators peut
+   bloquer le compte. Imposer deux passkeys dont une clé physique distincte, protéger l’accès à la commande
+   d’enrôlement, documenter une récupération hors bande et alerter sur les connexions et révocations.
 2. **Protection périmétrique** : placer l’API derrière un reverse proxy/WAF avec TLS, limites de connexion et de
    taille, protection DDoS et liste explicite des proxies de confiance. Tester la vraie chaîne d’adresses client.
 3. **Secrets et clés** : utiliser un gestionnaire de secrets, définir une rotation, tester la révocation et séparer
@@ -93,8 +100,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 ## Hypothèses importantes
 
-- L’API utilise des Bearer tokens dans l’en-tête `Authorization`, pas une session cookie ; le risque CSRF classique
-  n’est donc pas le mécanisme principal. CORS reste limité aux origines explicitement configurées.
+- Le client mobile utilise des Bearer tokens et les routes admin un cookie. Le risque CSRF admin est réduit par
+  `SameSite=Strict` et par le contrôle serveur de l’en-tête `Origin` exact sur chaque mutation. Le dashboard et
+  l’API doivent rester servis sous une même origine (`/api`) ; `http://localhost:5173` est l’exception de développement.
 - HSTS n’est utile que si le frontal sert réellement l’API en HTTPS et ne doit pas être interprété comme une
   terminaison TLS fournie par Node.
 - La compatibilité S3 du code ne garantit pas la sécurité du bucket : politique privée, comptes techniques,
@@ -104,8 +112,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 45 suites, 276 cas réussis ;
-- tests e2e Fastify : 11 suites, 66 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 45 cas réussis ;
-- migrations PostgreSQL : `006_content_moderation` appliquée sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
+- tests unitaires : 49 suites, 299 cas réussis ;
+- tests e2e Fastify : 12 suites, 72 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 46 cas réussis ;
+- migrations PostgreSQL : `007_native_admin_webauthn` ajoutée au catalogue, vérifiée dans un schéma temporaire vide et appliquée sans destruction sur `histae-dev`.
 - état Docker local : SeaweedFS, Redis, ScyllaDB et le service de modération photo déclarés `healthy`; une analyse WebP authentifiée réelle a renvoyé des scores valides.

@@ -1,5 +1,6 @@
 import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AdminGuard, JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { AllowIncompleteOnboarding } from '../auth/onboarding.decorator';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
@@ -70,18 +71,21 @@ export class PrivacyController {
     await this.privacy.unblockUser(userId(request), params.userId);
   }
 
-  @Get('admin/data-subject-requests')
-  @UseGuards(AdminGuard)
+}
 
+@Controller('api/admin')
+@UseGuards(AdminSessionGuard)
+export class AdminPrivacyController {
+  constructor(private readonly privacy: PrivacyService) {}
+
+  @Get('data-subject-requests')
   async requests(
     @ValidatedQuery({ code: 'invalid_data_request_query', message: 'The data subject request query is invalid.' }) query: ListDataSubjectRequestsDto,
   ): Promise<{ requests: DataSubjectRequestRow[] }> {
     return { requests: await this.privacy.requestsForAdmin(query.status) };
   }
 
-  @Patch('admin/data-subject-requests/:id')
-  @UseGuards(AdminGuard)
-
+  @Patch('data-subject-requests/:id')
   async updateRequest(
     @ValidatedParams({ code: 'invalid_data_request_id', message: 'The data subject request ID is invalid.' }) params: PrivacyRequestIdParamDto,
     @ValidatedBody({ code: 'invalid_data_request', message: 'The data subject request is invalid.' }) body: UpdateDataSubjectRequestDto,
@@ -91,9 +95,7 @@ export class PrivacyController {
     return { message: 'data subject request updated' };
   }
 
-  @Get('admin/data-access-logs')
-  @UseGuards(AdminGuard)
-
+  @Get('data-access-logs')
   async logs(
     @ValidatedQuery({ code: 'invalid_data_access_query', message: 'The data access query is invalid.' }) query: DataAccessLogQueryDto,
   ): Promise<{ logs: DataAccessLogRow[] }> {
