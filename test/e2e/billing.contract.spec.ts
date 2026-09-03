@@ -6,6 +6,7 @@ import { JwtActiveGuard } from '../../src/auth/auth.guard';
 import type { AuthenticatedRequest } from '../../src/auth/auth.types';
 import { BillingController, StripeWebhookController } from '../../src/billing/billing.controller';
 import { BillingService } from '../../src/billing/billing.service';
+import { StripeWebhookService } from '../../src/billing/stripe-webhook.service';
 import { ApiExceptionFilter } from '../../src/common/api-exception.filter';
 import { ConfigService } from '../../src/config/config.service';
 import { RateLimitService } from '../../src/ratelimit/rate-limit.service';
@@ -24,8 +25,8 @@ describe('Billing HTTP contract', () => {
     subscription: jest.fn().mockResolvedValue({ plan: 'free', access_granted: false }),
     createCheckout: jest.fn().mockResolvedValue(session),
     createPortal: jest.fn().mockResolvedValue({ url: 'https://billing.stripe.test/portal' }),
-    handleStripeWebhook: jest.fn().mockResolvedValue(undefined),
   };
+  const webhooks = { handle: jest.fn().mockResolvedValue(undefined) };
   const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
   const activeGuard: CanActivate = {
     canActivate(context: ExecutionContext): boolean {
@@ -43,6 +44,7 @@ describe('Billing HTTP contract', () => {
       controllers: [BillingController, StripeWebhookController],
       providers: [
         { provide: BillingService, useValue: billing },
+        { provide: StripeWebhookService, useValue: webhooks },
         { provide: RateLimitService, useValue: limits },
         { provide: ConfigService, useValue: { rateLimit: {
           billing: { max: 10, windowMs: 60_000 },
@@ -125,6 +127,6 @@ describe('Billing HTTP contract', () => {
       { max: 300, windowMs: 60_000 },
       'billing_webhook_rate_limit_exceeded',
     );
-    expect(billing.handleStripeWebhook).toHaveBeenCalledWith(Buffer.from(payload), 't=1,v1=signed');
+    expect(webhooks.handle).toHaveBeenCalledWith(Buffer.from(payload), 't=1,v1=signed');
   });
 });

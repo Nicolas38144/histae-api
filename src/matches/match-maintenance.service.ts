@@ -2,7 +2,7 @@ import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import type { MaintenanceResult } from './matches.models';
-import { MatchesRepository } from './matches.repository';
+import { MatchMaintenanceRepository } from './match-maintenance.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 
 const HOUR = 60 * 60 * 1_000;
@@ -13,7 +13,7 @@ export class MatchMaintenanceService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
 
   constructor(
-    private readonly matches: MatchesRepository,
+    private readonly matches: MatchMaintenanceRepository,
     private readonly config: ConfigService,
     private readonly tracker: MaintenanceTrackerService,
   ) {}

@@ -20,6 +20,8 @@ import { HealthController } from '../../../src/health.controller';
 import { MatchMaintenanceService } from '../../../src/matches/match-maintenance.service';
 import { MatchesController } from '../../../src/matches/matches.controller';
 import { MatchesRepository } from '../../../src/matches/matches.repository';
+import { MatchMessageRepository } from '../../../src/matches/match-message.repository';
+import { MatchMaintenanceRepository } from '../../../src/matches/match-maintenance.repository';
 import { MatchesService } from '../../../src/matches/matches.service';
 import { MobileController } from '../../../src/mobile/mobile.controller';
 import { MobileDeliveryService } from '../../../src/mobile/mobile-delivery.service';
@@ -48,11 +50,14 @@ import { UsersRepository } from '../../../src/users/users.repository';
 import { UsersService } from '../../../src/users/users.service';
 import { AdminController } from '../../../src/admin/admin.controller';
 import { AdminRepository } from '../../../src/admin/admin.repository';
+import { AdminMetricsRepository } from '../../../src/admin/admin-metrics.repository';
+import { AdminPhotoRepository } from '../../../src/admin/admin-photo.repository';
 import { AdminService } from '../../../src/admin/admin.service';
 import { BillingController, StripeWebhookController } from '../../../src/billing/billing.controller';
 import { BillingRepository } from '../../../src/billing/billing.repository';
 import { BillingService } from '../../../src/billing/billing.service';
 import { StripeGateway } from '../../../src/billing/stripe.gateway';
+import { StripeWebhookService } from '../../../src/billing/stripe-webhook.service';
 import { ObjectStorageService } from '../../../src/storage/object-storage.service';
 import { PhotosRepository } from '../../../src/photos/photos.repository';
 import { PhotosService } from '../../../src/photos/photos.service';
@@ -82,7 +87,7 @@ const injectedClasses = [
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,
   UsersController, UsersRepository, UsersService,
   PlansController, PlansRepository, PlansService,
-  MatchesController, MatchesRepository, MatchesService, MatchMaintenanceService,
+  MatchesController, MatchesRepository, MatchMessageRepository, MatchMaintenanceRepository, MatchesService, MatchMaintenanceService,
   MobileController, MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
   AdminPrivacyController,
@@ -90,9 +95,9 @@ const injectedClasses = [
   ProfileQuestionsController, ProfileQuestionsRepository, ProfileQuestionsService,
   ModerationController, ModerationRepository, ModerationService, PhotoModerationService,
   ReportsController, ReportsRepository, ReportsService,
-  AdminController, AdminRepository, AdminService,
+  AdminController, AdminRepository, AdminMetricsRepository, AdminPhotoRepository, AdminService,
   AdminAuthController, AdminSessionGuard, RecentAdminAuthenticationGuard, AdminAuthRepository, AdminAuthService,
-  BillingController, StripeWebhookController, BillingRepository, BillingService, StripeGateway,
+  BillingController, StripeWebhookController, BillingRepository, BillingService, StripeWebhookService, StripeGateway,
 ];
 
 

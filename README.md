@@ -170,6 +170,10 @@ Les chemins SQL critiques (feed, matchs, recherche admin, exports et rétention)
 par la migration `009_sql_performance_indexes`. La méthode, les choix d’index et les plans locaux mesurés sont
 documentés dans [`docs/sql-performance.md`](docs/sql-performance.md).
 
+Le découpage interne des matchs, de l'administration et de la facturation est décrit dans
+[`docs/module-responsibilities.md`](docs/module-responsibilities.md). Les repositories spécialisés conservent
+les mêmes transactions et contrats HTTP, sans composant supplémentaire à déployer.
+
 ## Commandes principales
 
 | Commande | Description |

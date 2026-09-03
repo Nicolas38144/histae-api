@@ -1,12 +1,23 @@
 import { MatchesRepository } from '../../../src/matches/matches.repository';
+import { MatchMaintenanceRepository } from '../../../src/matches/match-maintenance.repository';
 
-describe('MatchesRepository maintenance', () => {
+describe('MatchMaintenanceRepository', () => {
+  it('does not run maintenance while another worker holds the advisory lock', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [{ acquired: false }] }) };
+    const database = { transaction: jest.fn(async (work) => work(client)) };
+    const repository = new MatchMaintenanceRepository(database as never);
+
+    await expect(repository.runMaintenanceAsLeader(new Date())).resolves.toBeUndefined();
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_xact_lock($1) AS acquired', [37_142_581]);
+  });
+
   it('executes active → awaiting → expired → purge in order', async () => {
     const query = jest.fn()
       .mockResolvedValueOnce({ rowCount: 2 })
       .mockResolvedValueOnce({ rowCount: 3 })
       .mockResolvedValueOnce({ rowCount: 4 });
-    const repository = new MatchesRepository({} as never);
+    const repository = new MatchMaintenanceRepository({} as never);
 
     await expect(repository.runMaintenance({ query } as never, new Date('2030-01-07T12:00:00.000Z')))
       .resolves.toEqual({ opened: 2, expired: 3, purged: 4 });

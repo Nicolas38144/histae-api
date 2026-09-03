@@ -1,25 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import type { PoolClient } from 'pg';
 import type { Queryable } from '../database/database.service';
 import { DatabaseService } from '../database/database.service';
 import type { KeysetCursor } from '../common/pagination';
 import type {
   ContinuationResult,
   CursorMatchRow,
-  CursorMessageRow,
   EffectivePlan,
-  MaintenanceResult,
   MatchCommandResult,
   MatchRow,
   MatchState,
-  MessageCreationResult,
-  MessageRead,
-  MessageRow,
   UserMatchRow,
 } from './matches.models';
+import { MATCH_PURGE_MS } from './matches.constants';
+import { lockMessagingMatch } from './match-access';
 
-const MAINTENANCE_LOCK = 37_142_581;
-const MATCH_PURGE_MS = 30 * 24 * 60 * 60 * 1_000;
 const MATCH_PAGE_CTE = `
   page AS MATERIALIZED (
     SELECT participant_matches.*
@@ -217,7 +211,7 @@ export class MatchesRepository {
 
   async recordReveal(matchId: string, userId: string): Promise<MatchCommandResult<boolean>> {
     return this.database.transaction(async (client) => {
-      const available = await this.lockMessagingMatch(client, matchId, userId);
+      const available = await lockMessagingMatch(client, matchId, userId);
       if (!available.ok) return available;
       const result = await client.query<{ updated: boolean; revealed: boolean }>(`
         WITH updated AS (
@@ -234,114 +228,6 @@ export class MatchesRepository {
       `, [matchId, userId]);
       if (!result.rows[0]?.updated) return { ok: false, reason: 'not_found' };
       return { ok: true, value: result.rows[0].revealed };
-    });
-  }
-
-  async messagesForUser(matchId: string, userId: string, limit: number, offset: number, cursor?: KeysetCursor): Promise<MatchCommandResult<CursorMessageRow[]>> {
-    return this.database.transaction(async (client) => {
-      const available = await this.lockMessagingMatch(client, matchId, userId);
-      if (!available.ok) return available;
-      const messages = await client.query<CursorMessageRow>(`
-        SELECT id, match_id, sender_id, content, created_at, read_at,
-          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
-        FROM chat_message
-        WHERE match_id = $1
-          AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
-        ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3
-      `, [matchId, limit, offset, cursor?.at ?? null, cursor?.id ?? null]);
-      return { ok: true, value: messages.rows };
-    });
-  }
-
-  async createMessage(
-    messageId: string,
-    matchId: string,
-    senderId: string,
-    content: string,
-    idempotencyKey: string,
-  ): Promise<MessageCreationResult> {
-    return this.database.transaction(async (client) => {
-      const replay = await this.findIdempotentMessage(client, senderId, idempotencyKey);
-      if (replay) {
-        if (replay.message.match_id !== matchId || replay.message.content !== content) {
-          return { ok: false, reason: 'idempotency_conflict' };
-        }
-        return { ok: true, value: { ...replay, created: false } };
-      }
-      const available = await this.lockMessagingMatch(client, matchId, senderId);
-      if (!available.ok) return available;
-      const inserted = await client.query<MessageRow>(`
-        INSERT INTO chat_message (id, match_id, sender_id, content, idempotency_key, created_at)
-        VALUES ($1, $2, $3, $4, $5, clock_timestamp())
-        ON CONFLICT (sender_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
-        RETURNING id, match_id, sender_id, content, created_at, read_at
-      `, [messageId, matchId, senderId, content, idempotencyKey]);
-      if (!inserted.rows[0]) {
-        const concurrentReplay = await this.findIdempotentMessage(client, senderId, idempotencyKey);
-        if (!concurrentReplay || concurrentReplay.message.match_id !== matchId || concurrentReplay.message.content !== content) {
-          return { ok: false, reason: 'idempotency_conflict' };
-        }
-        return { ok: true, value: { ...concurrentReplay, created: false } };
-      }
-      const message = inserted.rows[0];
-      await client.query('UPDATE match_init SET last_message_at = $2 WHERE id = $1', [matchId, message.created_at]);
-      return {
-        ok: true,
-        value: { message, participant_ids: [available.value.user1_id, available.value.user2_id], created: true },
-      };
-    });
-  }
-
-  async markMessageRead(matchId: string, messageId: string, userId: string): Promise<MatchCommandResult<MessageRead | undefined>> {
-    return this.database.transaction(async (client) => {
-      const available = await this.lockMessagingMatch(client, matchId, userId);
-      if (!available.ok) return available;
-      const updated = await client.query(`
-        UPDATE chat_message SET read_at = COALESCE(read_at, clock_timestamp())
-        WHERE id = $1 AND match_id = $2 AND sender_id <> $3
-      `, [messageId, matchId, userId]);
-      if (updated.rowCount !== 1) return { ok: true, value: undefined };
-      return { ok: true, value: {
-        updated_count: 1,
-        participant_ids: [available.value.user1_id, available.value.user2_id],
-        read_through_message_id: messageId,
-      } };
-    });
-  }
-
-  async markMessagesReadThrough(
-    matchId: string,
-    messageId: string,
-    userId: string,
-  ): Promise<MatchCommandResult<MessageRead | undefined>> {
-    return this.database.transaction(async (client) => {
-      const available = await this.lockMessagingMatch(client, matchId, userId);
-      if (!available.ok) return available;
-      const result = await client.query<{ boundary_exists: boolean; updated_count: number }>(`
-        WITH boundary AS (
-          SELECT id, created_at
-          FROM chat_message
-          WHERE id = $2 AND match_id = $1
-        ), updated AS (
-          UPDATE chat_message AS message
-          SET read_at = clock_timestamp()
-          FROM boundary
-          WHERE message.match_id = $1 AND message.sender_id <> $3
-            AND message.read_at IS NULL
-            AND (message.created_at, message.id) <= (boundary.created_at, boundary.id)
-          RETURNING message.id
-        )
-        SELECT EXISTS (SELECT 1 FROM boundary) AS boundary_exists,
-          count(*)::integer AS updated_count
-        FROM updated
-      `, [matchId, messageId, userId]);
-      const update = result.rows[0]!;
-      if (!update.boundary_exists) return { ok: true, value: undefined };
-      return { ok: true, value: {
-        updated_count: update.updated_count,
-        participant_ids: [available.value.user1_id, available.value.user2_id],
-        read_through_message_id: messageId,
-      } };
     });
   }
 
@@ -481,87 +367,6 @@ export class MatchesRepository {
     });
   }
 
-  private async lockMessagingMatch(client: PoolClient, matchId: string, userId: string): Promise<MatchCommandResult<MatchRow>> {
-    const locked = await client.query<MatchRow & { database_now: Date }>(`
-      SELECT id, user1_id, user2_id, status, expires_at, purge_after,
-        continuation_initiator_id, created_at, last_message_at,
-        clock_timestamp() AS database_now
-      FROM match_init
-      WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
-      FOR UPDATE
-    `, [matchId, userId]);
-    const initial = locked.rows[0];
-    if (!initial) return { ok: false, reason: 'not_found' };
-    const now = initial.database_now;
-    let match: MatchRow = initial;
-    if (match.status === 'active' && new Date(match.expires_at).getTime() <= now.getTime()) {
-      const opened = await client.query<MatchRow>(`
-        UPDATE match_init
-        SET status = 'awaiting_continuation', expires_at = $2 + INTERVAL '24 hours'
-        WHERE id = $1
-        RETURNING id, user1_id, user2_id, status, expires_at, purge_after, continuation_initiator_id, created_at, last_message_at
-      `, [matchId, now]);
-      match = opened.rows[0]!;
-    }
-    if (match.status === 'awaiting_continuation' && new Date(match.expires_at).getTime() <= now.getTime()) {
-      await client.query(`
-        UPDATE match_init SET status = 'expired', purge_after = $2
-        WHERE id = $1
-      `, [matchId, new Date(now.getTime() + MATCH_PURGE_MS)]);
-      return { ok: false, reason: 'expired' };
-    }
-    if (match.status !== 'active' && match.status !== 'awaiting_continuation' && match.status !== 'confirmed') {
-      return { ok: false, reason: 'invalid_state' };
-    }
-    return { ok: true, value: match };
-  }
-
-  private async findIdempotentMessage(
-    client: PoolClient,
-    senderId: string,
-    idempotencyKey: string,
-  ): Promise<{ message: MessageRow; participant_ids: [string, string] } | undefined> {
-    const row = (await client.query<MessageRow & Pick<MatchRow, 'user1_id' | 'user2_id'>>(`
-      SELECT message.id, message.match_id, message.sender_id, message.content, message.created_at, message.read_at,
-        match_record.user1_id, match_record.user2_id
-      FROM chat_message AS message
-      JOIN match_init AS match_record ON match_record.id = message.match_id
-      WHERE message.sender_id = $1 AND message.idempotency_key = $2
-    `, [senderId, idempotencyKey])).rows[0];
-    if (!row) return undefined;
-    return {
-      message: {
-        id: row.id,
-        match_id: row.match_id,
-        sender_id: row.sender_id,
-        content: row.content,
-        created_at: row.created_at,
-        read_at: row.read_at,
-      },
-      participant_ids: [row.user1_id, row.user2_id],
-    };
-  }
-
-  async runMaintenanceAsLeader(now: Date): Promise<MaintenanceResult | undefined> {
-    return this.database.transaction(async (client) => {
-      const lock = await client.query<{ acquired: boolean }>('SELECT pg_try_advisory_xact_lock($1) AS acquired', [MAINTENANCE_LOCK]);
-      if (!lock.rows[0]?.acquired) return undefined;
-      return this.runMaintenance(client, now);
-    });
-  }
-
-  async runMaintenance(database: Queryable, now: Date): Promise<MaintenanceResult> {
-    const opened = await database.query(`
-      UPDATE match_init SET status = 'awaiting_continuation', expires_at = $1 + INTERVAL '24 hours'
-      WHERE status = 'active' AND expires_at <= $1
-    `, [now]);
-    const expired = await database.query(`
-      UPDATE match_init SET status = 'expired', purge_after = $2
-      WHERE status = 'awaiting_continuation' AND expires_at <= $1
-    `, [now, new Date(now.getTime() + MATCH_PURGE_MS)]);
-    const purged = await database.query(`DELETE FROM match_init WHERE status IN ('expired', 'ended') AND purge_after <= $1`, [now]);
-    return { opened: opened.rowCount ?? 0, expired: expired.rowCount ?? 0, purged: purged.rowCount ?? 0 };
-  }
 }
 
 class MatchMutationError extends Error {

@@ -214,7 +214,7 @@ describe('PostgreSQL mobile refresh sessions', () => {
   it('does not revive sessions after a ban is lifted', async () => {
     const own = await login();
     await pool.query("UPDATE user_account SET role = 'admin' WHERE user_id = $1", [other]);
-    const admin = new AdminRepository(database, {} as never);
+    const admin = new AdminRepository(database);
     await expect(admin.setUserBan(owner, true, 'Integration safety test', other, 'admin')).resolves.toBe('updated');
     await expect(admin.setUserBan(owner, false, 'Integration safety test', other, 'admin')).resolves.toBe('updated');
     await expect(sessions.rotate(own.token.jti, own.token.hash, tokens.newRefreshToken())).resolves.toBeUndefined();

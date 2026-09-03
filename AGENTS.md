@@ -39,6 +39,12 @@ Respecter autant que possible la séparation suivante :
 - repository/store : SQL/CQL, transactions, verrous et accès aux données ;
 - mapper/model : types métier fermés et représentation publique.
 
+Dans les matchs, la messagerie appartient à `MatchMessageRepository` et les tâches de fond à
+`MatchMaintenanceRepository`. Dans l'administration, isoler les agrégats dans `AdminMetricsRepository` et la
+réconciliation dans `AdminPhotoRepository`. Les webhooks Stripe appartiennent à `StripeWebhookService`, pas aux
+parcours client de `BillingService`. Les helpers `match-access.ts` et `admin-audit.ts` reçoivent la transaction de
+l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibilities.md`.
+
 ## Invariants à préserver
 
 - Les DTO refusent les champs inconnus. Ne pas accepter de champs de privilège ou d'identifiants/prix Stripe choisis par le client.

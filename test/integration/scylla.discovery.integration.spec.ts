@@ -9,6 +9,7 @@ import { DiscoveryRepository } from '../../src/discovery/discovery.repository';
 import { DiscoveryService } from '../../src/discovery/discovery.service';
 import { DiscoveryStore, uuidBucket } from '../../src/discovery/discovery.store';
 import { MatchesRepository } from '../../src/matches/matches.repository';
+import { MatchMessageRepository } from '../../src/matches/match-message.repository';
 import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { PrivacyService } from '../../src/privacy/privacy.service';
@@ -73,7 +74,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     discovery = new DiscoveryService(
       new DiscoveryRepository(database as never),
       store,
-      new MatchesService(new MatchesRepository(database as never), photos as never),
+      new MatchesService(new MatchesRepository(database as never), new MatchMessageRepository(database as never), photos as never),
       legalConfig() as never,
     );
     privacy = new PrivacyService(
@@ -241,7 +242,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     const service = new DiscoveryService(
       new DiscoveryRepository(databaseFor(pool) as never),
       unavailableStore as never,
-      new MatchesService(new MatchesRepository(databaseFor(pool) as never), photos as never),
+      new MatchesService(new MatchesRepository(databaseFor(pool) as never), new MatchMessageRepository(databaseFor(pool) as never), photos as never),
       legalConfig() as never,
     );
 

@@ -1,10 +1,12 @@
 import { AdminRepository } from '../../../src/admin/admin.repository';
+import { AdminMetricsRepository } from '../../../src/admin/admin-metrics.repository';
+import { AdminPhotoRepository } from '../../../src/admin/admin-photo.repository';
 
 describe('AdminRepository SQL access path', () => {
   it('binds an exact UUID search without casting the indexed account column', async () => {
     const userId = '11111111-1111-4111-8111-111111111111';
     const database = { query: jest.fn().mockResolvedValue({ rows: [] }) };
-    const repository = new AdminRepository(database as never, {} as never);
+    const repository = new AdminRepository(database as never);
 
     await repository.listUsers(
       undefined,
@@ -28,7 +30,7 @@ describe('AdminRepository account safety', () => {
   it('prevents an administrator from banning another administrator', async () => {
     const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ role: 'admin' }] }) };
     const database = { transaction: jest.fn((callback) => callback(client)) };
-    const repository = new AdminRepository(database as never, {} as never);
+    const repository = new AdminRepository(database as never);
 
     await expect(repository.setUserBan('target', true, 'reason', 'actor', 'admin')).resolves.toBe('forbidden');
     expect(client.query).toHaveBeenCalledTimes(1);
@@ -41,7 +43,7 @@ describe('AdminRepository account safety', () => {
       .mockResolvedValueOnce({ rowCount: 2 })
       .mockResolvedValue({ rowCount: 1 }) };
     const database = { transaction: jest.fn((callback) => callback(client)) };
-    const repository = new AdminRepository(database as never, {} as never);
+    const repository = new AdminRepository(database as never);
 
     await expect(repository.setUserBan('target', true, 'Safety incident', 'actor', 'admin')).resolves.toBe('updated');
     expect(client.query.mock.calls[2][0]).toContain('UPDATE refresh_token_family');
@@ -52,7 +54,7 @@ describe('AdminRepository account safety', () => {
   });
 });
 
-describe('AdminRepository revenue', () => {
+describe('AdminMetricsRepository revenue', () => {
   it('calculates an explicitly labelled Premium revenue estimate for the selected period', async () => {
     const database = { query: jest.fn()
       .mockResolvedValueOnce({ rows: [{
@@ -63,7 +65,7 @@ describe('AdminRepository revenue', () => {
         estimated_revenue_cents: '1998',
         currency: 'EUR',
       }] }) };
-    const repository = new AdminRepository(database as never, {} as never);
+    const repository = new AdminMetricsRepository(database as never);
 
     const revenue = await repository.revenue('previous_month');
 
@@ -82,7 +84,7 @@ describe('AdminRepository revenue', () => {
   });
 });
 
-describe('AdminRepository photo reconciliation', () => {
+describe('AdminPhotoRepository reconciliation', () => {
   it('moves a stale photo to deleting, requeues its event and audits the action', async () => {
     const client = { query: jest.fn()
       .mockResolvedValueOnce({ rows: [{
@@ -95,7 +97,7 @@ describe('AdminRepository photo reconciliation', () => {
       .mockResolvedValueOnce({ rowCount: 1 }) };
     const database = { transaction: jest.fn((callback) => callback(client)) };
     const outbox = { requeue: jest.fn().mockResolvedValue(undefined) };
-    const repository = new AdminRepository(database as never, outbox as never);
+    const repository = new AdminPhotoRepository(database as never, outbox as never);
 
     await expect(repository.reconcilePhoto(
       'photo',
@@ -129,7 +131,7 @@ describe('AdminRepository photo reconciliation', () => {
       }] }) };
     const database = { transaction: jest.fn((callback) => callback(client)) };
     const outbox = { requeue: jest.fn() };
-    const repository = new AdminRepository(database as never, outbox as never);
+    const repository = new AdminPhotoRepository(database as never, outbox as never);
 
     await expect(repository.reconcilePhoto(
       'photo',

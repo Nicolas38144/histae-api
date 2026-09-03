@@ -18,6 +18,8 @@ import type {
   RevenuePeriod,
 } from './admin.models';
 import { AdminRepository } from './admin.repository';
+import { AdminMetricsRepository } from './admin-metrics.repository';
+import { AdminPhotoRepository } from './admin-photo.repository';
 import { PhotosService } from '../photos/photos.service';
 import { OperationalStatusService } from '../operations/operational-status.service';
 
@@ -27,6 +29,8 @@ type AdminRole = 'admin' | 'superadmin';
 export class AdminService {
   constructor(
     private readonly admin: AdminRepository,
+    private readonly metricsRepository: AdminMetricsRepository,
+    private readonly photoRepository: AdminPhotoRepository,
     private readonly config: ConfigService,
     private readonly photos: PhotosService,
     private readonly operations: OperationalStatusService,
@@ -76,7 +80,7 @@ export class AdminService {
   }
 
   async metrics(revenuePeriod: RevenuePeriod): Promise<AdminMetrics> {
-    const [metrics, operations] = await Promise.all([this.admin.metrics(
+    const [metrics, operations] = await Promise.all([this.metricsRepository.metrics(
       this.config.legal.termsVersion,
       this.config.legal.privacyVersion,
       revenuePeriod,
@@ -86,7 +90,7 @@ export class AdminService {
   }
 
   revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {
-    return this.admin.revenue(revenuePeriod);
+    return this.metricsRepository.revenue(revenuePeriod);
   }
 
   async photoReconciliation(
@@ -98,7 +102,7 @@ export class AdminService {
     if (limit < 1 || limit > 100 || offset < 0 || (rawCursor && offset !== 0)) {
       throw invalidAdminRequest();
     }
-    const rows = await this.admin.listPhotoReconciliation(
+    const rows = await this.photoRepository.listPhotoReconciliation(
       status,
       stalePhotoCutoff(),
       limit + 1,
@@ -119,7 +123,7 @@ export class AdminService {
     adminRole: AdminRole,
   ): Promise<void> {
     const now = Date.now();
-    const result = await this.admin.reconcilePhoto(
+    const result = await this.photoRepository.reconcilePhoto(
       photoId,
       new Date(now - PHOTO_PROCESSING_STALE_AFTER_MILLIS),
       new Date(now - OUTBOX_LOCK_TIMEOUT_MILLIS),
@@ -174,7 +178,7 @@ function toAdminUser(row: AdminUserRow, photoUrl: string | null): AdminUser {
 }
 
 function toAdminPhotoReconciliation(
-  row: Awaited<ReturnType<AdminRepository['listPhotoReconciliation']>>[number],
+  row: Awaited<ReturnType<AdminPhotoRepository['listPhotoReconciliation']>>[number],
 ): AdminPhotoReconciliation {
   return {
     photo_id: row.id,

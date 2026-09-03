@@ -1,21 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { revokeFamilies } from '../auth/refresh-session.repository';
 import type { KeysetCursor } from '../common/pagination';
-import { DatabaseService, type Queryable } from '../database/database.service';
-import type { OutboxStatus } from '../outbox/outbox.models';
-import { OutboxRepository } from '../outbox/outbox.repository';
+import { DatabaseService } from '../database/database.service';
+import { recordAdminAudit } from './admin-audit';
 import type {
   AdminMessageRow,
-  AdminBusinessMetrics,
-  AdminPhotoMetrics,
-  AdminPhotoReconciliationRow,
-  AdminRevenue,
   AdminUserDetail,
   AdminUserRow,
   AdminUserStatus,
-  PhotoReconciliationFilter,
-  PhotoReconciliationResult,
-  RevenuePeriod,
 } from './admin.models';
 
 type AdminRole = 'admin' | 'superadmin';
@@ -24,7 +16,6 @@ type AdminRole = 'admin' | 'superadmin';
 export class AdminRepository {
   constructor(
     private readonly database: DatabaseService,
-    private readonly outbox: OutboxRepository,
   ) {}
 
   async listUsers(
@@ -135,7 +126,7 @@ export class AdminRepository {
         SELECT is_location_fresh, updated_at FROM user_presence WHERE user_id = $1
       `, [targetId])).rows[0] ?? null;
 
-      await this.recordAudit(
+      await recordAdminAudit(
         client,
         targetId,
         adminId,
@@ -189,7 +180,7 @@ export class AdminRepository {
         WHERE user_id = $1
       `, [targetId, isBanned, reason, adminId]);
       if (isBanned) await revokeFamilies(client, targetId, 'banned');
-      await this.recordAudit(
+      await recordAdminAudit(
         client,
         targetId,
         adminId,
@@ -199,236 +190,6 @@ export class AdminRepository {
       );
       return 'updated';
     });
-  }
-
-  async listPhotoReconciliation(
-    filter: PhotoReconciliationFilter,
-    staleBefore: Date,
-    limit: number,
-    offset: number,
-    cursor: KeysetCursor | undefined,
-  ): Promise<AdminPhotoReconciliationRow[]> {
-    return (await this.database.query<AdminPhotoReconciliationRow>(`
-      SELECT photo.id, photo.user_id, photo.status, photo.size_bytes,
-        photo.width, photo.height, photo.created_at, photo.updated_at,
-        event.status AS outbox_status, event.attempts AS outbox_attempts,
-        event.available_at AS outbox_available_at,
-        event.locked_at AS outbox_locked_at,
-        event.last_error_code AS outbox_last_error_code,
-        CASE
-          WHEN photo.status IN ('pending', 'processing') THEN 'stale_processing'
-          WHEN event.status = 'dead_letter' THEN 'deletion_dead_letter'
-          WHEN event.status = 'processing' THEN 'deletion_processing'
-          WHEN event.status = 'pending' AND event.attempts > 0 THEN 'deletion_retry_scheduled'
-          WHEN event.status = 'pending' THEN 'deletion_queued'
-            WHEN event.status = 'completed' THEN 'deletion_event_completed'
-            WHEN event.status = 'discarded' THEN 'deletion_event_discarded'
-          ELSE 'deletion_event_missing'
-        END AS issue,
-        to_char(photo.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
-      FROM user_photo AS photo
-      LEFT JOIN outbox_event AS event
-        ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
-      WHERE (
-          (photo.status IN ('pending', 'processing') AND photo.updated_at <= $1)
-          OR photo.status = 'deleting'
-        )
-        AND ($2 = 'all'
-          OR ($2 = 'stale_processing' AND photo.status IN ('pending', 'processing'))
-          OR ($2 = 'deleting' AND photo.status = 'deleting')
-          OR ($2 = 'dead_letter' AND photo.status = 'deleting' AND event.status = 'dead_letter'))
-        AND ($5::timestamptz IS NULL
-          OR (photo.updated_at, photo.id) < ($5::timestamptz, $6::uuid))
-      ORDER BY photo.updated_at DESC, photo.id DESC
-      LIMIT $3 OFFSET $4
-    `, [staleBefore, filter, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
-  }
-
-  async reconcilePhoto(
-    photoId: string,
-    photoStaleBefore: Date,
-    outboxStaleBefore: Date,
-    adminId: string,
-    adminRole: AdminRole,
-    reason: string,
-  ): Promise<PhotoReconciliationResult> {
-    return this.database.transaction(async (client) => {
-      const photo = (await client.query<{
-        user_id: string;
-        status: 'pending' | 'processing' | 'ready' | 'deleting';
-        updated_at: Date;
-      }>(`
-        SELECT user_id, status, updated_at
-        FROM user_photo
-        WHERE id = $1
-        FOR UPDATE
-      `, [photoId])).rows[0];
-      if (!photo) return 'not_found';
-      if (photo.status === 'ready'
-        || (photo.status !== 'deleting' && photo.updated_at > photoStaleBefore)) {
-        return 'not_actionable';
-      }
-
-      const event = (await client.query<{
-        status: OutboxStatus;
-        locked_at: Date | null;
-      }>(`
-        SELECT status, locked_at
-        FROM outbox_event
-        WHERE event_type = 'photo.delete' AND aggregate_id = $1
-        FOR UPDATE
-      `, [photoId])).rows[0];
-      if (event?.status === 'processing'
-        && event.locked_at !== null
-        && event.locked_at > outboxStaleBefore) {
-        return 'already_processing';
-      }
-
-      await client.query(`
-        UPDATE user_photo
-        SET status = 'deleting', updated_at = clock_timestamp()
-        WHERE id = $1
-      `, [photoId]);
-      await this.outbox.requeue(client, {
-        eventType: 'photo.delete',
-        aggregateId: photoId,
-      });
-      await this.recordAudit(
-        client,
-        photo.user_id,
-        adminId,
-        adminRole,
-        'admin_reconcile_photo',
-        reason,
-      );
-      return 'queued';
-    });
-  }
-
-  async revenue(revenuePeriod: RevenuePeriod): Promise<AdminRevenue> {
-    const row = (await this.database.query<{
-      period_start: Date | null;
-      period_end: Date;
-      premium_subscriptions: number;
-      price_per_subscription_cents: number;
-      estimated_revenue_cents: string | number;
-      currency: string;
-    }>(`
-      WITH anchor AS (
-        SELECT clock_timestamp() AS now_utc,
-          clock_timestamp() AT TIME ZONE 'Europe/Paris' AS paris_now
-      ), bounds AS (
-        SELECT
-          CASE $1::text
-            WHEN 'last_7_days' THEN now_utc - INTERVAL '7 days'
-            WHEN 'last_30_days' THEN now_utc - INTERVAL '30 days'
-            WHEN 'month_to_date' THEN date_trunc('month', paris_now) AT TIME ZONE 'Europe/Paris'
-            WHEN 'previous_month' THEN date_trunc('month', paris_now - INTERVAL '1 month') AT TIME ZONE 'Europe/Paris'
-            WHEN 'year_to_date' THEN date_trunc('year', paris_now) AT TIME ZONE 'Europe/Paris'
-            WHEN 'all_time' THEN NULL
-          END AS period_start,
-          CASE $1::text
-            WHEN 'previous_month' THEN date_trunc('month', paris_now) AT TIME ZONE 'Europe/Paris'
-            ELSE now_utc
-          END AS period_end
-        FROM anchor
-      )
-      SELECT bounds.period_start, bounds.period_end,
-        count(subscription.user_id)::int AS premium_subscriptions,
-        COALESCE(max(plan.monthly_price_cents), 0)::int AS price_per_subscription_cents,
-        (count(subscription.user_id) * COALESCE(max(plan.monthly_price_cents), 0))::bigint AS estimated_revenue_cents,
-        COALESCE(max(plan.currency), 'EUR')::text AS currency
-      FROM bounds
-      LEFT JOIN subscription_plan AS plan ON plan.code = 'premium'
-      LEFT JOIN user_subscription AS subscription ON subscription.plan = plan.code
-        AND (bounds.period_start IS NULL OR subscription.updated_at >= bounds.period_start)
-        AND subscription.updated_at < bounds.period_end
-      GROUP BY bounds.period_start, bounds.period_end
-    `, [revenuePeriod])).rows[0];
-
-    return {
-      period: revenuePeriod,
-      period_start: row?.period_start ?? null,
-      period_end: row?.period_end ?? new Date(),
-      premium_subscriptions: Number(row?.premium_subscriptions ?? 0),
-      price_per_subscription_cents: Number(row?.price_per_subscription_cents ?? 0),
-      estimated_revenue_cents: Number(row?.estimated_revenue_cents ?? 0),
-      currency: row?.currency ?? 'EUR',
-      basis: 'premium_monthly_price',
-    };
-  }
-
-  async metrics(
-    termsVersion: string,
-    privacyVersion: string,
-    revenuePeriod: RevenuePeriod,
-    photoStaleBefore: Date,
-  ): Promise<AdminBusinessMetrics> {
-    const users = (await this.database.query<AdminBusinessMetrics['users']>(`
-      SELECT count(*)::int AS total,
-        count(*) FILTER (WHERE NOT is_banned)::int AS active,
-        count(*) FILTER (WHERE is_banned)::int AS banned,
-        count(*) FILTER (WHERE created_at >= now() - INTERVAL '30 days')::int AS created_last_30_days,
-        count(*) FILTER (WHERE role <> 'user' OR (
-          EXISTS (SELECT 1 FROM user_consent WHERE user_id = user_account.user_id
-            AND consent_type = 'terms_of_service_acceptance' AND granted AND withdrawn_at IS NULL AND document_version = $1)
-          AND EXISTS (SELECT 1 FROM user_consent WHERE user_id = user_account.user_id
-            AND consent_type = 'privacy_notice_acknowledgement' AND granted AND withdrawn_at IS NULL AND document_version = $2)
-        ))::int AS onboarded
-      FROM user_account WHERE deleted_at IS NULL
-    `, [termsVersion, privacyVersion])).rows[0] ?? { total: 0, active: 0, banned: 0, onboarded: 0, created_last_30_days: 0 };
-    const moderation = (await this.database.query<AdminBusinessMetrics['moderation']>(`
-      SELECT (SELECT count(*)::int FROM user_report WHERE status = 'pending') AS pending_reports,
-        (SELECT count(*)::int FROM content_moderation_case WHERE status = 'pending') AS pending_content,
-        (SELECT count(*)::int FROM data_subject_request WHERE status IN ('pending', 'in_progress')) AS open_data_requests
-    `)).rows[0] ?? { pending_reports: 0, pending_content: 0, open_data_requests: 0 };
-    const matchRows = (await this.database.query<{ status: keyof AdminBusinessMetrics['matches']; count: number }>(`
-      SELECT status, count(*)::int AS count FROM match_init GROUP BY status
-    `)).rows;
-    const matches: AdminBusinessMetrics['matches'] = { active: 0, awaiting_continuation: 0, confirmed: 0, expired: 0, ended: 0 };
-    for (const row of matchRows) matches[row.status] = row.count;
-    const messages = (await this.database.query<{ total: number }>('SELECT count(*)::int AS total FROM chat_message')).rows[0] ?? { total: 0 };
-    const photos = (await this.database.query<AdminPhotoMetrics>(`
-      SELECT
-        count(*) FILTER (WHERE photo.status = 'pending')::int AS pending,
-        count(*) FILTER (WHERE photo.status = 'processing')::int AS processing,
-        count(*) FILTER (WHERE photo.status = 'ready')::int AS ready,
-        count(*) FILTER (WHERE photo.status = 'deleting')::int AS deleting,
-        count(*) FILTER (WHERE photo.status IN ('pending', 'processing')
-          AND photo.updated_at <= $1)::int AS stale_processing,
-        count(*) FILTER (WHERE photo.status = 'deleting'
-          AND event.status = 'dead_letter')::int AS deletion_dead_letters,
-        count(*) FILTER (WHERE photo.status = 'deleting'
-          AND (event.id IS NULL OR event.status = 'completed'))::int
-          AS deletion_without_active_event
-      FROM user_photo AS photo
-      LEFT JOIN outbox_event AS event
-        ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
-    `, [photoStaleBefore])).rows[0] ?? {
-      pending: 0,
-      processing: 0,
-      ready: 0,
-      deleting: 0,
-      stale_processing: 0,
-      deletion_dead_letters: 0,
-      deletion_without_active_event: 0,
-    };
-    const subscriptions = (await this.database.query<{ plan: string; users: number }>(`
-      WITH account_plans AS MATERIALIZED (
-        SELECT COALESCE(subscription.plan, 'free') AS plan,
-          count(*)::int AS users
-        FROM user_account AS account
-        LEFT JOIN user_subscription AS subscription ON subscription.user_id = account.user_id
-        WHERE account.deleted_at IS NULL
-        GROUP BY COALESCE(subscription.plan, 'free')
-      )
-      SELECT plan.code AS plan, COALESCE(account_plans.users, 0)::int AS users
-      FROM subscription_plan AS plan
-      LEFT JOIN account_plans ON account_plans.plan = plan.code
-      ORDER BY plan.code
-    `)).rows;
-    const revenue = await this.revenue(revenuePeriod);
-    return { users, moderation, matches, messages, photos, subscriptions, revenue };
   }
 
   async messages(
@@ -459,20 +220,6 @@ export class AdminRepository {
     });
   }
 
-  private async recordAudit(
-    database: Queryable,
-    accessedUserId: string,
-    adminId: string,
-    adminRole: AdminRole,
-    action: 'view_profile' | 'admin_ban' | 'admin_unban' | 'admin_reconcile_photo',
-    reason: string,
-  ): Promise<void> {
-    await database.query(`
-      INSERT INTO data_access_log (
-        accessed_user_id, accessor_id, accessor_role, action, reason
-      ) VALUES ($1, $2, $3, $4, $5)
-    `, [accessedUserId, adminId, adminRole, action, reason]);
-  }
 }
 
 function dateOnly(value: Date | string | null): string | null {

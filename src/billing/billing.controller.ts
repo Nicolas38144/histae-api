@@ -9,6 +9,7 @@ import { RateLimitService } from '../ratelimit/rate-limit.service';
 import type { CheckoutSessionView, SubscriptionView } from './billing.models';
 import { BillingService } from './billing.service';
 import { CreateCheckoutDto } from './dto/billing.dto';
+import { StripeWebhookService } from './stripe-webhook.service';
 
 @Controller('api/users/me/subscription')
 @UseGuards(JwtActiveGuard)
@@ -50,7 +51,7 @@ export class BillingController {
 
 export class StripeWebhookController {
   constructor(
-    private readonly billing: BillingService,
+    private readonly webhooks: StripeWebhookService,
     private readonly limits: RateLimitService,
     private readonly config: ConfigService,
   ) {}
@@ -68,7 +69,7 @@ export class StripeWebhookController {
       this.config.rateLimit.billingWebhook,
       'billing_webhook_rate_limit_exceeded',
     );
-    await this.billing.handleStripeWebhook(request.rawBody, signature);
+    await this.webhooks.handle(request.rawBody, signature);
     return { received: true };
   }
 }

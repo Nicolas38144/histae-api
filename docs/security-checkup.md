@@ -91,6 +91,10 @@ directement corrigeables trouvés pendant la revue ont été traités.
   transactionnellement après authentification récente ; une suppression photo encore référencée ne peut pas être
   abandonnée. Les passkeys peuvent être renommées et les sessions gérées individuellement sans exposer de secret.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
+- Le refactoring des responsabilités conserve les transactions et guards existants : la révélation et les messages
+  utilisent le même contrôle de match verrouillé, la réconciliation garde son audit dans le commit métier et les
+  notifications Stripe restent après commit uniquement. Les composants extraits sont couverts par le démarrage
+  Nest réel et les tests PostgreSQL, sans nouvelle dépendance ni migration.
 
 ## Risques résiduels et actions avant production
 
@@ -133,9 +137,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - Audit de dépendances du 1er septembre : `pnpm audit --audit-level low` et sa variante `--prod`, aucune
   vulnérabilité connue à cette date. Non relancé pour les sessions mobiles ; aucune dépendance ajoutée ou modifiée.
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 56 suites, 346 cas réussis ;
+- tests unitaires : 57 suites, 356 cas réussis ;
 - tests e2e Fastify : 13 suites, 82 cas réussis ;
-- `pnpm test` : 69 suites et 428 cas autonomes réussis ;
+- `pnpm test` : 70 suites et 438 cas autonomes réussis ;
 - intégrations PostgreSQL, ScyllaDB et Redis : 4 suites, 66 cas réussis après redémarrage des conteneurs locaux ;
 - migrations PostgreSQL : chaîne jusqu'à `010_mobile_refresh_sessions` vérifiée dans un schéma temporaire,
   y compris des anciens tokens actifs/révoqués ; 010 appliquée sans reset sur `histae-dev` et deuxième migration idempotente ;

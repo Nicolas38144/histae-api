@@ -3,12 +3,14 @@ import { AuthModule } from '../auth/auth.module';
 import { ContinuationController, MatchesController } from './matches.controller';
 import { MatchMaintenanceService } from './match-maintenance.service';
 import { MatchesRepository } from './matches.repository';
+import { MatchMessageRepository } from './match-message.repository';
+import { MatchMaintenanceRepository } from './match-maintenance.repository';
 import { MatchesService } from './matches.service';
 
 @Module({
   imports: [AuthModule],
   controllers: [MatchesController, ContinuationController],
-  providers: [MatchesRepository, MatchesService, MatchMaintenanceService],
+  providers: [MatchesRepository, MatchMessageRepository, MatchMaintenanceRepository, MatchesService, MatchMaintenanceService],
   exports: [MatchesService, MatchMaintenanceService],
 })
 export class MatchesModule {}

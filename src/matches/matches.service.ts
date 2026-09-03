@@ -9,6 +9,7 @@ import type { PublicMatch, PublicMessage, PublicUserMatch } from './matches.mapp
 import { toPublicMatch, toPublicMessage, toPublicUserMatch } from './matches.mapper';
 import type { MatchAvailabilityFailure, MatchRow } from './matches.models';
 import { MatchesRepository } from './matches.repository';
+import { MatchMessageRepository } from './match-message.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
 import { PhotosService } from '../photos/photos.service';
 
@@ -21,6 +22,7 @@ export type ContinuationQuota = { plan: string; used: number; weekly_limit?: num
 export class MatchesService {
   constructor(
     private readonly matches: MatchesRepository,
+    private readonly messagesRepository: MatchMessageRepository,
     private readonly photos: PhotosService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
@@ -133,7 +135,7 @@ export class MatchesService {
       throw apiError(400, 'invalid_message_request', 'The message request is invalid.');
     }
     const cursor = decodeCursor(rawCursor);
-    const result = await this.matches.messagesForUser(matchId, userId, limit + 1, offset, cursor);
+    const result = await this.messagesRepository.messagesForUser(matchId, userId, limit + 1, offset, cursor);
     if (!result.ok) throwMatchCommandError(result.reason, 'message');
     const page = cursorPage(result.value, limit, (row) => row.cursor_at);
     return { items: page.items.map(toPublicMessage), next_cursor: page.next_cursor };
@@ -148,7 +150,7 @@ export class MatchesService {
     const content = rawContent.trim();
     if (!content || [...content].length > 2_000) throw apiError(400, 'invalid_message_request', 'The message request is invalid.');
     const idempotencyKey = normalizeIdempotencyKey(idempotencyInput);
-    const result = await this.matches.createMessage(randomUUID(), matchId, senderId, content, idempotencyKey);
+    const result = await this.messagesRepository.createMessage(randomUUID(), matchId, senderId, content, idempotencyKey);
     if (!result.ok && result.reason === 'idempotency_conflict') {
       throw apiError(409, 'idempotency_key_conflict', 'The idempotency key was already used for another request.');
     }
@@ -159,7 +161,7 @@ export class MatchesService {
   }
 
   async markAsRead(matchId: string, messageId: string, userId: string): Promise<void> {
-    const result = await this.matches.markMessageRead(matchId, messageId, userId);
+    const result = await this.messagesRepository.markMessageRead(matchId, messageId, userId);
     if (!result.ok) throwMatchCommandError(result.reason, 'message');
     if (!result.value) {
       throw apiError(404, 'message_not_found', 'The message could not be found.');
@@ -168,7 +170,7 @@ export class MatchesService {
   }
 
   async markReadThrough(matchId: string, messageId: string, userId: string): Promise<number> {
-    const result = await this.matches.markMessagesReadThrough(matchId, messageId, userId);
+    const result = await this.messagesRepository.markMessagesReadThrough(matchId, messageId, userId);
     if (!result.ok) throwMatchCommandError(result.reason, 'message');
     if (!result.value) throw apiError(404, 'message_not_found', 'The message could not be found.');
     if (result.value.updated_count > 0) {

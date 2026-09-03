@@ -15,19 +15,20 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire actuel : **73 fichiers de test, 73 suites Jest et 494 cas** avec toutes les intégrations :
+Inventaire actuel : **74 fichiers de test, 74 suites Jest et 504 cas** avec toutes les intégrations :
 
-- 346 tests unitaires ;
+- 356 tests unitaires ;
 - 82 tests e2e ;
 - 35 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 19 tests d’intégration PostgreSQL des sessions mobiles ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 56 suites unitaires, 13 suites e2e et 4 suites d’intégration. `pnpm test` exécute les 69 suites autonomes et leurs 428 cas ; `pnpm run test:integration` exécute directement les 4 suites réelles et leurs 66 cas, sans flag d’activation.
+Jest affiche 57 suites unitaires, 13 suites e2e et 4 suites d’intégration. `pnpm test` exécute les 70 suites autonomes et leurs 438 cas ; `pnpm run test:integration` exécute directement les 4 suites réelles et leurs 66 cas, sans flag d’activation.
 
-Le 3 septembre 2026, TypeScript, ESLint, le build, les **69 suites et 428 cas autonomes** ainsi que les
-**4 suites et 66 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **73 suites et 494 cas**.
+Le 3 septembre 2026, après extraction des responsabilités métier, TypeScript, ESLint, le build, les **70 suites
+et 438 cas autonomes** ainsi que les **4 suites et 66 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis
+passent, soit **74 suites et 504 cas**. Le découpage est décrit dans `docs/module-responsibilities.md`.
 La migration `010_mobile_refresh_sessions` est appliquée sans reset sur `histae-dev` et un deuxième lancement
 de `db:migrate` confirme la compatibilité. La chaîne complète est aussi rejouée dans un schéma isolé, notamment
 avec des refresh tokens historiques actifs et révoqués. Les premières erreurs de connexion ont disparu après
@@ -108,9 +109,9 @@ donc la référence pour valider les effets métier.
 
 ### `test/unit/admin/admin.repository.spec.ts` — 6 tests
 
-Vérifie la protection entre rôles administratifs, la révocation des sessions et l’audit lors d’un bannissement,
-le calcul du revenu Premium estimé, la relance transactionnelle d’une photo et le refus de reprendre le verrou d’un
-worker actif. Un test supplémentaire garantit que la recherche exacte conserve la colonne UUID indexable.
+Vérifie dans `AdminRepository` la protection entre rôles, la révocation/audit du bannissement et la recherche
+UUID indexable ; dans `AdminMetricsRepository`, le revenu estimé ; dans `AdminPhotoRepository`, la relance
+transactionnelle et auditée ainsi que le refus de reprendre le verrou d'un worker actif.
 
 ### `test/unit/admin/admin.service.spec.ts` — 8 tests
 
@@ -206,9 +207,11 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 75 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 80 tests paramétrés
 
-Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 75 classes injectées principales, y compris le repository des sessions mobiles, Redis, le stockage photo, l’outbox et ses opérations admin, le suivi de maintenance, le module mobile, la modération, WebAuthn admin et les cinq composants Stripe Billing.
+Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 80 classes injectées principales, y compris
+les repositories spécialisés des messages, maintenance, métriques et réconciliation admin, le service webhook Stripe,
+les sessions mobiles, Redis, le stockage photo, l'outbox, les opérations, la modération et WebAuthn admin.
 
 Chaque cas vérifie que `emitDecoratorMetadata` contient des tokens de constructeur réels et jamais `Function`, `Object` ou `undefined`. Ce test empêche la régression où un import `type` TypeScript supprimerait au runtime le token dont Nest a besoin pour l’injection de dépendances.
 
@@ -335,16 +338,23 @@ de l’abandon non sûr.
 3. Reprogramme une panne S3 avec un code d’erreur normalisé, sans détail sensible.
 4. Signale le passage en dead-letter après épuisement des dix tentatives.
 
-### `test/unit/billing/billing.service.spec.ts` — 8 tests
+### `test/unit/billing/billing.service.spec.ts` — 4 tests
 
 1. Crée un Checkout mobile avec le Price choisi exclusivement côté serveur et le premier essai.
 2. Rejoue une session persistée sans second appel Stripe.
 3. Supprime le Customer Stripe nouvellement créé si sa liaison locale échoue.
-4. Projette un webhook d’abonnement vérifié et émet `subscription.updated` une seule fois.
-5. Récupère l’état courant lors d’un échec de facture, persiste la facture et programme la notification.
-6. Acquitte un Event ID déjà traité sans nouvel appel réseau Stripe.
-7. Refuse un webhook sans signature avant toute écriture.
-8. Supprime le Customer Stripe pendant l’effacement du compte.
+4. Supprime le Customer Stripe pendant l’effacement du compte.
+
+### `test/unit/billing/stripe-webhook.service.spec.ts` — 8 tests
+
+1. Projette un webhook d’abonnement vérifié et émet `subscription.updated` une seule fois.
+2. Récupère l’état courant lors d’un échec de facture, persiste la facture et programme la notification.
+3. Acquitte un Event ID déjà traité sans nouvel appel réseau Stripe.
+4. Refuse un webhook sans signature avant toute écriture.
+5. Ignore les événements non pris en charge et refuse un mode live/test incohérent avant la base.
+6. Vérifie l'ordre récupération Stripe, transaction, projection, commit puis notification.
+7. Ne livre aucun effet lorsque la transaction échoue.
+8. Ne livre aucun effet d'un doublon concurrent détecté dans la transaction.
 
 ### `test/unit/billing/stripe.gateway.spec.ts` — 1 test
 
@@ -405,10 +415,11 @@ Suite `DiscoveryStore` avec un client Scylla simulé :
 2. Vérifie qu’une réparation du miroir conserve l’échéance initiale au lieu de redonner un an de rétention.
 3. Vérifie le bucketing déterministe des UUID dans 32 partitions et le refus d’une valeur invalide.
 
-### `test/unit/matches/matches.repository.spec.ts` — 2 tests
+### `test/unit/matches/matches.repository.spec.ts` — 3 tests
 
-Vérifie l’ordre et les compteurs des trois phases de maintenance, puis garantit que les deux branches participant
-sont fusionnées et limitées avant les agrégats coûteux de la liste détaillée.
+Vérifie dans `MatchMaintenanceRepository` le refus de travailler sans le verrou de leader, l'ordre et les compteurs
+des trois phases de maintenance. Vérifie dans `MatchesRepository` que les deux branches participant sont fusionnées
+et limitées avant les agrégats coûteux de la liste détaillée.
 
 ### `test/unit/matches/matches.service.spec.ts` — 2 tests
 
@@ -709,8 +720,8 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 428 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 66 cas réels et vérifier que les 494 cas passent au total.
+5. exécuter `pnpm test` pour les 438 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 66 cas réels et vérifier que les 504 cas passent au total.
 
 Voir le bilan exécuté en tête de document. La validation des sessions mobiles couvre PostgreSQL, ScyllaDB et Redis,
 mais ne rejoue pas l'analyse WebP réelle ni le smoke test du bucket S3-compatible précédemment validés.

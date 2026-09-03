@@ -22,7 +22,7 @@ describe('MatchesService mobile messaging', () => {
       .mockResolvedValueOnce({ ok: true, value: { message, participant_ids: [SENDER_ID, RECIPIENT_ID], created: true } })
       .mockResolvedValueOnce({ ok: true, value: { message, participant_ids: [SENDER_ID, RECIPIENT_ID], created: false } }) };
     const delivery = { messageCreated: jest.fn() };
-    const service = new MatchesService(repository as never, photos as never, delivery as never);
+    const service = new MatchesService({} as never, repository as never, photos as never, delivery as never);
 
     await expect(service.sendMessage(MATCH_ID, SENDER_ID, '  Bonjour  ', IDEMPOTENCY_KEY)).resolves.toEqual(expect.objectContaining({ id: MESSAGE_ID }));
     await expect(service.sendMessage(MATCH_ID, SENDER_ID, 'Bonjour', IDEMPOTENCY_KEY)).resolves.toEqual(expect.objectContaining({ id: MESSAGE_ID }));
@@ -33,7 +33,7 @@ describe('MatchesService mobile messaging', () => {
 
   it('maps repository idempotency conflicts to the stable public error', async () => {
     const repository = { createMessage: jest.fn().mockResolvedValue({ ok: false, reason: 'idempotency_conflict' }) };
-    const service = new MatchesService(repository as never, photos as never);
+    const service = new MatchesService({} as never, repository as never, photos as never);
 
     await expect(service.sendMessage(MATCH_ID, SENDER_ID, 'Autre contenu', IDEMPOTENCY_KEY)).rejects.toEqual(expect.objectContaining({
       status: 409,

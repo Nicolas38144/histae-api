@@ -7,9 +7,11 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { AppModule } from '../../src/app.module';
 import { AuthRepository } from '../../src/auth/auth.repository';
-import { AdminRepository } from '../../src/admin/admin.repository';
+import { AdminPhotoRepository } from '../../src/admin/admin-photo.repository';
+import { AdminMetricsRepository } from '../../src/admin/admin-metrics.repository';
 import { DiscoveryRepository } from '../../src/discovery/discovery.repository';
 import { MatchesRepository } from '../../src/matches/matches.repository';
+import { MatchMessageRepository } from '../../src/matches/match-message.repository';
 import type { MatchRow } from '../../src/matches/matches.models';
 import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
@@ -256,10 +258,7 @@ describe('PostgreSQL schema contract', () => {
 
   it('calculates the Premium revenue estimate from the catalog price and selected period', async () => {
     const repositoryDatabase = databaseFor(pool);
-    const repository = new AdminRepository(
-      repositoryDatabase as never,
-      new OutboxRepository(repositoryDatabase as never),
-    );
+    const repository = new AdminMetricsRepository(repositoryDatabase as never);
     const revenue = await repository.revenue('all_time');
     const expected = await pool.query<{ subscriptions: number; monthly_price_cents: number }>(`
       SELECT count(subscription.user_id)::int AS subscriptions,
@@ -541,7 +540,8 @@ describe('PostgreSQL schema contract', () => {
     const photoId = randomUUID();
     const database = databaseFor(pool);
     const outbox = new OutboxRepository(database as never);
-    const admin = new AdminRepository(database as never, outbox);
+    const admin = new AdminPhotoRepository(database as never, outbox);
+    const adminMetrics = new AdminMetricsRepository(database as never);
     const now = new Date();
     const staleBefore = new Date(now.getTime() - 30 * 60 * 1_000);
     await insertAccounts(pool, userId, adminId);
@@ -576,7 +576,7 @@ describe('PostgreSQL schema contract', () => {
         }),
       ]);
 
-      const metrics = await admin.metrics(
+      const metrics = await adminMetrics.metrics(
         'terms-v1',
         'privacy-v1',
         'month_to_date',
@@ -621,7 +621,7 @@ describe('PostgreSQL schema contract', () => {
         SET status = 'completed', processed_at = clock_timestamp()
         WHERE event_type = 'photo.delete' AND aggregate_id = $1
       `, [photoId]);
-      const inconsistentMetrics = await admin.metrics(
+      const inconsistentMetrics = await adminMetrics.metrics(
         'terms-v1',
         'privacy-v1',
         'month_to_date',
@@ -1274,7 +1274,7 @@ describe('PostgreSQL schema contract', () => {
     await pool.query(`
       INSERT INTO match_state (match_id, user_id) VALUES ($1, $2), ($1, $3)
     `, [matchId, firstUserId, secondUserId]);
-    const repository = new MatchesRepository(databaseFor(pool) as never);
+    const repository = new MatchMessageRepository(databaseFor(pool) as never);
 
     try {
       await expect(repository.createMessage(randomUUID(), matchId, firstUserId, 'too late', randomUUID()))
@@ -1307,6 +1307,7 @@ describe('PostgreSQL schema contract', () => {
     `, [randomUUID(), randomUUID(), randomUUID(), matchId, firstUserId]);
     const service = new MatchesService(
       new MatchesRepository(databaseFor(pool) as never),
+      new MatchMessageRepository(databaseFor(pool) as never),
       { urlForKey: async (key: string | null): Promise<string | null> => key } as never,
     );
 
@@ -1500,6 +1501,7 @@ describe('PostgreSQL schema contract', () => {
     const key = randomUUID();
     await insertAccounts(pool, firstUserId, secondUserId);
     const repository = new MatchesRepository(databaseFor(pool) as never);
+    const messageRepository = new MatchMessageRepository(databaseFor(pool) as never);
     const match: MatchRow = {
       id: matchId,
       user1_id: firstUserId,
@@ -1514,9 +1516,9 @@ describe('PostgreSQL schema contract', () => {
 
     try {
       await repository.create(match);
-      const first = await repository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
-      const replay = await repository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
-      await expect(repository.createMessage(randomUUID(), matchId, firstUserId, 'different', key))
+      const first = await messageRepository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
+      const replay = await messageRepository.createMessage(randomUUID(), matchId, firstUserId, 'hello', key);
+      await expect(messageRepository.createMessage(randomUUID(), matchId, firstUserId, 'different', key))
         .resolves.toEqual({ ok: false, reason: 'idempotency_conflict' });
       expect(first).toEqual(expect.objectContaining({ ok: true, value: expect.objectContaining({ created: true }) }));
       expect(replay).toEqual(expect.objectContaining({ ok: true, value: expect.objectContaining({ created: false }) }));
@@ -1577,6 +1579,7 @@ describe('PostgreSQL schema contract', () => {
       ) VALUES ($1, 'profile_answer', $2, 'pending', 'test_v1')
     `, [otherId, otherAnswerId]);
     const repository = new MatchesRepository(databaseFor(pool) as never);
+    const messageRepository = new MatchMessageRepository(databaseFor(pool) as never);
     const match: MatchRow = {
       id: matchId,
       user1_id: firstUserId,
@@ -1591,7 +1594,7 @@ describe('PostgreSQL schema contract', () => {
 
     try {
       await repository.create(match);
-      await repository.createMessage(randomUUID(), matchId, otherId, 'latest message', randomUUID());
+      await messageRepository.createMessage(randomUUID(), matchId, otherId, 'latest message', randomUUID());
       const hidden = await repository.listDetailedForUser(viewerId, 20, 0);
       expect(hidden[0]).toEqual(expect.objectContaining({
         other_user_id: otherId,
@@ -1651,7 +1654,7 @@ describe('PostgreSQL schema contract', () => {
         ($2, $4, $6, 'outgoing', '2026-08-20T10:01:00Z'),
         ($3, $4, $5, 'incoming new', '2026-08-20T10:02:00Z')
     `, [randomUUID(), randomUUID(), newestId, matchId, secondUserId, firstUserId]);
-    const repository = new MatchesRepository(databaseFor(pool) as never);
+    const repository = new MatchMessageRepository(databaseFor(pool) as never);
 
     try {
       const result = await repository.markMessagesReadThrough(matchId, newestId, firstUserId);

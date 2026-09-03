@@ -76,6 +76,11 @@ Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `
 La convention est : contrôleur pour HTTP, DTO pour la validation stricte des entrées, service pour les règles métier, repository
 ou store pour SQL/CQL et mapper/model pour les représentations publiques.
 
+Les messages et la maintenance des matchs ont leurs repositories dédiés, tout comme les métriques et la
+réconciliation photo administratives. `StripeWebhookService` sépare l'ingestion Stripe des parcours Checkout/portail
+de `BillingService`. Les helpers transactionnels partagés préservent verrous, audits et atomicité ; aucun contrat
+HTTP ni schéma n'est modifié. Voir `docs/module-responsibilities.md` pour les frontières à maintenir.
+
 ## 3. Contrat HTTP et sécurité
 
 Les routes métier sont sous `/api`. Les seules exceptions sont `/health/live` et `/health/ready`. L’API
