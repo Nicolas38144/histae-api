@@ -23,6 +23,9 @@ describe('Auth HTTP contract', () => {
     verifyOtp: jest.fn().mockResolvedValue({ access_token: 'access-token', refresh_token: 'refresh-token' }),
     refresh: jest.fn().mockResolvedValue({ access_token: 'next-access', refresh_token: 'next-refresh' }),
     logout: jest.fn().mockResolvedValue(undefined),
+    listSessions: jest.fn().mockResolvedValue({ sessions: [{ id: DEVICE_ID, current: true }], next_cursor: null }),
+    revokeSession: jest.fn().mockResolvedValue(undefined),
+    logoutAll: jest.fn().mockResolvedValue({ revoked_sessions: 2 }),
   };
   const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
   const activeGuard: CanActivate = {
@@ -30,6 +33,7 @@ describe('Auth HTTP contract', () => {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
       request.auth = {
         userId: USER_ID,
+        mobileSession: { id: DEVICE_ID, accessExpiresAt: 2_000_000_000_000 },
         account: { user_id: USER_ID, role: 'user', is_banned: false, onboarding_complete: true },
       };
       return true;
@@ -127,7 +131,7 @@ describe('Auth HTTP contract', () => {
     });
 
     expect(response.statusCode).toBe(204);
-    expect(auth.logout).toHaveBeenCalledWith(USER_ID, refreshToken, DEVICE_ID);
+    expect(auth.logout).toHaveBeenCalledWith(USER_ID, DEVICE_ID, refreshToken, DEVICE_ID);
   });
 
   it('keeps unknown routes in the stable 404 error format', async () => {
@@ -138,5 +142,39 @@ describe('Auth HTTP contract', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: { code: 'route_not_found', message: 'This route is not available.' } });
+  });
+
+  it('lists mobile sessions with bounded cursor pagination and a dedicated rate limit', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/auth/sessions?limit=10' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ sessions: [{ id: DEVICE_ID, current: true }], next_cursor: null });
+    expect(auth.listSessions).toHaveBeenCalledWith(USER_ID, DEVICE_ID, 10, undefined);
+    expect(limits.enforce).toHaveBeenCalledWith('mobile-sessions', USER_ID, expect.any(Object), 'session_rate_limit_exceeded');
+  });
+
+  it.each(['limit=101', 'offset=20', 'unknown=true'])('rejects an invalid session query: %s', async (query) => {
+    const response = await app.inject({ method: 'GET', url: `/api/auth/sessions?${query}` });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('invalid_session_query');
+    expect(auth.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('revokes a mobile session by UUID and rejects invalid identifiers', async () => {
+    expect((await app.inject({ method: 'DELETE', url: `/api/auth/sessions/${DEVICE_ID}` })).statusCode).toBe(204);
+    expect(auth.revokeSession).toHaveBeenCalledWith(USER_ID, DEVICE_ID, DEVICE_ID);
+    const invalid = await app.inject({ method: 'DELETE', url: '/api/auth/sessions/not-a-uuid' });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe('invalid_session_id');
+  });
+
+  it('requires explicit confirmation for logout-all and rejects extra fields', async () => {
+    for (const payload of [{}, { confirm: false }, { confirm: true, user_id: USER_ID }]) {
+      expect((await app.inject({ method: 'POST', url: '/api/auth/logout-all', payload })).statusCode).toBe(400);
+    }
+    expect(auth.logoutAll).not.toHaveBeenCalled();
+    const response = await app.inject({ method: 'POST', url: '/api/auth/logout-all', payload: { confirm: true } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ revoked_sessions: 2 });
+    expect(auth.logoutAll).toHaveBeenCalledWith(USER_ID, DEVICE_ID);
   });
 });

@@ -1,4 +1,5 @@
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
@@ -191,17 +192,25 @@ async function loadSeedUsers(config: ConfigService): Promise<SeedUser[]> {
     }
 
     const jwt = new JwtService({ secret: config.jwt.secret });
-    return Promise.all(result.rows.map(async (row) => ({
+    return Promise.all(result.rows.map(async (row) => {
+      const sessionId = randomUUID();
+      // Seed tokens obey the same session, type, audience and TTL rules as mobile.
+      await pool.query(`
+        INSERT INTO refresh_token_family (id, user_id, created_at, last_refreshed_at, expires_at)
+        VALUES ($1, $2, now(), now(), now() + ($3::bigint * INTERVAL '1 millisecond'))
+      `, [sessionId, row.user_id, config.jwt.accessTtlMs]);
+      return {
       seedNumber: row.seed_number,
       id: row.user_id,
       sex: row.sex,
       latitude: Number(row.latitude),
       longitude: Number(row.longitude),
       accessToken: await jwt.signAsync(
-        { sub: row.user_id },
-        { algorithm: 'HS256', expiresIn: 2 * 60 * 60 },
+        { sub: row.user_id, sid: sessionId, typ: 'access' },
+        { algorithm: 'HS256', keyid: config.jwt.activeKid, audience: 'histae-app', issuer: 'histae-api', expiresIn: Math.floor(config.jwt.accessTtlMs / 1_000) },
       ),
-    })));
+      };
+    }));
   } finally {
     await pool.end();
   }

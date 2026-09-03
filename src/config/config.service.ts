@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import * as dotenv from 'dotenv';
 import { parsePhoneKey } from '../crypto/phone-crypto';
+import { jwtKeys } from './jwt-keys';
 import {
   billingProvider, commaSeparated, duration, envOr, httpsUrl, identifier, integer,
   internalHttpOrigin, legalUrl, limit, maintenanceMode, numberInRange,
@@ -114,7 +115,7 @@ export class ConfigService {
     idle_in_transaction_session_timeout: number;
     application_name: string;
   };
-  readonly jwt: { secret: string; accessTtlMs: number; refreshTtlMs: number };
+  readonly jwt: { secret: string; activeKid: string; verificationKeys: ReadonlyMap<string, string>; accessTtlMs: number; refreshTtlMs: number };
   readonly accountDeletionTokenTtlMs: number;
   readonly phone: { encryptionKey: string; hashKey: string };
   readonly sms: {
@@ -323,7 +324,14 @@ export class ConfigService {
     if (refreshTtlMs < 60 * 60_000 || refreshTtlMs > 4_320 * 60 * 60_000 || refreshTtlMs <= accessTtlMs) {
       throw new Error('config: JWT_REFRESH_TTL must be longer than JWT_ACCESS_TTL and no more than 4320h');
     }
-    this.jwt = { secret: jwtSecret, accessTtlMs, refreshTtlMs };
+    const activeKid = envOr('JWT_ACTIVE_KID', 'primary');
+    const verificationKeys = jwtKeys(activeKid, jwtSecret, envOr('JWT_PREVIOUS_KEYS', '{}'));
+    for (const key of verificationKeys.values()) {
+      if (Buffer.from(key).equals(encryptionKeyBytes) || Buffer.from(key).equals(hashKeyBytes)) {
+        throw new Error('config: JWT keys must be distinct from phone encryption and hash keys');
+      }
+    }
+    this.jwt = { secret: jwtSecret, activeKid, verificationKeys, accessTtlMs, refreshTtlMs };
     this.accountDeletionTokenTtlMs = duration(envOr('ACCOUNT_DELETION_TOKEN_TTL', '10m'), 'ACCOUNT_DELETION_TOKEN_TTL');
     if (this.accountDeletionTokenTtlMs < 60_000 || this.accountDeletionTokenTtlMs > 30 * 60_000) {
       throw new Error('config: ACCOUNT_DELETION_TOKEN_TTL must be between 1m and 30m');

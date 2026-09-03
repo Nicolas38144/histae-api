@@ -1,7 +1,7 @@
 import type { MessageEvent } from '@nestjs/common';
 import { Controller, Delete, Get, HttpCode, HttpStatus, Post, Req, Sse, UseGuards } from '@nestjs/common';
 import type { Observable } from 'rxjs';
-import { JwtActiveGuard, userId } from '../auth/auth.guard';
+import { JwtActiveGuard, mobileSession, userId } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ValidatedBody, ValidatedParams } from '../common/http/validated-request.decorator';
 import { DeviceIdParamDto, RegisterDeviceDto } from './dto/mobile.dto';
@@ -31,7 +31,7 @@ export class MobileController {
     @ValidatedBody({ code: 'invalid_device_payload', message: 'The device registration request body is invalid.' }) body: RegisterDeviceDto,
     @Req() request: AuthenticatedRequest,
   ): Promise<PublicDevice> {
-    return this.mobile.registerDevice(userId(request), body.push_token, body.platform, body.app_version);
+    return this.mobile.registerDevice(userId(request), mobileSession(request).id, body.push_token, body.platform, body.app_version);
   }
 
   @Delete('devices/:id')
@@ -47,6 +47,7 @@ export class MobileController {
   @Sse('events')
 
   events(@Req() request: AuthenticatedRequest): Observable<MessageEvent> {
-    return this.realtime.stream(userId(request));
+    const session = mobileSession(request);
+    return this.realtime.stream(userId(request), session.id, session.accessExpiresAt);
   }
 }

@@ -1,7 +1,8 @@
 import type { MessageEvent, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { filter, interval, map, merge, Observable, of, Subject } from 'rxjs';
+import { exhaustMap, filter, interval, map, merge, Observable, of, Subject, takeUntil, timer } from 'rxjs';
+import { RefreshSessionRepository } from '../auth/refresh-session.repository';
 import { RedisService } from '../redis/redis.service';
 import { MOBILE_EVENT_TYPES } from './mobile.models';
 import type { MobileEvent, MobileEventType } from './mobile.models';
@@ -15,7 +16,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly events = new Subject<MobileEvent>();
   private unsubscribe?: () => Promise<void>;
 
-  constructor(private readonly redis: RedisService) {}
+  constructor(private readonly redis: RedisService, private readonly sessions: RefreshSessionRepository) {}
 
   async onModuleInit(): Promise<void> {
     if (!this.redis.enabled) return;
@@ -40,7 +41,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  stream(userId: string): Observable<MessageEvent> {
+  stream(userId: string, sessionId: string, accessExpiresAt: number): Observable<MessageEvent> {
     const connected = of<MessageEvent>({ type: 'connected', data: { server_time: new Date().toISOString() } });
     const userEvents = this.events.pipe(
       filter((event) => event.user_id === userId),
@@ -52,7 +53,15 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     const heartbeat = interval(HEARTBEAT_MILLIS).pipe(
       map((): MessageEvent => ({ type: 'heartbeat', data: { server_time: new Date().toISOString() } })),
     );
-    return merge(connected, userEvents, heartbeat);
+    // Recheck across instances; Redis Pub/Sub alone cannot guarantee revocation
+    // delivery. Close on the next 25s session check or at access-token expiry.
+    const revoked = timer(0, HEARTBEAT_MILLIS).pipe(
+      exhaustMap(() => this.sessions.isActive(userId, sessionId).catch(() => false)),
+      filter((active) => !active),
+    );
+    return merge(connected, userEvents, heartbeat).pipe(
+      takeUntil(merge(revoked, timer(Math.max(0, accessExpiresAt - Date.now())))),
+    );
   }
 }
 

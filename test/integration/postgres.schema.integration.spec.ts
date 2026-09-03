@@ -60,7 +60,7 @@ describe('PostgreSQL schema contract', () => {
       'profile_question', 'user_profile_answer', 'content_moderation_case',
       'admin_webauthn_bootstrap', 'admin_webauthn_credential',
       'admin_webauthn_challenge', 'admin_session', 'admin_auth_event',
-      'outbox_operator_action', 'maintenance_job_status',
+      'outbox_operator_action', 'maintenance_job_status', 'refresh_token_family',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -314,6 +314,8 @@ describe('PostgreSQL schema contract', () => {
       'idx_admin_auth_event_created', 'idx_admin_webauthn_challenge_consumed',
       'idx_admin_webauthn_bootstrap_consumed', 'idx_outbox_operator_action_created',
       'idx_user_subscription_plan_updated', 'idx_admin_session_revoked',
+      'idx_refresh_family_user_created', 'idx_refresh_family_expiry', 'idx_refresh_tokens_family',
+      'uq_refresh_family_active', 'uq_refresh_token_child', 'idx_device_session',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -869,6 +871,7 @@ describe('PostgreSQL schema contract', () => {
         expired_presences: expect.any(Number),
         expired_otps: expect.any(Number),
         expired_refresh_tokens: expect.any(Number),
+        expired_mobile_sessions: expect.any(Number),
         expired_notifications: expect.any(Number),
         expired_consents: expect.any(Number),
         expired_data_subject_requests: expect.any(Number),

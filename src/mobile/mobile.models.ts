@@ -4,6 +4,7 @@ export type DevicePlatform = typeof DEVICE_PLATFORMS[number];
 export type DeviceRow = {
   id: string;
   user_id: string;
+  session_id: string | null;
   token: string;
   platform: DevicePlatform;
   app_version: string | null;

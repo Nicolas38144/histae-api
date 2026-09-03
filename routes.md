@@ -10,7 +10,7 @@ Mise à jour : 3 septembre 2026. Toutes les routes ci-dessous sont préfixées p
 - L’upload photo est la seule entrée multipart : `Idempotency-Key: <UUID v4>` et un fichier de **500 000 octets maximum** dans le champ `photo`.
 - Les erreurs suivent le format `{ "error": { "code", "message" } }`.
 - Une route « authentifiée » requiert le JWT mobile `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
-- Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, `POST /auth/logout`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
+- Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, la gestion des sessions et les déconnexions `/auth/sessions`, `/auth/sessions/:id`, `/auth/logout`, `/auth/logout-all`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles, ainsi que les droits RGPD signalés plus bas. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
 - Une route « admin » exige une session WebAuthn administrateur dans le cookie `HttpOnly` dédié et accepte les rôles `admin` et `superadmin`. Un JWT mobile, même émis pour un compte administratif, n’est pas accepté.
 - `limit` est un entier de 1 à 100 (20 par défaut). Les listes volumineuses renvoient `next_cursor`; passez-le ensuite dans `cursor`. `offset` reste accepté pour compatibilité, mais est déprécié et doit valoir `0` avec un curseur.
 - Un rate limit global par IP est actif et partagé dans Redis entre les instances de l’API. Les clés Redis sont pseudonymisées par HMAC. En cas de dépassement : `429 rate_limit_exceeded` avec l’en-tête `Retry-After` ; Redis indisponible produit `503 rate_limit_unavailable`.
@@ -24,14 +24,29 @@ Mise à jour : 3 septembre 2026. Toutes les routes ci-dessous sont préfixées p
 | GET | `/auth/me` | Authentifiée, onboarding incomplet accepté | — | `200 { "user_id", "onboarding_complete" }`. Bootstrap minimal de session pour l’application mobile, sans exposer le rôle administratif. |
 | POST | `/auth/otp/send` | Public | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "phone_number": "+336…" }`. Seuls les numéros français `+33` sont acceptés. | `202 { "message": "Verification code request accepted." }` après acceptation de la demande. Une clé absente ou mal formée renvoie `400 invalid_idempotency_key`; sa réutilisation pour un autre numéro renvoie `409 idempotency_key_conflict`. Une erreur ou une réponse Sweego invalide renvoie `503 otp_delivery_unavailable`. Limite : 5/h par IP et par numéro pseudonymisé. |
 | POST | `/auth/otp/verify` | Public | `{ "phone_number": "+336…", "otp": "123456" }`, numéro français `+33` uniquement | `200` avec `{ "access_token", "refresh_token" }`. Le code OTP est consommé une seule fois. Si le téléphone n’est associé à aucun compte, un compte de rôle `user` est créé. Limite : 5/h par IP et numéro pseudonymisé. |
-| POST | `/auth/refresh` | Public | `{ "refresh_token": "jti:secret" }` | `200` avec une nouvelle paire de tokens. Le token utilisé est révoqué dans la même transaction. Limite : 30/15 min/IP. |
-| POST | `/auth/logout` | Authentifiée | `{ "refresh_token": "jti:secret", "device_id"?: "uuid" }` | `204`, révoque le refresh token s’il appartient à l’utilisateur courant et supprime atomiquement l’enregistrement push indiqué. |
+| POST | `/auth/refresh` | Public | `{ "refresh_token": "jti:secret" }` | `200` avec une nouvelle paire de tokens. Rotation atomique dans la même famille. Le rejeu d'un ancêtre authentique non expiré révoque toute la famille et retourne `401 invalid_or_expired_refresh_token`. Limite : 30/15 min/IP. |
+| POST | `/auth/logout` | Authentifiée, onboarding incomplet accepté | `{ "refresh_token": "jti:secret", "device_id"?: "uuid" }` | `204`, révoque la famille du Bearer et ses appareils push. Le refresh doit appartenir à cette même famille ; un prédécesseur authentique non expiré est accepté. L'appareil optionnel est aussi supprimé s'il appartient au compte. |
+| GET | `/auth/sessions` | Authentifiée, onboarding incomplet accepté | `limit` (1–100), `cursor` optionnel ; pas d'offset | `200 { "sessions": [{ "id", "created_at", "last_refreshed_at", "expires_at", "current" }], "next_cursor" }`. Seulement les familles actives du compte, sans token, hash, IP ni user-agent. |
+| DELETE | `/auth/sessions/:id` | Authentifiée, onboarding incomplet accepté | UUID v4 | `204`, révoque une famille du compte et ses appareils push. La session courante peut être révoquée. Idempotent pour une autre famille déjà révoquée encore référencée ; `404 session_not_found` si absente ou étrangère. |
+| POST | `/auth/logout-all` | Authentifiée, onboarding incomplet accepté | `{ "confirm": true }` | `200 { "revoked_sessions" }`, révoque toutes les familles non révoquées du compte, courante comprise, et retire tous ses appareils push. |
 
 Pour l’envoi OTP, l’API persiste d’abord un hash avec l’état `pending`, appelle l’endpoint transactionnel Sweego, puis passe le code à `sent` uniquement après une réponse HTTP `200` contenant un `transaction_id` et un identifiant `swg_uids` valides. Rejouer rapidement la même clé lorsque la demande est `pending`, ou rejouer une demande déjà `sent`, renvoie le même `202` sans second appel fournisseur. Un `pending` plus ancien que le timeout Sweego augmenté de cinq secondes est marqué `failed` lors du retry et renvoie `503`, comme toute autre demande échouée. L’activation est sérialisée par téléphone et la base garantit qu’un seul OTP envoyé reste utilisable. La durée de validité est définie par `OTP_TTL`.
 
 Le 17 août 2026, ce contrat a été validé manuellement avec Sweego réel : envoi vers un numéro français, retry de la même clé sans second SMS, vérification du code, accès Bearer, rotation du refresh token avec refus de l’ancien et logout `204`.
 
-Les access tokens utilisent HS256, le type `access`, l’issuer `histae-api`, l’audience `histae-app` et expirent selon `JWT_ACCESS_TTL`; les refresh tokens contiennent un secret aléatoire de 256 bits et suivent `JWT_REFRESH_TTL`. Les erreurs d’authentification les plus courantes sont `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`, `otp_delivery_unavailable`, `otp_rate_limit_exceeded` et `refresh_rate_limit_exceeded`.
+Les access tokens utilisent HS256, le type `access`, l’issuer `histae-api`, l’audience `histae-app`, une famille `sid`
+et un en-tête `kid` configuré localement ; `exp` est obligatoire et suit `JWT_ACCESS_TTL`. La famille est relue à
+chaque requête. Les refresh tokens contiennent un secret aléatoire de 256 bits et suivent `JWT_REFRESH_TTL`.
+Les erreurs courantes restent `authentication_required`, `invalid_or_expired_access_token`,
+`invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`,
+`otp_delivery_unavailable`, `otp_rate_limit_exceeded` et `refresh_rate_limit_exceeded`. La gestion des sessions
+ajoute `session_not_found`, `invalid_session_id`, `invalid_session_query` et `session_rate_limit_exceeded` ;
+elle partage une limite séparée de 30/15 min/utilisateur, incluant le logout.
+
+Le mobile doit sérialiser les refresh et enregistrer atomiquement les nouveaux tokens. Il n'y a pas de fenêtre de
+grâce : un double refresh ou une réponse perdue peut imposer une nouvelle connexion OTP. La migration des anciens
+tokens, la durée de conservation des ancêtres et la rotation des clés sont détaillées dans
+[`docs/mobile-sessions.md`](docs/mobile-sessions.md).
 
 ## Plans
 
@@ -132,10 +147,10 @@ Toutes ces routes sont authentifiées.
 
 | Méthode | Route | Corps / paramètres | Résultat |
 | --- | --- | --- | --- |
-| GET | `/users/me/devices` | — | `200 { "devices": [...] }`. Expose les UUID, plateformes, versions d’application et dates d’usage, jamais les jetons FCM. |
-| POST | `/users/me/devices` | `{ "push_token", "platform": "ios\|android", "app_version"?: "…" }` | `201` avec l’appareil public. Un jeton fournisseur déjà connu est réaffecté et rafraîchi de manière idempotente. |
+| GET | `/users/me/devices` | — | `200 { "devices": [...] }`. Expose les UUID, `session_id` (nul pour les anciens appareils), plateformes, versions d’application et dates d’usage, jamais les jetons FCM. |
+| POST | `/users/me/devices` | `{ "push_token", "platform": "ios\|android", "app_version"?: "…" }` | `201` avec l’appareil public et sa `session_id` issue du Bearer. Un jeton fournisseur déjà connu est réaffecté et rafraîchi de manière idempotente. |
 | DELETE | `/users/me/devices/:id` | UUID appareil | `204`, ou `404 device_not_found`. La propriété par l’utilisateur authentifié est imposée. |
-| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created`, `message.read` et `subscription.updated`. |
+| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created`, `message.read` et `subscription.updated`. Fermé à l'expiration du JWT ; la session est revérifiée toutes les 25 secondes, avec fermeture en cas de révocation ou d'échec de vérification. |
 
 Le temps réel est relayé entre instances via Redis en production et fonctionne localement en mémoire lorsque Redis est explicitement désactivé. Les notifications push FCM sont optionnelles (`PUSH_PROVIDER=fcm`) et ne contiennent jamais le texte d’un message : seulement des identifiants nécessaires à la resynchronisation. Un jeton signalé `UNREGISTERED` par FCM est supprimé automatiquement.
 
@@ -154,7 +169,7 @@ Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, 
 | --- | --- | --- | --- | --- |
 | POST | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | `{ "type": "access\|erasure\|portability\|rectification\|restriction\|objection" }` | `201` avec la demande. Une seule demande ouverte par utilisateur et par type. |
 | GET | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | — | `200 { "requests": [...] }`. |
-| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, dont les réponses aux questions de profil, la projection d’abonnement, les factures Stripe rattachées et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
+| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, dont les réponses aux questions de profil, la projection d’abonnement, les factures Stripe rattachées, les métadonnées `mobile_sessions` (sans hashes ni tokens) et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
 | GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. `photo` vaut toujours `null` : bloquer un compte n’accorde aucun accès à sa photo privée. |
 | POST | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. Clôt immédiatement les matchs entre les deux comptes et empêche leur recréation. |
 | DELETE | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. |

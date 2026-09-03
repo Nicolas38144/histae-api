@@ -117,6 +117,10 @@ export class PrivacyRepository {
           created_at, provider_event_created_at
         FROM billing_invoice WHERE user_id = $1 ORDER BY created_at
       `, [userId]);
+      const mobileSessions = await client.query(`
+        SELECT id, created_at, last_refreshed_at, expires_at, revoked_at, revocation_reason
+        FROM refresh_token_family WHERE user_id = $1 ORDER BY created_at, id
+      `, [userId]);
       await client.query(`
         INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
         VALUES ($1, $1, 'user', 'export_data', 'Self-service data export')
@@ -135,6 +139,7 @@ export class PrivacyRepository {
         blocked_users: blocks.rows,
         subscription: subscription.rows[0] ?? null,
         billing_invoices: billingInvoices.rows,
+        mobile_sessions: mobileSessions.rows,
       };
     });
   }
@@ -286,6 +291,14 @@ export class PrivacyRepository {
       WHERE created_at <= $1::timestamptz - INTERVAL '1 year'
       ORDER BY created_at LIMIT $2
     )`, [now, batchSize]);
+    // Delete only empty families, after the bounded token cleanup. A family can
+    // have many historical tokens; never cascade an unbounded history in a batch.
+    const expiredMobileSessions = await database.query(`DELETE FROM refresh_token_family WHERE id IN (
+      SELECT family.id FROM refresh_token_family AS family
+      WHERE family.expires_at <= $1::timestamptz
+        AND NOT EXISTS (SELECT 1 FROM refresh_tokens WHERE family_id = family.id)
+      ORDER BY family.expires_at, family.id LIMIT $2
+    )`, [now, batchSize]);
     return {
       stale_presences: stalePresences.rowCount ?? 0,
       expired_presences: expiredPresences.rowCount ?? 0,
@@ -303,6 +316,7 @@ export class PrivacyRepository {
       expired_admin_sessions: expiredAdminSessions.rowCount ?? 0,
       expired_admin_auth_events: expiredAdminAuthEvents.rowCount ?? 0,
       expired_outbox_operator_actions: expiredOutboxOperatorActions.rowCount ?? 0,
+      expired_mobile_sessions: expiredMobileSessions.rowCount ?? 0,
     };
   }
 }

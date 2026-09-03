@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { isUUID } from 'class-validator';
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '../config/config.service';
-import type { NewRefreshToken, StoredRefreshToken } from './auth.models';
+import type { NewRefreshToken } from './auth.models';
 
 export const ACCESS_TOKEN_ISSUER = 'histae-api';
 export const ACCESS_TOKEN_AUDIENCE = 'histae-app';
@@ -33,17 +33,13 @@ export class TokenService {
     return { jti: parts[0], hash: createHash('sha256').update(parts[1]).digest('hex') };
   }
 
-  isUsable(stored: StoredRefreshToken, expectedHash: string): boolean {
-    const left = Buffer.from(stored.token_hash, 'utf8');
-    const right = Buffer.from(expectedHash, 'utf8');
-    return !stored.revoked && new Date(stored.expires_at).getTime() > Date.now() && left.length === right.length && timingSafeEqual(left, right);
-  }
-
-  accessToken(userId: string): Promise<string> {
+  accessToken(userId: string, sessionId: string): Promise<string> {
     return this.jwt.signAsync(
-      { sub: userId, typ: ACCESS_TOKEN_TYPE },
+      { sub: userId, sid: sessionId, typ: ACCESS_TOKEN_TYPE },
       {
         algorithm: 'HS256',
+        keyid: this.config.jwt.activeKid,
+        secret: this.config.jwt.secret,
         audience: ACCESS_TOKEN_AUDIENCE,
         issuer: ACCESS_TOKEN_ISSUER,
         expiresIn: Math.floor(this.config.jwt.accessTtlMs / 1_000),

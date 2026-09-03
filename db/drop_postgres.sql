@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS user_report CASCADE;
 DROP TABLE IF EXISTS user_block CASCADE;
 
 DROP TABLE IF EXISTS refresh_tokens CASCADE;
+DROP TABLE IF EXISTS refresh_token_family CASCADE;
 
 DROP TABLE IF EXISTS continuation_usage CASCADE;
 
@@ -46,6 +47,7 @@ DROP TABLE IF EXISTS subscription_plan_feature CASCADE;
 DROP TABLE IF EXISTS subscription_plan CASCADE;
 
 DROP TABLE IF EXISTS user_account CASCADE;
+DROP FUNCTION IF EXISTS fct_erase_mobile_sessions();
 DROP TABLE IF EXISTS account_tombstone CASCADE;
 
 DROP EXTENSION IF EXISTS "uuid-ossp";

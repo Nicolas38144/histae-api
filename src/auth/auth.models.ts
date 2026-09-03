@@ -7,6 +7,17 @@ export type StoredRefreshToken = {
   jti: string;
   revoked: boolean;
   expires_at: Date;
+  family_id: string;
+  rotated_at: Date | null;
+};
+
+export type MobileSessionIdentity = { userId: string; sessionId: string };
+export type MobileSessionRow = {
+  id: string;
+  created_at: Date;
+  last_refreshed_at: Date;
+  expires_at: Date;
+  cursor_at: string;
 };
 
 export type NewRefreshToken = {

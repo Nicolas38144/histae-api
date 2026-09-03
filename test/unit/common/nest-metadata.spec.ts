@@ -10,6 +10,7 @@ import { AuthService } from '../../../src/auth/auth.service';
 import { OtpService } from '../../../src/auth/otp.service';
 import { SweegoSmsService } from '../../../src/auth/sweego-sms.service';
 import { TokenService } from '../../../src/auth/token.service';
+import { RefreshSessionRepository } from '../../../src/auth/refresh-session.repository';
 import { DatabaseService } from '../../../src/database/database.service';
 import { DiscoveryController } from '../../../src/discovery/discovery.controller';
 import { DiscoveryRepository } from '../../../src/discovery/discovery.repository';
@@ -72,7 +73,7 @@ import { MaintenanceTrackerService } from '../../../src/operations/maintenance-t
 import { OperationalStatusService } from '../../../src/operations/operational-status.service';
 
 const injectedClasses = [
-  AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
+  AuthController, JwtActiveGuard, AuthRepository, RefreshSessionRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
   PhotosRepository, PhotosService, PhotosMaintenanceService,
   OutboxRepository, OutboxWorkerService,

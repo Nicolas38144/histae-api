@@ -49,6 +49,9 @@ export const migrations = [{
 }, {
   version: '009_sql_performance_indexes',
   filenames: ['009_sql_performance_indexes.sql'],
+}, {
+  version: '010_mobile_refresh_sessions',
+  filenames: ['010_mobile_refresh_sessions.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

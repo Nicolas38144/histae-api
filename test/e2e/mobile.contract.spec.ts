@@ -38,6 +38,7 @@ describe('Mobile HTTP contract', () => {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
       request.auth = {
         userId: USER_ID,
+        mobileSession: { id: USER_ID, accessExpiresAt: 2_000_000_000_000 },
         account: { user_id: USER_ID, role: 'user', is_banned: false, onboarding_complete: true },
       };
       return true;
@@ -84,7 +85,7 @@ describe('Mobile HTTP contract', () => {
       last_used_at: '2030-01-01T00:00:00.000Z',
     });
     expect(response.json()).not.toHaveProperty('push_token');
-    expect(mobile.registerDevice).toHaveBeenCalledWith(USER_ID, token, 'android', '1.0.0');
+    expect(mobile.registerDevice).toHaveBeenCalledWith(USER_ID, USER_ID, token, 'android', '1.0.0');
   });
 
   it('lists and removes only devices belonging to the authenticated user', async () => {
@@ -122,6 +123,6 @@ describe('Mobile HTTP contract', () => {
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.body).toContain('event: connected');
     expect(response.body).toContain('data: {"server_time":"2030-01-01T00:00:00.000Z"}');
-    expect(realtime.stream).toHaveBeenCalledWith(USER_ID);
+    expect(realtime.stream).toHaveBeenCalledWith(USER_ID, USER_ID, 2_000_000_000_000);
   });
 });

@@ -11,6 +11,7 @@ export type AuthenticatedRequest = FastifyRequest & {
   auth?: {
     userId: string;
     account: ActiveAccount;
+    mobileSession?: { id: string; accessExpiresAt: number };
     adminSession?: {
       id: string;
       credentialId: string;

@@ -25,9 +25,14 @@ export class JwtActiveGuard implements CanActivate {
     if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
       throw apiError(401, 'authentication_required', 'A valid Bearer Authorization header is required.');
     }
-    let payload: { sub?: unknown; typ?: unknown };
+    let payload: { sub?: unknown; typ?: unknown; sid?: unknown; exp?: unknown };
     try {
-      payload = await this.jwt.verifyAsync<{ sub?: unknown; typ?: unknown }>(parts[1], {
+      const decoded = this.jwt.decode(parts[1], { complete: true }) as { header?: { kid?: unknown; alg?: unknown } } | null;
+      const kid = decoded?.header?.kid;
+      const secret = typeof kid === 'string' ? this.config.jwt.verificationKeys.get(kid) : undefined;
+      if (!secret || decoded?.header?.alg !== 'HS256') throw new Error('invalid signing key');
+      payload = await this.jwt.verifyAsync(parts[1], {
+        secret,
         algorithms: ['HS256'],
         audience: ACCESS_TOKEN_AUDIENCE,
         issuer: ACCESS_TOKEN_ISSUER,
@@ -35,11 +40,13 @@ export class JwtActiveGuard implements CanActivate {
     } catch {
       throw apiError(401, 'invalid_or_expired_access_token', 'The access token is invalid or expired.');
     }
-    if (payload.typ !== ACCESS_TOKEN_TYPE || typeof payload.sub !== 'string' || !isUUID(payload.sub, 'all')) {
+    if (!payload || typeof payload !== 'object' || payload.typ !== ACCESS_TOKEN_TYPE || typeof payload.sub !== 'string' || !isUUID(payload.sub, 'all')
+      || typeof payload.sid !== 'string' || !isUUID(payload.sid, '4')
+      || typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp)) {
       throw apiError(401, 'invalid_or_expired_access_token', 'The access token is invalid or expired.');
     }
-    const account = await this.activeAccount(payload.sub);
-    request.auth = { userId: payload.sub, account };
+    const account = await this.activeAccount(payload.sub, payload.sid);
+    request.auth = { userId: payload.sub, account, mobileSession: { id: payload.sid, accessExpiresAt: payload.exp * 1_000 } };
     const allowIncompleteOnboarding = this.reflector.getAllAndOverride<boolean>(ALLOW_INCOMPLETE_ONBOARDING_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -50,7 +57,7 @@ export class JwtActiveGuard implements CanActivate {
     return true;
   }
 
-  private async activeAccount(userId: string): Promise<ActiveAccount> {
+  private async activeAccount(userId: string, sessionId: string): Promise<ActiveAccount> {
     let account: ActiveAccount | undefined;
     try {
       const result = await this.database.query<ActiveAccount>(`
@@ -74,7 +81,12 @@ export class JwtActiveGuard implements CanActivate {
           ) AS onboarding_complete
         FROM user_account AS account
         WHERE account.user_id = $1 AND account.deleted_at IS NULL
-      `, [userId, this.config.legal.termsVersion, this.config.legal.privacyVersion]);
+          AND EXISTS (
+            SELECT 1 FROM refresh_token_family AS session
+            WHERE session.id = $4 AND session.user_id = account.user_id
+              AND session.revoked_at IS NULL AND session.expires_at > statement_timestamp()
+          )
+      `, [userId, this.config.legal.termsVersion, this.config.legal.privacyVersion, sessionId]);
       account = result.rows[0];
     } catch (error) {
       throw apiError(500, 'account_check_failed', 'The account could not be verified.', error);
@@ -88,4 +100,9 @@ export class JwtActiveGuard implements CanActivate {
 export function userId(request: AuthenticatedRequest): string {
   if (!request.auth) throw apiError(401, 'authentication_required', 'A valid access token is required.');
   return request.auth.userId;
+}
+
+export function mobileSession(request: AuthenticatedRequest): { id: string; accessExpiresAt: number } {
+  if (!request.auth?.mobileSession) throw apiError(401, 'authentication_required', 'A valid mobile session is required.');
+  return request.auth.mobileSession;
 }

@@ -7,6 +7,7 @@ describe('MobileService', () => {
   const storedDevice = {
     id: DEVICE_ID,
     user_id: USER_ID,
+    session_id: USER_ID,
     token: 'provider-secret-token-that-must-not-leak',
     platform: 'android' as const,
     app_version: '1.2.3',
@@ -18,14 +19,15 @@ describe('MobileService', () => {
     const repository = { registerDevice: jest.fn().mockResolvedValue(storedDevice) };
     const service = new MobileService(repository as never);
 
-    await expect(service.registerDevice(USER_ID, `  ${storedDevice.token}  `, 'android', ' 1.2.3 ')).resolves.toEqual({
+    await expect(service.registerDevice(USER_ID, USER_ID, `  ${storedDevice.token}  `, 'android', ' 1.2.3 ')).resolves.toEqual({
       id: DEVICE_ID,
+      session_id: USER_ID,
       platform: 'android',
       app_version: '1.2.3',
       created_at: storedDevice.created_at,
       last_used_at: storedDevice.last_used_at,
     });
-    expect(repository.registerDevice).toHaveBeenCalledWith(USER_ID, storedDevice.token, 'android', '1.2.3');
+    expect(repository.registerDevice).toHaveBeenCalledWith(USER_ID, USER_ID, storedDevice.token, 'android', '1.2.3');
   });
 
   it('returns a stable not-found error for an unknown device owned by the user', async () => {

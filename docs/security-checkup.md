@@ -16,7 +16,7 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 | Zone | État | Contrôles principaux |
 | --- | --- | --- |
-| Authentification | Satisfaisant | Mobile : JWT/refresh rotatif et OTP HMAC à usage unique. Admin : WebAuthn natif avec vérification utilisateur, challenges à usage unique et sessions serveur opaques. |
+| Authentification | Satisfaisant | Mobile : refresh rotatifs par famille, révocation sur rejeu authentique, JWT liés à une session relue en base et clés locales par `kid`, OTP HMAC à usage unique. Admin : WebAuthn natif avec vérification utilisateur, challenges à usage unique et sessions serveur opaques. |
 | Autorisation | Satisfaisant | Rôle et état actif relus depuis PostgreSQL, JWT mobile refusé sur les routes admin, guards dédiés, onboarding et consentements imposés côté serveur. |
 | Entrées | Satisfaisant | DTO stricts, whitelist avec rejet des champs inconnus, limites métier, UUID et dates validés. |
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
@@ -47,6 +47,18 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - La liste admin des comptes et la liste des comptes bloqués ne génèrent plus de liens signés vers les photos.
   Le détail admin conserve le motif obligatoire et l’audit avant de produire une éventuelle URL.
 - Le parseur des refresh tokens impose désormais un UUID v4 canonique et exactement 43 caractères base64url.
+- La rotation mobile conserve une filiation et un hash jusqu'à l'expiration initiale. Le rejeu d'un ancêtre
+  authentique encore valide révoque sa famille dans une transaction commitée avant le `401`. Un mauvais secret
+  ne révoque rien. Rotation, logout, déconnexion globale, enregistrement push et bannissement se sérialisent
+  sur le compte ; la base impose un seul token actif et un seul enfant par parent.
+- Les JWT exigent une famille `sid` active et un `kid` local configuré, avec HS256, issuer, audience et expiration
+  vérifiés. Une révocation bloque les requêtes suivantes et retire les appareils push liés ; les SSE se ferment
+  au prochain contrôle (toutes les 25 secondes) ou à l'expiration du JWT. Aucun secret, hash, IP ou user-agent
+  n'est exposé dans la liste des sessions. Les métadonnées sont exportables et effacées à l'anonymisation.
+- La rotation de clés HS256 accepte un trousseau local borné, sans URL, fichier ou fournisseur choisi par le JWT.
+  Le déploiement coordonné de la migration 010 et la procédure de rotation sont décrits dans
+  [`mobile-sessions.md`](mobile-sessions.md). L'intégration réelle du bannissement a aussi permis de corriger
+  le typage UUID de son paramètre SQL `banned_by`.
 - Les appels S3 réseau sont annulés après 10 secondes. Le fallback mémoire du rate limiter purge périodiquement
   ses entrées expirées.
 - La table `user_photo` ne rend visible que l’état `ready`, impose la cohérence des métadonnées WebP et conserve
@@ -102,6 +114,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
    de conformité ni une couverture exhaustive de la violence, de la haine ou de tout contenu interdit. Calibrer les
    seuils sur un corpus représentatif, mesurer les faux positifs/négatifs et biais, définir le SLA et les habilitations
    de revue, puis fournir une procédure de contestation. Les règles texte doivent évoluer avec une politique versionnée.
+8. **Client mobile** : les refresh doivent être sérialisés et les deux tokens remplacés atomiquement. Aucun délai
+   de grâce n'est appliqué : une réponse perdue ou deux refresh concurrents peuvent imposer une reconnexion OTP.
+   Valider ce parcours sur le mobile réel ; aucune interface de gestion des sessions n'est ajoutée au client ici.
 
 ## Hypothèses importantes
 
@@ -115,10 +130,14 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 ## Validation exécutée
 
-- `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
+- Audit de dépendances du 1er septembre : `pnpm audit --audit-level low` et sa variante `--prod`, aucune
+  vulnérabilité connue à cette date. Non relancé pour les sessions mobiles ; aucune dépendance ajoutée ou modifiée.
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 53 suites, 320 cas réussis ;
-- tests e2e Fastify : 13 suites, 76 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 47 cas réussis ;
-- migrations PostgreSQL : `008_internal_operations` ajoutée au catalogue, vérifiée dans un schéma temporaire vide et appliquée sans destruction sur `histae-dev`.
-- état Docker local : SeaweedFS, Redis, ScyllaDB et le service de modération photo déclarés `healthy`; une analyse WebP authentifiée réelle a renvoyé des scores valides.
+- tests unitaires : 56 suites, 346 cas réussis ;
+- tests e2e Fastify : 13 suites, 82 cas réussis ;
+- `pnpm test` : 69 suites et 428 cas autonomes réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 4 suites, 66 cas réussis après redémarrage des conteneurs locaux ;
+- migrations PostgreSQL : chaîne jusqu'à `010_mobile_refresh_sessions` vérifiée dans un schéma temporaire,
+  y compris des anciens tokens actifs/révoqués ; 010 appliquée sans reset sur `histae-dev` et deuxième migration idempotente ;
+- validation photo antérieure : analyse WebP authentifiée et smoke test S3-compatible réussis ; non rejoués
+  dans cette évolution des sessions mobiles.

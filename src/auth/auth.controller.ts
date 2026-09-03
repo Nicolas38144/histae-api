@@ -1,12 +1,12 @@
-import { Controller, Get, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Headers, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { ValidatedBody } from '../common/http/validated-request.decorator';
+import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { ConfigService } from '../config/config.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
-import { JwtActiveGuard, userId } from './auth.guard';
+import { JwtActiveGuard, mobileSession, userId } from './auth.guard';
 import type { AuthenticatedRequest } from './auth.types';
 import { AuthService } from './auth.service';
-import { LogoutDto, RefreshTokenDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
+import { LogoutAllDto, LogoutDto, MobileSessionIdDto, MobileSessionQueryDto, RefreshTokenDto, SendOtpDto, VerifyOtpDto } from './dto/auth.dto';
 import { AllowIncompleteOnboarding } from './onboarding.decorator';
 import { OtpService } from './otp.service';
 
@@ -75,6 +75,37 @@ export class AuthController {
   @AllowIncompleteOnboarding()
 
   async logout(@ValidatedBody() body: LogoutDto, @Req() request: AuthenticatedRequest): Promise<void> {
-    await this.auth.logout(userId(request), body.refresh_token, body.device_id);
+    await this.sessionRateLimit(request);
+    await this.auth.logout(userId(request), mobileSession(request).id, body.refresh_token, body.device_id);
+  }
+
+  @Get('sessions')
+  @UseGuards(JwtActiveGuard)
+  @AllowIncompleteOnboarding()
+  async sessions(@ValidatedQuery({ code: 'invalid_session_query', message: 'The session query is invalid.' }) query: MobileSessionQueryDto, @Req() request: AuthenticatedRequest) {
+    await this.sessionRateLimit(request);
+    return this.auth.listSessions(userId(request), mobileSession(request).id, query.limit, query.cursor);
+  }
+
+  @Delete('sessions/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtActiveGuard)
+  @AllowIncompleteOnboarding()
+  async revokeSession(@ValidatedParams({ code: 'invalid_session_id', message: 'The session ID must be a UUID v4.' }) params: MobileSessionIdDto, @Req() request: AuthenticatedRequest): Promise<void> {
+    await this.sessionRateLimit(request);
+    await this.auth.revokeSession(userId(request), mobileSession(request).id, params.id);
+  }
+
+  @Post('logout-all')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtActiveGuard)
+  @AllowIncompleteOnboarding()
+  async logoutAll(@ValidatedBody() _body: LogoutAllDto, @Req() request: AuthenticatedRequest): Promise<{ revoked_sessions: number }> {
+    await this.sessionRateLimit(request);
+    return this.auth.logoutAll(userId(request), mobileSession(request).id);
+  }
+
+  private sessionRateLimit(request: AuthenticatedRequest): Promise<void> {
+    return this.limits.enforce('mobile-sessions', userId(request), this.config.rateLimit.refresh, 'session_rate_limit_exceeded');
   }
 }

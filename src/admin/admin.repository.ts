@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { revokeFamilies } from '../auth/refresh-session.repository';
 import type { KeysetCursor } from '../common/pagination';
 import { DatabaseService, type Queryable } from '../database/database.service';
 import type { OutboxStatus } from '../outbox/outbox.models';
@@ -184,10 +185,10 @@ export class AdminRepository {
         UPDATE user_account SET is_banned = $2,
           banned_at = CASE WHEN $2 THEN clock_timestamp() ELSE NULL END,
           banned_reason = CASE WHEN $2 THEN $3 ELSE NULL END,
-          banned_by = CASE WHEN $2 THEN $4 ELSE NULL END
+          banned_by = CASE WHEN $2 THEN $4::uuid ELSE NULL END
         WHERE user_id = $1
       `, [targetId, isBanned, reason, adminId]);
-      if (isBanned) await client.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false', [targetId]);
+      if (isBanned) await revokeFamilies(client, targetId, 'banned');
       await this.recordAudit(
         client,
         targetId,

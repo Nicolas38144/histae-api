@@ -18,7 +18,8 @@ describe('PrivacyRepository maintenance', () => {
       .mockResolvedValueOnce({ rowCount: 13 })
       .mockResolvedValueOnce({ rowCount: 14 })
       .mockResolvedValueOnce({ rowCount: 15 })
-      .mockResolvedValueOnce({ rowCount: 16 });
+      .mockResolvedValueOnce({ rowCount: 16 })
+      .mockResolvedValueOnce({ rowCount: 17 });
     const repository = new PrivacyRepository({} as never);
 
     await expect(repository.runMaintenance({ query } as never, new Date('2030-01-07T12:00:00.000Z'), 1_000)).resolves.toEqual({
@@ -38,8 +39,9 @@ describe('PrivacyRepository maintenance', () => {
       expired_admin_sessions: 14,
       expired_admin_auth_events: 15,
       expired_outbox_operator_actions: 16,
+      expired_mobile_sessions: 17,
     });
-    expect(query).toHaveBeenCalledTimes(16);
+    expect(query).toHaveBeenCalledTimes(17);
     expect(query.mock.calls.every((call) => call[0].includes('LIMIT $2'))).toBe(true);
     expect(query.mock.calls[1][0]).toContain("INTERVAL '24 hours'");
     expect(query.mock.calls[5][0]).toContain("INTERVAL '5 years'");
@@ -50,5 +52,6 @@ describe('PrivacyRepository maintenance', () => {
     expect(query.mock.calls[13][0]).toContain('UNION ALL');
     expect(query.mock.calls[14][0]).toContain("INTERVAL '1 year'");
     expect(query.mock.calls[15][0]).toContain("INTERVAL '1 year'");
+    expect(query.mock.calls[16][0]).toContain('NOT EXISTS (SELECT 1 FROM refresh_tokens');
   });
 });

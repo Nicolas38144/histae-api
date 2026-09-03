@@ -9,10 +9,11 @@ export type PublicDevice = Omit<DeviceRow, 'user_id' | 'token'>;
 export class MobileService {
   constructor(private readonly mobile: MobileRepository) {}
 
-  async registerDevice(userId: string, rawToken: string, platform: DevicePlatform, rawAppVersion?: string): Promise<PublicDevice> {
+  async registerDevice(userId: string, sessionId: string, rawToken: string, platform: DevicePlatform, rawAppVersion?: string): Promise<PublicDevice> {
     const token = rawToken.trim();
     const appVersion = rawAppVersion?.trim() || null;
-    const device = await this.mobile.registerDevice(userId, token, platform, appVersion);
+    const device = await this.mobile.registerDevice(userId, sessionId, token, platform, appVersion);
+    if (!device) throw apiError(401, 'authentication_required', 'A valid mobile session is required.');
     return toPublicDevice(device);
   }
 
@@ -30,6 +31,7 @@ export class MobileService {
 function toPublicDevice(device: DeviceRow): PublicDevice {
   return {
     id: device.id,
+    session_id: device.session_id,
     platform: device.platform,
     app_version: device.app_version,
     created_at: device.created_at,

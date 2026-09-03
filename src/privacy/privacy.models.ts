@@ -43,6 +43,7 @@ export type PrivacyMaintenanceResult = {
   expired_presences: number;
   expired_otps: number;
   expired_refresh_tokens: number;
+  expired_mobile_sessions: number;
   expired_notifications: number;
   expired_consents: number;
   expired_data_subject_requests: number;

@@ -144,6 +144,12 @@ L’application mobile combine inscription et connexion : après validation du 
 associé au téléphone ou crée un compte `user` s’il n’existe pas encore. Ces JWT mobiles ne sont jamais acceptés
 par les routes administratives.
 
+Chaque connexion mobile possède une famille de refresh tokens : leur rejeu révoque tous les descendants et
+invalide les JWT associés. Les routes `/api/auth/sessions` et `/api/auth/logout-all` permettent de gérer les
+connexions et leurs appareils push. Le mobile doit sérialiser les refresh, sans retry aveugle après perte de réponse.
+La migration `010_mobile_refresh_sessions`, les contraintes de déploiement et la rotation HS256 via
+`JWT_ACTIVE_KID` / `JWT_PREVIOUS_KEYS` sont décrites dans [`docs/mobile-sessions.md`](docs/mobile-sessions.md).
+
 La livraison réelle des SMS nécessite `SMS_PROVIDER=sweego` et les identifiants Sweego correspondants. Les
 numéros acceptés utilisent actuellement le format français E.164, par exemple `+33612345678`.
 

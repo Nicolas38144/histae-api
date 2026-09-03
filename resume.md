@@ -106,7 +106,10 @@ proxies autorisés, sinon une adresse transmise par le client pourrait fausser l
 - Le rôle, le bannissement, la suppression et l’état juridique sont relus dans PostgreSQL à chaque requête ;
   aucune autorité n’est accordée à un rôle fourni par le client ou resté dans un ancien token.
 - Refresh token au format `UUIDv4:secret-base64url`, secret aléatoire de 256 bits, hash SHA-256 en base, rotation
-  et révocation transactionnelles.
+  et révocation transactionnelles par famille. Un ancêtre authentique rejoué avant son expiration révoque toute
+  sa famille. Les JWT sont liés à celle-ci par `sid`, avec relecture à chaque requête et sélection locale de clé par `kid`.
+  Les sessions peuvent être listées/révoquées, toutes déconnectées et reliées aux appareils push. Le mobile doit
+  sérialiser les refresh ; une réponse perdue peut imposer un nouvel OTP. Voir `docs/mobile-sessions.md`.
 - OTP à six chiffres stocké sous forme de HMAC, à usage unique, activé seulement après acceptation du SMS par le
   fournisseur et protégé par idempotence.
 - Numéro limité actuellement au format français E.164. Le clair n’est ni persisté ni journalisé : HMAC-SHA-256
@@ -266,6 +269,11 @@ l’historique WebAuthn. `009_sql_performance_indexes` aligne ensuite les index 
 les recherches administratives, les exports et les purges bornées. Les réécritures et plans mesurés sont détaillés
 dans `docs/sql-performance.md`.
 
+`010_mobile_refresh_sessions` ajoute les familles, la filiation des refresh, leur invalidation et les liens push,
+avec migration conservatrice des tokens existants. Déployer code et migration ensemble : les anciennes instances
+ne savent pas renseigner la famille. Les anciens JWT sans `sid`/`kid` nécessitent un refresh ; les anciens refresh
+actifs gardent leur expiration initiale.
+
 La compatibilité est sans perte :
 
 - une base neuve applique la baseline puis toutes les migrations incrémentales ;
@@ -359,7 +367,7 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
 
 1. Pentest externe authentifié et tests d’abus/charge, notamment OTP, autorisations objet, multipart/HEIC,
    concurrence de swipes/continuations, webhooks et URLs signées.
-2. Tests PostgreSQL réels supplémentaires sur refresh token, tombstones, retraits de consentement, quota Free
+2. Tests PostgreSQL réels supplémentaires sur tombstones, retraits de consentement, quota Free
    concurrent, pagination matchs/signalements et maintenance avec données expirées.
 3. Tests de panne/reprise Redis, Scylla, S3, Sweego et Stripe, plus un parcours Stripe sandbox complet.
 4. Intégrer audit de dépendances, secret scanning et SAST récurrents quand la chaîne CI/CD sera décidée.

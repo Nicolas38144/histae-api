@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import type { ArgumentMetadata } from '@nestjs/common';
 import { SendOtpDto } from '../../../../src/auth/dto/auth.dto';
 import { ApiValidationPipe } from '../../../../src/common/dto/api-validation.pipe';

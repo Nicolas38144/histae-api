@@ -9,6 +9,7 @@ Avant chaque nouvelle version juridique :
 - valider que les consentements sensibles et de localisation sont facultatifs, séparés, non précochés, compréhensibles et retirables aussi facilement qu’ils sont donnés ;
 - vérifier les procédures de réponse sous un mois, de contrôle d’identité proportionné, de protection des tiers dans l’export et de refus motivé ;
 - valider la matrice [`retention-policy.md`](retention-policy.md), y compris les sauvegardes et sous-traitants ;
+- inclure les métadonnées des familles mobiles et les motifs normalisés de révocation dans cette validation ; les hashes des tokens consommés restent conservés jusqu'à leur expiration initiale pour détecter le rejeu, sans nouvelle durée ni collecte d'IP/user-agent ;
 - faire approuver les questions de profil initiales et la gouvernance des ajouts administratifs, interdire les
   formulations qui solliciteraient inutilement des données sensibles, informer que les réponses sont visibles aux
   autres membres et vérifier que la suppression d’une question et de toutes ses réponses est compatible avec les
