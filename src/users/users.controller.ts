@@ -13,6 +13,7 @@ import { normalizeIdempotencyKey } from '../common/idempotency';
 import { MAX_PHOTO_UPLOAD_BYTES } from '../photos/photo-processor.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
+import type { ModerationReasonCode, ModerationStatus } from '../moderation/moderation.models';
 
 @Controller('api/users/me')
 @UseGuards(JwtActiveGuard)
@@ -73,7 +74,12 @@ export class UsersController {
   async uploadPhoto(
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() request: AuthenticatedRequest,
-  ): Promise<{ message: string; photo: string }> {
+  ): Promise<{
+    message: string;
+    photo: string;
+    moderation_status: ModerationStatus;
+    moderation_reasons: ModerationReasonCode[];
+  }> {
     const normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
     if (!request.isMultipart()) throw apiError(400, 'invalid_photo', 'A multipart photo file is required.');
     await this.limits.enforce('photo', userId(request), this.config.rateLimit.photo, 'photo_rate_limit_exceeded');
@@ -82,12 +88,12 @@ export class UsersController {
       if (!part || part.fieldname !== 'photo' || !part.filename) {
         throw apiError(400, 'invalid_photo', 'A single photo file in the photo field is required.');
       }
-      const photo = await this.users.uploadPhoto(userId(request), {
+      const result = await this.users.uploadPhoto(userId(request), {
         filename: part.filename,
         mimetype: part.mimetype,
         body: await part.toBuffer(),
       }, normalizedIdempotencyKey);
-      return { message: 'photo updated', photo };
+      return { message: 'photo updated', ...result };
     } catch (error) {
       if (isMultipartLimitError(error)) {
         if (multipartErrorCode(error) === 'FST_REQ_FILE_TOO_LARGE') {

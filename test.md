@@ -1,6 +1,6 @@
 # Tests de Histae API
 
-Mise à jour : 2 septembre 2026.
+Mise à jour : 3 septembre 2026.
 
 ## Organisation et règles
 
@@ -15,19 +15,19 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire statique actuel : **54 fichiers de test, 54 suites Jest et 363 cas** lorsque toutes les intégrations sont activées :
+Inventaire statique actuel : **59 fichiers de test, 59 suites Jest et 387 cas** lorsque toutes les intégrations sont activées :
 
-- 257 tests unitaires ;
-- 62 tests e2e ;
-- 32 tests d’intégration PostgreSQL et démarrage applicatif ;
+- 276 tests unitaires ;
+- 66 tests e2e ;
+- 33 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 41 suites unitaires, 10 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 51 suites autonomes et leurs 319 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 44 cas, sans flag d’activation.
+Jest affiche 45 suites unitaires, 11 suites e2e et 3 suites d’intégration. `pnpm test` exécute les 56 suites autonomes et leurs 342 cas ; `pnpm run test:integration` exécute directement les 3 suites réelles et leurs 45 cas, sans flag d’activation.
 
-Le 2 septembre 2026, TypeScript, ESLint, le build, les **51 suites et 319 cas autonomes** ainsi que les
-**3 suites et 44 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **54 suites et 363 cas**.
-La migration `005_profile_questions` a été appliquée sans destruction sur `histae-dev`; la chaîne complète
+Le 3 septembre 2026, TypeScript, ESLint, le build, les **56 suites et 342 cas autonomes** ainsi que les
+**3 suites et 45 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis passent, soit **59 suites et 387 cas**.
+La migration `006_content_moderation` a été appliquée sans destruction sur `histae-dev`; la chaîne complète
 est aussi rejouée dans un schéma isolé afin de vérifier les migrations et leurs checksums.
 
 ## Commandes
@@ -42,7 +42,7 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 44 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 45 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL et démarrage applicatif réels uniquement.
@@ -167,9 +167,9 @@ Suite `ApiValidationPipe` :
 1. Vérifie la transformation d’un JSON valide en instance de DTO.
 2. Vérifie le refus des champs inconnus et des champs obligatoires absents avec le code d’erreur stable `invalid_request_body`.
 
-### `test/unit/common/nest-metadata.spec.ts` — 59 tests paramétrés
+### `test/unit/common/nest-metadata.spec.ts` — 63 tests paramétrés
 
-Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 56 classes injectées principales, y compris Redis, le stockage photo, l’outbox et son worker, le module mobile et les cinq composants Stripe Billing.
+Suite `Nest dependency metadata` : un cas est exécuté pour chacune des 63 classes injectées principales, y compris Redis, le stockage photo, l’outbox et son worker, le module mobile, la modération et les cinq composants Stripe Billing.
 
 Chaque cas vérifie que `emitDecoratorMetadata` contient des tokens de constructeur réels et jamais `Function`, `Object` ou `undefined`. Ce test empêche la régression où un import `type` TypeScript supprimerait au runtime le token dont Nest a besoin pour l’injection de dépendances.
 
@@ -194,14 +194,34 @@ Vérifie que les chemins sans query string restent inchangés et que les recherc
 
 Suite `test layout` : parcourt le dépôt et garantit que tous les fichiers correspondant aux conventions `.spec.*` et `.test.*` se trouvent sous `test`.
 
-### `test/unit/config/config.service.spec.ts` — 37 tests
+### `test/unit/config/config.service.spec.ts` — 39 tests
 
 Suite `parseEnvironment` :
 
 - accepte séparément `development`, `test` et `production` ;
 - refuse séparément `undefined`, la chaîne vide, `staging` et une valeur ambiguë telle que `developmentish`.
 
-Les autres cas couvrent la configuration Sweego, CORS, les limites des TTL OTP/JWT et du jeton de suppression, FCM, Stripe et le stockage objet compatible S3. Ils imposent aussi des clés cryptographiques distinctes, PostgreSQL TLS en production, un endpoint objet HTTPS en production, les clés Stripe test/live selon l’environnement, les Product/Price IDs distincts, le secret `whsec_*`, les URL HTTPS et la conservation littérale de `{CHECKOUT_SESSION_ID}`. Les nouveaux cas vérifient la liste IP/CIDR des proxies et refusent `TRUST_PROXY=true` en production.
+Les autres cas couvrent la configuration Sweego, CORS, les limites des TTL OTP/JWT et du jeton de suppression, FCM, Stripe, le stockage objet compatible S3 et le service local de modération photo. Ils imposent aussi des clés cryptographiques distinctes, PostgreSQL TLS en production, des endpoints valides, un token de modération robuste, un timeout et des seuils bornés, les clés Stripe test/live selon l’environnement, les Product/Price IDs distincts, le secret `whsec_*`, les URL HTTPS et la conservation littérale de `{CHECKOUT_SESSION_ID}`. Les nouveaux cas vérifient la liste IP/CIDR des proxies et refusent `TRUST_PROXY=true` en production.
+
+### `test/unit/moderation/text-moderation.service.spec.ts` — 5 tests
+
+Vérifie l’approbation d’un texte ordinaire et la mise en revue, sans rejet automatique, des coordonnées
+personnelles, insultes, signaux sexuels et spam.
+
+### `test/unit/moderation/photo-moderation.service.spec.ts` — 3 tests
+
+Vérifie l’approbation d’une analyse nette à visage unique et faible score NSFW, la combinaison des motifs de revue,
+le repli fail-safe lors d’une panne et l’absence d’appel réseau lorsque le provider est désactivé.
+
+### `test/unit/moderation/moderation.repository.spec.ts` — 1 test
+
+Vérifie qu’un rejet photo rend la ligne invisible, remet `photo.delete` dans l’outbox et audite la décision au sein
+de la même transaction PostgreSQL.
+
+### `test/unit/moderation/moderation.service.spec.ts` — 4 tests
+
+Vérifie la cohérence obligatoire de la checklist photo, les conflits de version/action et l’ordre garantissant que
+l’audit du repository précède la génération d’une URL signée.
 
 ### `test/unit/photos/photo-processor.service.spec.ts` — 9 tests
 
@@ -403,6 +423,11 @@ Suite `UsersService consent enforcement` :
 
 ## Tests e2e
 
+### `test/e2e/moderation.contract.spec.ts` — 4 tests
+
+Vérifie la file de métadonnées, le motif obligatoire avant exposition du contenu, la version et la checklist photo,
+ainsi que le rejet strict des champs et décisions inconnus.
+
 ### `test/e2e/admin.contract.spec.ts` — 4 tests
 
 1. Liste une file de réconciliation validée et paginée.
@@ -503,7 +528,7 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 
 ## Tests d’intégration réels
 
-### `test/integration/postgres.schema.integration.spec.ts` — 32 tests
+### `test/integration/postgres.schema.integration.spec.ts` — 33 tests
 
 La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 
@@ -525,7 +550,7 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 16. **Effacement RGPD** — traite une demande d’effacement de `pending` à `in_progress`, puis `completed`; vérifie l’anonymisation du compte, la suppression du profil/photo/préférences/position/blocages/état, le retrait des consentements, le masquage du message, la clôture du match et les journaux d’audit.
 17. **CA Premium estimé** — exécute l’agrégation administrateur réelle et vérifie que le nombre d’abonnements Premium multiplié par le tarif mensuel du catalogue produit le montant attendu.
 18. **Idempotence des messages** — rejoue le même envoi, retrouve le même UUID sans doublon et refuse une clé réutilisée avec un autre contenu.
-19. **Résumé mobile d’un match** — vérifie le profil joint, le dernier message, le compteur non lu et le masquage de la photo jusqu’à la révélation mutuelle.
+19. **Résumé mobile d’un match** — vérifie le profil joint, le dernier message et le compteur non lu ; même après révélation mutuelle, photo, bio et réponse restent masquées tant que leur modération n’est pas `approved`.
 20. **Lecture groupée** — marque tous les messages reçus jusqu’à une borne, sans marquer ceux envoyés par le demandeur.
 21. **Jeton de suppression à usage unique** — accepte le bon hash une seule fois et refuse un hash erroné ou un replay.
 22. **Webhook Stripe idempotent** — traite l’Event ID une seule fois malgré un retry.
@@ -537,8 +562,9 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 28. **Idempotence photo et émission outbox** — crée et active une photo, la rejoue sans doublon, refuse une empreinte différente, remplace la photo et vérifie l’événement transactionnel ainsi que la consommation de l’ancienne clé.
 29. **Réconciliation photo admin** — liste et mesure un upload ancien, le passe à `deleting`, crée ou réinitialise `photo.delete` et vérifie l’audit opérateur dans la même transaction.
 30. **Concurrence et dead-letter outbox** — vérifie la propriété exclusive d’un événement, sa reprise puis son passage en dead-letter au budget configuré.
-31. **Base neuve** — applique la baseline et les migrations `002`/`003`/`004`/`005` dans un schéma isolé vide, vérifie les tables finales, les deux plans et les quinze questions initiales, puis annule toute la transaction.
+31. **Base neuve** — applique la baseline et les migrations `002`/`003`/`004`/`005`/`006` dans un schéma isolé vide, vérifie les tables finales, les deux plans et les quinze questions initiales, puis annule toute la transaction.
 32. **Questions de profil** — remplace réellement les réponses, vérifie leur projection dans le profil puis confirme que la suppression administrative de la question les efface par cascade.
+33. **Modération photo** — crée un cas approuvé séparé du cycle technique, audite l’ouverture du détail, le rejette avec checklist/version, puis vérifie la transition `deleting`, l’outbox et l’audit transactionnels.
 
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
@@ -568,16 +594,17 @@ Cette suite utilise le Redis Docker réel, exclusivement dans la base logique 15
 
 Les validations sont déclenchées manuellement. Avant une livraison :
 
-1. démarrer Redis, Scylla et SeaweedFS avec les trois fichiers Compose ;
+1. démarrer Redis, Scylla, SeaweedFS et le service de modération photo avec leurs fichiers Compose ;
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 319 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 44 cas réels et vérifier que les 363 cas passent au total.
+5. exécuter `pnpm test` pour les 342 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 45 cas réels et vérifier que les 387 cas passent au total.
 
-Dans l’état courant, TypeScript, ESLint, le build, les **41 suites/257 cas unitaires**, les **10 suites/62
-cas e2e** et les **3 suites/44 cas d’intégration** sont verts, soit **54 suites et 363 cas**. Docker déclare
-ScyllaDB, Redis et SeaweedFS `healthy`; le smoke test réel du bucket S3-compatible avait été validé lors du lot photo immédiatement précédent.
+Dans l’état courant, TypeScript, ESLint, le build, les **45 suites/276 cas unitaires**, les **11 suites/66
+cas e2e** et les **3 suites/45 cas d’intégration** sont verts, soit **59 suites et 387 cas**. Docker déclare
+ScyllaDB, Redis, SeaweedFS et le service de modération photo `healthy`; une analyse WebP authentifiée réelle et le
+smoke test antérieur du bucket S3-compatible ont été validés.
 
 ## Audit des tests obsolètes
 

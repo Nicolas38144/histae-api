@@ -27,6 +27,8 @@ import { UsersRepository } from './users.repository';
 import { BillingService } from '../billing/billing.service';
 import { PhotosService } from '../photos/photos.service';
 import type { UploadedPhoto } from '../photos/photo-processor.service';
+import { TextModerationService } from '../moderation/text-moderation.service';
+import type { UploadedPhotoResult } from '../photos/photos.service';
 
 export { ConsentChange, PreferencesInput, PresenceInput, ProfileInput } from './users.models';
 
@@ -38,6 +40,7 @@ export class UsersService {
     private readonly discovery: DiscoveryStore,
     private readonly billing: BillingService,
     private readonly photos: PhotosService,
+    private readonly moderation: TextModerationService = new TextModerationService(),
   ) {}
 
   async getProfile(userId: string): Promise<PublicProfile> {
@@ -60,7 +63,13 @@ export class UsersService {
       : ['terms_of_service_acceptance', 'privacy_notice_acknowledgement', 'sensitive_data_consent']);
     const bio = input.bio === null ? null : input.bio.trim();
     if (bio !== null && Buffer.byteLength(bio) > 2_000) throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
-    if (!await this.users.upsertProfile(userId, { firstname, birthdate: input.birthdate, sex: input.sex, bio })) {
+    if (!await this.users.upsertProfile(userId, {
+      firstname,
+      birthdate: input.birthdate,
+      sex: input.sex,
+      bio,
+      bioModeration: bio ? this.moderation.analyze(bio) : null,
+    })) {
       throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
     }
   }
@@ -69,7 +78,7 @@ export class UsersService {
     userId: string,
     upload: UploadedPhoto,
     idempotencyKey: string | undefined,
-  ): Promise<string> {
+  ): Promise<UploadedPhotoResult> {
     return this.photos.upload(userId, upload, idempotencyKey);
   }
 

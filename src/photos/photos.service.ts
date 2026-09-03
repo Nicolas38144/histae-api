@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { apiError } from '../common/api-error';
 import { normalizeIdempotencyKey } from '../common/idempotency';
@@ -16,6 +16,14 @@ import {
   type UploadedPhoto,
 } from './photo-processor.service';
 import { type PhotoObject, PhotosRepository } from './photos.repository';
+import { PhotoModerationService } from '../moderation/photo-moderation.service';
+import type { AutomatedPhotoModeration, ModerationReasonCode, ModerationStatus } from '../moderation/moderation.models';
+
+export type UploadedPhotoResult = {
+  photo: string;
+  moderation_status: ModerationStatus;
+  moderation_reasons: ModerationReasonCode[];
+};
 
 const PROFILE_PHOTO_TTL_SECONDS = 300;
 const PHOTO_UPLOAD_IDEMPOTENCY_TTL_MILLIS = 24 * 60 * 60 * 1_000;
@@ -32,13 +40,14 @@ export class PhotosService {
     private readonly photosRepository: PhotosRepository,
     private readonly photoProcessor: PhotoProcessorService,
     private readonly objectStorage: ObjectStorageService,
+    @Optional() private readonly moderation?: PhotoModerationService,
   ) {}
 
   async upload(
     userId: string,
     upload: UploadedPhoto,
     idempotencyInput: string | undefined,
-  ): Promise<string> {
+  ): Promise<UploadedPhotoResult> {
     const idempotencyKey = normalizeIdempotencyKey(idempotencyInput);
     const photoId = randomUUID();
     const objectKey = this.profilePhotoKey(userId, photoId);
@@ -84,10 +93,15 @@ export class PhotosService {
     }
 
     if (creation.state === 'replay') {
-      return this.signPhoto(creation.photo.objectKey);
+      return {
+        photo: await this.signPhoto(creation.photo.objectKey),
+        moderation_status: creation.photo.moderationStatus ?? 'pending',
+        moderation_reasons: creation.photo.moderationReasons ?? ['analysis_unavailable'],
+      };
     }
 
     let processed: ProcessedPhoto;
+
     try {
       processed = await this.photoProcessor.toWebp(upload);
     } catch (error: unknown) {
@@ -107,6 +121,10 @@ export class PhotosService {
 
       throw error;
     }
+
+    const moderation = this.moderation
+      ? await this.moderation.analyze(processed.body)
+      : manualPhotoModeration();
 
     const metadataRecorded = await this.photosRepository.recordProcessed(
       photoId,
@@ -140,7 +158,7 @@ export class PhotosService {
       this.throwStorageUnavailable(error, 'upload');
     }
 
-    const activated = await this.photosRepository.activate(photoId, userId);
+    const activated = await this.photosRepository.activate(photoId, userId, moderation);
     if (!activated) {
       // The object may already exist. Maintenance will safely remove it.
       throw apiError(
@@ -150,7 +168,11 @@ export class PhotosService {
       );
     }
 
-    return this.signPhoto(objectKey);
+    return {
+      photo: await this.signPhoto(objectKey),
+      moderation_status: moderation.status,
+      moderation_reasons: moderation.reasonCodes,
+    };
   }
 
   async delete(userId: string): Promise<void> {
@@ -246,6 +268,17 @@ function uploadRequestHash(upload: UploadedPhoto): Buffer {
   updateLengthPrefixed(hash, Buffer.from(upload.mimetype.trim().toLowerCase(), 'utf8'));
   updateLengthPrefixed(hash, upload.body);
   return hash.digest();
+}
+
+function manualPhotoModeration(): AutomatedPhotoModeration {
+  return {
+    status: 'pending' as const,
+    reasonCodes: ['analysis_unavailable'],
+    policyVersion: 'local_vision_v1',
+    faceCount: null,
+    sharpnessScore: null,
+    nsfwScore: null,
+  };
 }
 
 function updateLengthPrefixed(

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService, type Queryable } from '../database/database.service';
 import { OutboxRepository } from '../outbox/outbox.repository';
+import type { AutomatedPhotoModeration, ModerationReasonCode, ModerationStatus } from '../moderation/moderation.models';
 
 export const PHOTO_STATUSES = ['pending', 'processing', 'ready', 'deleting'] as const;
 export type PhotoStatus = typeof PHOTO_STATUSES[number];
@@ -10,6 +11,8 @@ export type PhotoObject = {
   userId: string;
   objectKey: string;
   status: PhotoStatus;
+  moderationStatus?: ModerationStatus;
+  moderationReasons?: ModerationReasonCode[];
 };
 
 export type ProcessingPhoto = {
@@ -45,6 +48,8 @@ type UploadRequest = {
   userId: string | null;
   objectKey: string | null;
   photoStatus: PhotoStatus | null;
+  moderationStatus: ModerationStatus | null;
+  moderationReasons: ModerationReasonCode[] | null;
 };
 
 @Injectable()
@@ -70,8 +75,11 @@ export class PhotosRepository {
           request.status AS "requestStatus", request.photo_id AS "photoId",
           candidate.user_id AS "userId", candidate.object_key AS "objectKey",
           candidate.status AS "photoStatus"
+          , moderation.status AS "moderationStatus",
+          moderation.reason_codes AS "moderationReasons"
         FROM photo_upload_request AS request
         LEFT JOIN user_photo AS candidate ON candidate.id = request.photo_id
+        LEFT JOIN content_moderation_case AS moderation ON moderation.photo_id = candidate.id
         WHERE request.user_id = $1 AND request.idempotency_key = $2
       `, [photo.userId, photo.idempotencyKey]);
       const previousResult = creationResultForExistingRequest(
@@ -125,7 +133,18 @@ export class PhotosRepository {
     return result.rowCount === 1;
   }
 
-  async activate(photoId: string, userId: string): Promise<boolean> {
+  async activate(
+    photoId: string,
+    userId: string,
+    moderation: AutomatedPhotoModeration = {
+      status: 'pending',
+      reasonCodes: ['analysis_unavailable'],
+      policyVersion: 'local_vision_v1',
+      faceCount: null,
+      sharpnessScore: null,
+      nsfwScore: null,
+    },
+  ): Promise<boolean> {
     return this.database.transaction(async (client) => {
       if (!await this.lockActiveProfile(client, userId)) {
         return false;
@@ -157,6 +176,22 @@ export class PhotosRepository {
       if (activated.rowCount !== 1) {
         throw new Error('Photo activation invariant violated');
       }
+
+      await client.query(`
+        INSERT INTO content_moderation_case (
+          user_id, content_type, photo_id, status, reason_codes, policy_version,
+          face_count, sharpness_score, nsfw_score
+        ) VALUES ($1, 'photo', $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        userId,
+        photoId,
+        moderation.status,
+        moderation.reasonCodes,
+        moderation.policyVersion,
+        moderation.faceCount,
+        moderation.sharpnessScore,
+        moderation.nsfwScore,
+      ]);
 
       const completedRequest = await client.query(`
         UPDATE photo_upload_request
@@ -313,6 +348,8 @@ function creationResultForExistingRequest(
         userId: request.userId,
         objectKey: request.objectKey,
         status: request.photoStatus,
+        moderationStatus: request.moderationStatus ?? 'pending',
+        moderationReasons: request.moderationReasons ?? ['analysis_unavailable'],
       },
     };
   }

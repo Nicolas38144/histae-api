@@ -64,6 +64,8 @@ describe('PhotosRepository', () => {
           userId: USER_ID,
           objectKey: OBJECT_KEY,
           status: 'ready',
+          moderationStatus: 'pending',
+          moderationReasons: ['analysis_unavailable'],
         },
       });
     expect(client.query).toHaveBeenCalledTimes(3);
@@ -149,6 +151,7 @@ describe('PhotosRepository', () => {
         .mockResolvedValueOnce({ rows: [{ exists: 1 }] })
         .mockResolvedValueOnce({ rows: [previous] })
         .mockResolvedValueOnce({ rowCount: 1 })
+        .mockResolvedValueOnce({ rowCount: 1 })
         .mockResolvedValueOnce({ rowCount: 1 }),
     };
     const outbox = { enqueue: jest.fn().mockResolvedValue(true) };
@@ -164,6 +167,9 @@ describe('PhotosRepository', () => {
     });
     expect(client.query.mock.calls[3]?.[0]).toContain("status = 'ready'");
     expect(client.query.mock.calls[4]?.[0]).toContain(
+      'INSERT INTO content_moderation_case',
+    );
+    expect(client.query.mock.calls[5]?.[0]).toContain(
       "status = 'completed'",
     );
   });

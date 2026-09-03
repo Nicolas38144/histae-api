@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(5);
+    expect(migrations).toHaveLength(6);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -41,6 +41,12 @@ describe('PostgreSQL migration catalog', () => {
     expect(profileQuestions.sql).toContain('CREATE TABLE user_profile_answer');
     expect(profileQuestions.sql).toContain('ON DELETE CASCADE');
     expect(profileQuestions.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const moderation = await loadMigration(migrations[5]);
+    expect(moderation.sql).toContain('-- source: 006_content_moderation.sql');
+    expect(moderation.sql).toContain('CREATE TABLE content_moderation_case');
+    expect(moderation.sql).toContain('view_moderation_content');
+    expect(moderation.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

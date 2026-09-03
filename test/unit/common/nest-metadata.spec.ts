@@ -57,6 +57,10 @@ import { OutboxWorkerService } from '../../../src/outbox/outbox-worker.service';
 import { ProfileQuestionsController } from '../../../src/profile-questions/profile-questions.controller';
 import { ProfileQuestionsRepository } from '../../../src/profile-questions/profile-questions.repository';
 import { ProfileQuestionsService } from '../../../src/profile-questions/profile-questions.service';
+import { ModerationController } from '../../../src/moderation/moderation.controller';
+import { ModerationRepository } from '../../../src/moderation/moderation.repository';
+import { ModerationService } from '../../../src/moderation/moderation.service';
+import { PhotoModerationService } from '../../../src/moderation/photo-moderation.service';
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, AuthService, OtpService, SweegoSmsService, TokenService,
@@ -71,10 +75,12 @@ const injectedClasses = [
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
   TraitsController, TraitsRepository, TraitsService,
   ProfileQuestionsController, ProfileQuestionsRepository, ProfileQuestionsService,
+  ModerationController, ModerationRepository, ModerationService, PhotoModerationService,
   ReportsController, ReportsRepository, ReportsService,
   AdminController, AdminRepository, AdminService,
   BillingController, StripeWebhookController, BillingRepository, BillingService, StripeGateway,
 ];
+
 
 describe('Nest dependency metadata', () => {
   it.each(injectedClasses)('%p keeps runtime constructor tokens', (target) => {

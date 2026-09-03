@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
+import type { AutomatedModerationDecision } from '../moderation/moderation.models';
 import type {
   AdminProfileQuestion,
   ProfileAnswer,
@@ -35,15 +36,22 @@ export class ProfileQuestionsRepository {
   async listForUser(userId: string): Promise<ProfileAnswer[]> {
     return (await this.database.query<ProfileAnswer>(`
       SELECT answer.question_id, question.code, question.prompt AS question,
-        answer.answer, answer.position::integer AS position
+        answer.answer, answer.position::integer AS position,
+        moderation.status AS moderation_status,
+        moderation.reason_codes AS moderation_reasons
       FROM user_profile_answer AS answer
       JOIN profile_question AS question ON question.id = answer.question_id
+      JOIN content_moderation_case AS moderation
+        ON moderation.profile_answer_id = answer.id
       WHERE answer.user_id = $1
       ORDER BY answer.position
     `, [userId])).rows;
   }
 
-  async replaceForUser(userId: string, answers: ProfileAnswerInput[]): Promise<'updated' | 'profile_not_found' | 'question_not_found'> {
+  async replaceForUser(
+    userId: string,
+    answers: Array<ProfileAnswerInput & { moderation?: AutomatedModerationDecision }>,
+  ): Promise<'updated' | 'profile_not_found' | 'question_not_found'> {
     return this.database.transaction(async (client) => {
       const profile = await client.query<{ user_id: string }>(`
         SELECT profile.user_id
@@ -64,10 +72,28 @@ export class ProfileQuestionsRepository {
 
       await client.query('DELETE FROM user_profile_answer WHERE user_id = $1', [userId]);
       for (const [index, answer] of answers.entries()) {
-        await client.query(`
+        const inserted = await client.query<{ id: string }>(`
           INSERT INTO user_profile_answer (user_id, question_id, answer, position)
           VALUES ($1, $2, $3, $4)
+          RETURNING id
         `, [userId, answer.question_id, answer.answer, index + 1]);
+        const moderation = answer.moderation ?? {
+          status: 'pending',
+          reasonCodes: ['legacy_unreviewed'],
+          policyVersion: 'legacy_import_v1',
+        };
+        await client.query(`
+          INSERT INTO content_moderation_case (
+            user_id, content_type, profile_answer_id, status,
+            reason_codes, policy_version
+          ) VALUES ($1, 'profile_answer', $2, $3, $4, $5)
+        `, [
+          userId,
+          inserted.rows[0]!.id,
+          moderation.status,
+          moderation.reasonCodes,
+          moderation.policyVersion,
+        ]);
       }
       return 'updated';
     });

@@ -1,0 +1,25 @@
+services:
+  photo-moderation:
+    build:
+      context: ./services/photo-moderation
+    restart: unless-stopped
+    environment:
+      MODERATION_TOKEN: ${PHOTO_MODERATION_TOKEN:?Define PHOTO_MODERATION_TOKEN with at least 32 bytes}
+    ports:
+      - "127.0.0.1:8090:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 45s

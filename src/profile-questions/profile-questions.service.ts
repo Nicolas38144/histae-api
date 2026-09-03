@@ -9,10 +9,14 @@ import type {
   ProfileQuestionInput,
 } from './profile-questions.models';
 import { ProfileQuestionsRepository } from './profile-questions.repository';
+import { TextModerationService } from '../moderation/text-moderation.service';
 
 @Injectable()
 export class ProfileQuestionsService {
-  constructor(private readonly questions: ProfileQuestionsRepository) {}
+  constructor(
+    private readonly questions: ProfileQuestionsRepository,
+    private readonly moderation: TextModerationService = new TextModerationService(),
+  ) {}
 
   list(): Promise<ProfileQuestion[]> {
     return this.questions.list();
@@ -29,7 +33,10 @@ export class ProfileQuestionsService {
   async replaceForUser(userId: string, input: ProfileAnswerInput[]): Promise<ProfileAnswer[]> {
     const questionIds = new Set(input.map((answer) => answer.question_id));
     if (input.length > 3 || questionIds.size !== input.length) throwInvalidAnswers();
-    const answers = input.map((answer) => ({ ...answer, answer: normalizeAnswer(answer.answer) }));
+    const answers = input.map((answer) => {
+      const normalized = normalizeAnswer(answer.answer);
+      return { ...answer, answer: normalized, moderation: this.moderation.analyze(normalized) };
+    });
     const result = await this.questions.replaceForUser(userId, answers);
     if (result === 'profile_not_found') {
       throw apiError(404, 'profile_not_found', 'The account exists, but its profile has not been completed yet.');

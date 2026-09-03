@@ -1,4 +1,4 @@
-# Check-up de sécurité — 2 septembre 2026
+# Check-up de sécurité — 3 septembre 2026
 
 ## Portée et niveau de confiance
 
@@ -21,8 +21,9 @@ directement corrigeables trouvés pendant la revue ont été traités.
 | Entrées | Satisfaisant | DTO stricts, whitelist avec rejet des champs inconnus, limites métier, UUID et dates validés. |
 | SQL/CQL | Satisfaisant | Paramètres liés côté PostgreSQL ; identifiants Scylla issus uniquement de configuration validée. |
 | Limites de débit | Satisfaisant | Redis obligatoire en production, clés HMAC, échec fermé, `Retry-After`, limite globale et limites sensibles dédiées. |
-| Photos | Satisfaisant | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, upload idempotent 24 h, clés versionnées, suppression par outbox durable et URL courte signée seulement au besoin. |
-| Questions de profil | Satisfaisant avec modération à compléter | Trois réponses au plus, questions distinctes, texte normalisé et borné, SQL paramétré, remplacement transactionnel et suppression en cascade annoncée dans le dashboard. |
+| Photos | Satisfaisant avec calibration à poursuivre | Bucket privé, formats/MIME/signature/dimensions vérifiés, 500 000 octets entrée et sortie, WebP sans métadonnées, upload idempotent 24 h, clés versionnées, suppression par outbox durable, modération séparée et URL courte signée seulement au besoin. |
+| Questions de profil | Satisfaisant | Trois réponses au plus, questions distinctes, texte normalisé et borné, SQL paramétré, remplacement/modération transactionnels et suppression en cascade annoncée dans le dashboard. |
+| Modération | Satisfaisant avec gouvernance à finaliser | Détection locale explicable, aucune décision automatique de rejet, masquage public fail-safe, file centrale sans contenu, détail et décision motivés/audités, concurrence optimiste et suppression outbox des photos rejetées. |
 | Données sensibles | Satisfaisant avec dépendances infra | Téléphone HMAC + AES-256-GCM, logs HTTP sans query string, export/effacement inter-bases et politique de rétention. |
 | Dépendances | Satisfaisant au contrôle | Audits pnpm complet et production : aucune vulnérabilité connue le 1er septembre 2026. |
 
@@ -56,6 +57,14 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - Les questions de profil utilisent des catégories fermées, des libellés uniques et des bornes applicatives et SQL.
   Le remplacement des réponses verrouille le profil et les questions concernées ; une suppression administrative
   efface la question et ses réponses par cascade atomique, après affichage du nombre d’enregistrements concernés.
+- Les photos, bios et réponses possèdent désormais un cas de modération indépendant. Les projections publiques ne
+  lisent que les contenus `approved`; les contenus existants sont migrés en `pending/legacy_unreviewed` plutôt que
+  publiés sans contrôle. Le propriétaire conserve son contenu et voit son statut et les motifs.
+- L’analyse automatique n’autorise qu’une approbation : un signal texte, une qualité photo insuffisante, plusieurs
+  visages, un score NSFW élevé, un timeout ou une réponse invalide conduisent à une revue humaine sans rejet automatique.
+- La file admin ne contient aucun texte, objet ou lien. Le détail exige un motif audité avant signature éventuelle,
+  une version optimiste protège les décisions concurrentes et la revue photo exige une checklist complète. Le rejet
+  d’une photo rend l’objet invisible et écrit sa suppression dans l’outbox au sein de la transaction de revue.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 
 ## Risques résiduels et actions avant production
@@ -77,8 +86,10 @@ directement corrigeables trouvés pendant la revue ont été traités.
 6. **Validation offensive** : faire réaliser un pentest authentifié couvrant IDOR/BOLA, élévation de privilèges,
    concurrence, abuse cases OTP, webhooks Stripe, multipart/HEIC et URLs signées. Ajouter SAST, secret scanning et
    audit de dépendances récurrent dans la chaîne de livraison lorsque celle-ci sera définie.
-7. **Contenu de profil** : ajouter la détection qualité/modération prévue pour les bios, photos et réponses libres,
-   avec un parcours de signalement et de revue adapté avant une ouverture publique à grande échelle.
+7. **Modération et biais** : le détecteur Haar et le petit classifieur NSFW sont des outils de triage, pas une preuve
+   de conformité ni une couverture exhaustive de la violence, de la haine ou de tout contenu interdit. Calibrer les
+   seuils sur un corpus représentatif, mesurer les faux positifs/négatifs et biais, définir le SLA et les habilitations
+   de revue, puis fournir une procédure de contestation. Les règles texte doivent évoluer avec une politique versionnée.
 
 ## Hypothèses importantes
 
@@ -93,8 +104,8 @@ directement corrigeables trouvés pendant la revue ont été traités.
 
 - `pnpm audit --audit-level low` et sa variante `--prod` : aucune vulnérabilité connue ;
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 41 suites, 257 cas réussis ;
-- tests e2e Fastify : 10 suites, 62 cas réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 44 cas réussis ;
-- migrations PostgreSQL : `005_profile_questions` appliquée puis vérifiée idempotente sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
-- état Docker local : SeaweedFS, Redis et ScyllaDB déclarés `healthy`; configuration Compose objet valide.
+- tests unitaires : 45 suites, 276 cas réussis ;
+- tests e2e Fastify : 11 suites, 66 cas réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 3 suites, 45 cas réussis ;
+- migrations PostgreSQL : `006_content_moderation` appliquée sur `histae-dev`; baseline et migrations incrémentales appliquées avec succès dans un schéma temporaire vide et intégralement annulées.
+- état Docker local : SeaweedFS, Redis, ScyllaDB et le service de modération photo déclarés `healthy`; une analyse WebP authentifiée réelle a renvoyé des scores valides.

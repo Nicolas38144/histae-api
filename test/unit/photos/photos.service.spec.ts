@@ -35,9 +35,11 @@ describe('PhotosService', () => {
       storage as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toBe(
-      'https://storage.test/signed',
-    );
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toEqual({
+      photo: 'https://storage.test/signed',
+      moderation_status: 'pending',
+      moderation_reasons: ['analysis_unavailable'],
+    });
 
     const processing = repository.createProcessing.mock.calls[0]?.[0] as {
       id: string;
@@ -71,7 +73,11 @@ describe('PhotosService', () => {
       contentType: 'image/webp',
       cacheControl: 'private, max-age=300',
     });
-    expect(repository.activate).toHaveBeenCalledWith(processing.id, USER_ID);
+    expect(repository.activate).toHaveBeenCalledWith(
+      processing.id,
+      USER_ID,
+      expect.objectContaining({ status: 'pending', reasonCodes: ['analysis_unavailable'] }),
+    );
     expect(storage.signedGetUrl).toHaveBeenCalledWith(processing.objectKey, 300);
   });
 
@@ -89,9 +95,11 @@ describe('PhotosService', () => {
       storage as never,
     );
 
-    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toBe(
-      'https://storage.test/signed',
-    );
+    await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toEqual({
+      photo: 'https://storage.test/signed',
+      moderation_status: 'pending',
+      moderation_reasons: ['analysis_unavailable'],
+    });
     expect(processor.toWebp).not.toHaveBeenCalled();
     expect(storage.put).not.toHaveBeenCalled();
     expect(storage.signedGetUrl).toHaveBeenCalledWith(OLD_PHOTO.objectKey, 300);

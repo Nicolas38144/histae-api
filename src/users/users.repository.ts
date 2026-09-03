@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import type { ConsentChange, ConsentEvent, ConsentType, PreferencesInput, PreferencesRow, PresenceInput, ProfileInput, ProfileRow } from './users.models';
+import type { ConsentChange, ConsentEvent, ConsentType, ModeratedProfileInput, PreferencesInput, PreferencesRow, PresenceInput, ProfileRow } from './users.models';
 
 @Injectable()
 export class UsersRepository {
@@ -10,21 +10,33 @@ export class UsersRepository {
     const result = await this.database.query<ProfileRow>(`
       SELECT profile.user_id, profile.firstname, profile.birthdate, profile.sex, profile.bio,
         photo.object_key AS photo,
+        bio_moderation.status AS bio_moderation_status,
+        bio_moderation.reason_codes AS bio_moderation_reasons,
+        photo_moderation.status AS photo_moderation_status,
+        photo_moderation.reason_codes AS photo_moderation_reasons,
         COALESCE(answers.items, '[]'::jsonb) AS profile_answers
       FROM user_profile AS profile
       JOIN user_account AS account ON account.user_id = profile.user_id
       LEFT JOIN user_photo AS photo
         ON photo.user_id = profile.user_id AND photo.status = 'ready'
+      LEFT JOIN content_moderation_case AS bio_moderation
+        ON bio_moderation.bio_user_id = profile.user_id
+      LEFT JOIN content_moderation_case AS photo_moderation
+        ON photo_moderation.photo_id = photo.id
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(jsonb_build_object(
           'question_id', answer.question_id,
           'code', question.code,
           'question', question.prompt,
           'answer', answer.answer,
-          'position', answer.position
+          'position', answer.position,
+          'moderation_status', moderation.status,
+          'moderation_reasons', moderation.reason_codes
         ) ORDER BY answer.position) AS items
         FROM user_profile_answer AS answer
         JOIN profile_question AS question ON question.id = answer.question_id
+        JOIN content_moderation_case AS moderation
+          ON moderation.profile_answer_id = answer.id
         WHERE answer.user_id = profile.user_id
       ) AS answers ON true
       WHERE profile.user_id = $1 AND account.deleted_at IS NULL
@@ -32,16 +44,40 @@ export class UsersRepository {
     return result.rows[0];
   }
 
-  async upsertProfile(userId: string, input: ProfileInput): Promise<boolean> {
-    const result = await this.database.query(`
-      INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
-      SELECT $1, $2, $3, $4, $5 WHERE EXISTS (
-        SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
-      )
-      ON CONFLICT (user_id) DO UPDATE SET firstname = EXCLUDED.firstname, birthdate = EXCLUDED.birthdate,
-        sex = EXCLUDED.sex, bio = EXCLUDED.bio
-    `, [userId, input.firstname, input.birthdate, input.sex, input.bio]);
-    return result.rowCount !== 0;
+  async upsertProfile(userId: string, input: ModeratedProfileInput): Promise<boolean> {
+    return this.database.transaction(async (client) => {
+      const current = (await client.query<{ bio: string | null }>(`
+        SELECT profile.bio FROM user_profile AS profile
+        JOIN user_account AS account ON account.user_id = profile.user_id
+        WHERE profile.user_id = $1 AND account.deleted_at IS NULL
+        FOR UPDATE OF profile
+      `, [userId])).rows[0];
+      const result = await client.query(`
+        INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
+        SELECT $1, $2, $3, $4, $5 WHERE EXISTS (
+          SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
+        )
+        ON CONFLICT (user_id) DO UPDATE SET firstname = EXCLUDED.firstname, birthdate = EXCLUDED.birthdate,
+          sex = EXCLUDED.sex, bio = EXCLUDED.bio
+      `, [userId, input.firstname, input.birthdate, input.sex, input.bio]);
+      if (result.rowCount === 0) return false;
+      if (input.bio === null || input.bio === '') {
+        await client.query('DELETE FROM content_moderation_case WHERE bio_user_id = $1', [userId]);
+      } else if (current?.bio !== input.bio || !current) {
+        const decision = input.bioModeration!;
+        await client.query(`
+          INSERT INTO content_moderation_case (
+            user_id, content_type, bio_user_id, status, reason_codes, policy_version
+          ) VALUES ($1, 'bio', $1, $2, $3, $4)
+          ON CONFLICT (bio_user_id) WHERE bio_user_id IS NOT NULL DO UPDATE
+          SET status = EXCLUDED.status, reason_codes = EXCLUDED.reason_codes,
+            policy_version = EXCLUDED.policy_version, version = content_moderation_case.version + 1,
+            reviewed_by = NULL, reviewed_at = NULL, review_reason = NULL,
+            updated_at = clock_timestamp()
+        `, [userId, decision.status, decision.reasonCodes, decision.policyVersion]);
+      }
+      return true;
+    });
   }
 
   async findPreferences(userId: string): Promise<PreferencesRow | undefined> {

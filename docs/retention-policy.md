@@ -1,13 +1,14 @@
 # Politique de conservation technique
 
-Mise à jour : 2 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
+Mise à jour : 3 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
 
 | Données | Finalité | Déclencheur et durée | Traitement automatique |
 | --- | --- | --- | --- |
 | Compte, profil, préférences, traits et réponses aux questions | Fourniture du service | Vie du compte ; réponses supprimées lors de leur remplacement, de la suppression de leur question ou du compte ; effacement des champs sensibles au retrait du consentement concerné | `user_profile_answer` référence le profil et le catalogue avec `ON DELETE CASCADE` ; suppression du profil lors de l’effacement, puis compte technique anonymisé et désactivé |
-| Photo de profil privée | Présentation du profil après révélation mutuelle | Jusqu’au remplacement, à la suppression de la photo ou à l’effacement du compte | La ligne `ready` passe à `deleting` et un événement `photo.delete` est écrit dans la même transaction. Le worker outbox supprime l’objet WebP puis la ligne technique ; `PhotosMaintenanceService` reste le filet de réconciliation. Aucune URL signée n’est persistée |
+| Photo de profil privée | Présentation du profil après approbation et révélation mutuelle | Jusqu’au remplacement, au rejet administratif, à la suppression de la photo ou à l’effacement du compte | La ligne `ready` passe à `deleting` et un événement `photo.delete` est écrit dans la même transaction. Le worker outbox supprime l’objet WebP puis la ligne technique ; `PhotosMaintenanceService` reste le filet de réconciliation. Aucune URL signée n’est persistée |
+| Cas, signaux et décisions de modération | Empêcher l’exposition de contenus contraires aux règles et démontrer la revue | Vie du contenu source ; les références bio/réponse disparaissent avec le profil ou la réponse, et la référence photo après suppression confirmée de sa ligne. Le journal séparé de l’accès/revue suit sa durée d’un an | `content_moderation_case` ne conserve pas de copie du texte ou de l’image : seulement la référence source, statut, motifs, politique, scores techniques et décision humaine. Les cascades PostgreSQL l’effacent avec le contenu |
 | Idempotence d’upload photo | Rejouer sans double conversion ni double écriture | 24 heures après la demande | `photo_upload_request` conserve UUID utilisateur, UUID de clé, SHA-256 du nom/MIME/contenu source et état technique, jamais les octets de la photo ; purge bornée par `PhotosMaintenanceService` |
 | Outbox technique | Garantir les suppressions objet demandées | Événement réussi : 7 jours ; `dead_letter` : jusqu’au diagnostic opérateur | Le worker revendique avec `SKIP LOCKED`, réessaie dix fois avec backoff, purge les succès par lots et conserve les échecs définitifs sans message d’erreur sensible. La relance admin exige un motif et réinitialise l’événement avec une trace `admin_reconcile_photo` |
 | Position précise | Découverte locale demandée par l’utilisateur | Fraîche pendant 1 h, supprimée après 24 h ; immédiatement supprimée au retrait du consentement de localisation | `PrivacyMaintenanceService` et transaction de retrait |
@@ -48,6 +49,7 @@ communique que les décisions prises par cet utilisateur, jamais l’identité n
 5. Valider la rédaction exacte des CGU, de la notice de confidentialité et des écrans de consentement mobile.
 6. Confirmer la durée d’un an des décisions `like` et `pass`, ou définir deux durées distinctes si la finalité le justifie.
 7. Choisir la cible objet de production, sa région, son chiffrement, sa redondance et le délai d’effacement des copies et sauvegardes ; SeaweedFS `weed mini` reste limité au développement local.
+8. Valider la durée des métadonnées de modération, la transparence envers les utilisateurs, les habilitations des reviewers et la procédure de contestation d’une décision.
 
 ## Exécution
 

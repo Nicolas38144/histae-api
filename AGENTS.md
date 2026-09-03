@@ -29,7 +29,7 @@ Ne dupliquer ni profils ni autres données personnelles de référence dans Scyl
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
@@ -57,11 +57,15 @@ Respecter autant que possible la séparation suivante :
 - Supprimer une question de profil supprime volontairement toutes ses réponses par cascade PostgreSQL. Le dashboard doit afficher `answer_count` et demander une confirmation explicite avant cette opération irréversible.
 - Une photo reçue ne peut dépasser 500 000 octets et doit porter l’une des extensions `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Vérifier aussi MIME, signature et dimensions ; ne stocker qu’un WebP privé sans métadonnées, lui-même limité à 500 000 octets.
 - `PUT /users/me/photo` exige un `Idempotency-Key` UUID v4. Conserver 24 heures uniquement son empreinte de requête et son état ; un replay identique ne doit ni reconvertir ni réécrire l’objet, et une clé réutilisée avec un autre contenu ou un résultat devenu obsolète doit être refusée.
-- PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Les réponses publiques ne lisent que la ligne `ready` et produisent une URL signée courte au dernier moment.
+- PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Une photo publique doit être à la fois `ready` et modérée `approved` ; l’URL signée courte n’est produite qu’au dernier moment.
 - Préserver le protocole photo inter-stockages : créer `processing` et la demande idempotente dans une transaction, persister les métadonnées, écrire l’objet, puis activer atomiquement la nouvelle ligne, terminer la demande, passer l’ancienne à `deleting` et émettre `photo.delete` dans l’outbox. Une issue S3 incertaine doit rester réconciliable ; ne jamais supprimer la trace PostgreSQL avant la suppression confirmée de l’objet.
 - Les effets outbox doivent être idempotents, revendiqués avec verrouillage PostgreSQL, bornés en lot/concurrence et réessayés sans persister de détail sensible. Ne pas contourner l’outbox par un appel réseau entre une mutation métier et son commit.
 - Une collection administrative ou de blocages ne signe aucune photo. Seul un accès métier explicitement autorisé peut produire un lien signé ; le détail admin exige un motif et une trace d'audit.
 - La réconciliation admin ne doit exposer ni `object_key`, ni URL, ni image. Elle ne peut agir sur une photo `ready` ou un traitement récent, ne doit pas reprendre le verrou d’un worker actif et doit écrire `admin_reconcile_photo` avec un motif dans la transaction qui remet `photo.delete` en file.
+- Le statut technique d’une photo et son statut de modération sont indépendants. Les bios, réponses libres et photos non approuvées ne doivent jamais être projetées dans le feed ou les matchs ; leur propriétaire conserve leur contenu et voit le statut et les motifs de modération.
+- L’automatisation peut approuver un contenu clairement sûr, mais ne doit jamais le rejeter seule. Une panne, un timeout ou une réponse invalide de l’analyseur photo doit échouer fermement vers `pending` avec `analysis_unavailable`.
+- La liste de modération admin ne doit exposer ni texte, ni `object_key`, ni URL. Le détail exige un motif, produit `view_moderation_content` avant de signer une photo, et toute décision produit `admin_review_content` dans la transaction métier.
+- Une revue photo exige les trois contrôles explicites `face_detectable`, `sharp_enough` et `content_allowed`. Une approbation exige trois valeurs vraies ; un rejet exige au moins une valeur fausse. Rejeter une photo `ready` doit la passer à `deleting` et écrire `photo.delete` dans l’outbox de la même transaction.
 - L’accès au stockage doit rester derrière `ObjectStorageService` et les six variables `OBJECT_STORAGE_*`; ne jamais dépendre d’une API SeaweedFS, MinIO, Garage ou fournisseur cloud spécifique.
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
 - Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers.
@@ -73,7 +77,7 @@ Respecter autant que possible la séparation suivante :
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox`, `004_admin_photo_reconciliation` et `005_profile_questions` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, l’action d’audit de relance opérateur, puis le catalogue et les réponses de profil. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle`, `003_photo_idempotency_and_outbox`, `004_admin_photo_reconciliation`, `005_profile_questions` et `006_content_moderation` créent respectivement le registre photo récupérable, l’idempotence d’upload/outbox générique, l’action d’audit de relance opérateur, le catalogue/réponses de profil, puis les cas et audits de modération. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -109,15 +113,15 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 2 septembre 2026, les migrations jusqu’à `005_profile_questions` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, la relance admin transactionnelle/auditée et la suppression en cascade des réponses lors du retrait d’une question. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
+Au 3 septembre 2026, les migrations jusqu’à `006_content_moderation` ont été appliquées sans destruction sur `histae-dev`. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, la relance admin transactionnelle/auditée, la suppression en cascade des réponses et la revue photo auditée avec suppression outbox. Les nombres exacts du dernier passage complet sont maintenus dans `test.md`. Réexécuter tous les contrôles après toute modification.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 
 Les prochains travaux API/infra prioritaires documentés sont :
 
 1. suivi opérationnel de la livraison Sweego, idéalement par webhook, et gestion/test de la perte de réponse fournisseur ;
-2. qualité et modération des photos, bios et réponses libres avant ouverture publique ;
-3. métriques, dashboards et alertes, y compris latences et comportement du feed hybride ;
+2. calibration sur un corpus représentatif, mesure des faux positifs/biais, élargissement documenté des catégories interdites et procédure d’appel de la modération ;
+3. métriques, dashboards et alertes, y compris latences, file de modération et comportement du feed hybride ;
 4. déploiement/supervision des workers maintenance et outbox, avec Redis hautement disponible/managé dans l'environnement cible ;
 5. sauvegarde/restauration PostgreSQL, du stockage objet et stratégie de sauvegarde, réparation et montée de version Scylla ;
 6. réconciliation Stripe planifiée vers `user_subscription` et alerte sur les webhooks durablement en échec ;

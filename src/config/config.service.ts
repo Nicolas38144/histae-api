@@ -3,10 +3,12 @@ import * as dotenv from 'dotenv';
 import { parsePhoneKey } from '../crypto/phone-crypto';
 import {
   billingProvider, commaSeparated, duration, envOr, httpsUrl, identifier, integer,
-  legalUrl, limit, maintenanceMode, objectStorageBucket, objectStorageEndpoint,
-  objectStorageRegion, optionalBoolean, parseEnvironment, required, smsProvider,
+  internalHttpOrigin, legalUrl, limit, maintenanceMode, numberInRange,
+  objectStorageBucket, objectStorageEndpoint, objectStorageRegion, optionalBoolean,
+  parseEnvironment, photoModerationProvider, required, smsProvider,
   smsRegion, smsSenderId, stripeReturnUrl, trustProxy, webOrigins,
-  type BillingProvider, type Environment, type LimitPolicy, type MaintenanceMode, type SmsProvider,
+  type BillingProvider, type Environment, type LimitPolicy, type MaintenanceMode,
+  type PhotoModerationProvider, type SmsProvider,
 } from './config.parsers';
 
 export { parseEnvironment } from './config.parsers';
@@ -55,6 +57,15 @@ export type ObjectStorageConfig = {
   accessKey: string;
   secretKey: string;
   forcePathStyle: boolean;
+};
+
+export type PhotoModerationConfig = {
+  provider: PhotoModerationProvider;
+  endpoint: string;
+  token: string;
+  timeoutMillis: number;
+  minSharpnessScore: number;
+  nsfwReviewThreshold: number;
 };
 
 export type ScyllaConfig = {
@@ -107,6 +118,7 @@ export class ConfigService {
   readonly push: PushConfig;
   readonly billing: BillingConfig;
   readonly objectStorage: ObjectStorageConfig;
+  readonly photoModeration: PhotoModerationConfig;
   readonly legal: {
     termsVersion: string;
     privacyVersion: string;
@@ -182,6 +194,41 @@ export class ConfigService {
       accessKey: objectStorageAccessKey,
       secretKey: objectStorageSecretKey,
       forcePathStyle: optionalBoolean('OBJECT_STORAGE_FORCE_PATH_STYLE', true),
+    };
+    const photoModerationProviderValue = photoModerationProvider(
+      envOr('PHOTO_MODERATION_PROVIDER', 'disabled'),
+    );
+    const photoModerationToken = envOr('PHOTO_MODERATION_TOKEN', '');
+    if (photoModerationProviderValue === 'local_http' && Buffer.byteLength(photoModerationToken) < 32) {
+      throw new Error('config: PHOTO_MODERATION_TOKEN must contain at least 32 bytes when local photo moderation is enabled');
+    }
+    const photoModerationTimeout = duration(
+      envOr('PHOTO_MODERATION_TIMEOUT', '5s'),
+      'PHOTO_MODERATION_TIMEOUT',
+    );
+    if (photoModerationTimeout > 30_000) {
+      throw new Error('config: PHOTO_MODERATION_TIMEOUT must not exceed 30s');
+    }
+    this.photoModeration = {
+      provider: photoModerationProviderValue,
+      endpoint: internalHttpOrigin(
+        envOr('PHOTO_MODERATION_ENDPOINT', 'http://127.0.0.1:8090'),
+        'PHOTO_MODERATION_ENDPOINT',
+      ),
+      token: photoModerationToken,
+      timeoutMillis: photoModerationTimeout,
+      minSharpnessScore: numberInRange(
+        envOr('PHOTO_MODERATION_MIN_SHARPNESS', '80'),
+        'PHOTO_MODERATION_MIN_SHARPNESS',
+        0,
+        1_000_000,
+      ),
+      nsfwReviewThreshold: numberInRange(
+        envOr('PHOTO_MODERATION_NSFW_REVIEW_THRESHOLD', '0.7'),
+        'PHOTO_MODERATION_NSFW_REVIEW_THRESHOLD',
+        0,
+        1,
+      ),
     };
     const scyllaUsername = envOr('SCYLLA_USERNAME', '');
     const scyllaPassword = process.env.SCYLLA_PASSWORD ?? '';

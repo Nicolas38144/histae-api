@@ -18,6 +18,7 @@ import { BillingRepository } from '../../src/billing/billing.repository';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
 import { PhotosRepository } from '../../src/photos/photos.repository';
 import { ProfileQuestionsRepository } from '../../src/profile-questions/profile-questions.repository';
+import { ModerationRepository } from '../../src/moderation/moderation.repository';
 import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
@@ -55,7 +56,7 @@ describe('PostgreSQL schema contract', () => {
       'account_tombstone', 'account_deletion_token', 'billing_customer',
       'billing_checkout_session', 'stripe_webhook_event', 'billing_invoice',
       'user_photo', 'photo_upload_request', 'outbox_event',
-      'profile_question', 'user_profile_answer',
+      'profile_question', 'user_profile_answer', 'content_moderation_case',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -101,6 +102,7 @@ describe('PostgreSQL schema contract', () => {
         outbox: boolean;
         profileQuestions: boolean;
         profileAnswers: boolean;
+        moderationCases: boolean;
         seededQuestions: number;
         plans: number;
       }>(`
@@ -112,6 +114,7 @@ describe('PostgreSQL schema contract', () => {
           to_regclass($5) IS NOT NULL AS outbox,
           to_regclass($6) IS NOT NULL AS "profileQuestions",
           to_regclass($7) IS NOT NULL AS "profileAnswers",
+          to_regclass($8) IS NOT NULL AS "moderationCases",
           (SELECT count(*)::integer FROM subscription_plan) AS plans,
           (SELECT count(*)::integer FROM profile_question) AS "seededQuestions"
       `, [
@@ -122,6 +125,7 @@ describe('PostgreSQL schema contract', () => {
         `${schema}.outbox_event`,
         `${schema}.profile_question`,
         `${schema}.user_profile_answer`,
+        `${schema}.content_moderation_case`,
       ]);
       expect(contract.rows[0]).toEqual({
         account: true,
@@ -131,6 +135,7 @@ describe('PostgreSQL schema contract', () => {
         outbox: true,
         profileQuestions: true,
         profileAnswers: true,
+        moderationCases: true,
         plans: 2,
         seededQuestions: 15,
       });
@@ -241,6 +246,7 @@ describe('PostgreSQL schema contract', () => {
       'uq_user_photo_ready', 'uq_user_photo_in_progress', 'idx_user_photo_cleanup',
       'idx_photo_upload_request_expires', 'idx_outbox_event_due',
       'idx_outbox_event_stale_lock', 'idx_outbox_event_completed',
+      'idx_content_moderation_queue', 'idx_content_moderation_user',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -382,6 +388,81 @@ describe('PostgreSQL schema contract', () => {
         [[firstPhotoId, replacementPhotoId]],
       );
       await deleteAccounts(pool, userId, otherId);
+    }
+  });
+
+  it('keeps photo moderation separate, audits review access and queues a rejected object', async () => {
+    const userId = randomUUID();
+    const adminId = randomUUID();
+    const photoId = randomUUID();
+    const database = databaseFor(pool);
+    const outbox = new OutboxRepository(database as never);
+    const photos = new PhotosRepository(database as never, outbox);
+    const moderation = new ModerationRepository(database as never, outbox);
+    await insertAccounts(pool, userId, adminId);
+    await pool.query("UPDATE user_account SET role = 'admin' WHERE user_id = $1", [adminId]);
+    await pool.query(`
+      INSERT INTO user_profile (user_id, firstname, birthdate)
+      VALUES ($1, 'Moderation', '1990-01-01')
+    `, [userId]);
+    const now = new Date();
+    try {
+      await photos.createProcessing({
+        id: photoId,
+        userId,
+        objectKey: `profile-photos/${userId}/${photoId}.webp`,
+        idempotencyKey: randomUUID(),
+        requestSha256: Buffer.alloc(32, 5),
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 86_400_000),
+      });
+      await photos.recordProcessed(photoId, userId, {
+        mimeType: 'image/webp', sizeBytes: 100, width: 10, height: 10,
+        sha256: Buffer.alloc(32, 6),
+      });
+      await photos.activate(photoId, userId, {
+        status: 'approved', reasonCodes: [], policyVersion: 'local_vision_v1',
+        faceCount: 1, sharpnessScore: 100, nsfwScore: 0.01,
+      });
+      const moderationCase = (await pool.query<{ id: string; version: number }>(`
+        SELECT id, version FROM content_moderation_case WHERE photo_id = $1
+      `, [photoId])).rows[0]!;
+
+      await expect(moderation.detail(
+        moderationCase.id, adminId, 'admin', 'Vérification de la photo',
+      )).resolves.toEqual(expect.objectContaining({ object_key: `profile-photos/${userId}/${photoId}.webp` }));
+      await expect(moderation.review(moderationCase.id, {
+        version: moderationCase.version,
+        decision: 'rejected',
+        reason: 'Photo trop floue après vérification',
+        photoChecks: { face_detectable: true, sharp_enough: false, content_allowed: true },
+      }, adminId, 'admin')).resolves.toBe('updated');
+
+      const state = (await pool.query<{
+        photo_status: string;
+        moderation_status: string;
+        event_status: string;
+        audit_actions: string[];
+      }>(`
+        SELECT photo.status AS photo_status, moderation.status AS moderation_status,
+          event.status AS event_status,
+          (SELECT array_agg(action ORDER BY accessed_at) FROM data_access_log
+            WHERE accessed_user_id = $2 AND accessor_id = $3
+              AND action IN ('view_moderation_content', 'admin_review_content')) AS audit_actions
+        FROM user_photo AS photo
+        JOIN content_moderation_case AS moderation ON moderation.photo_id = photo.id
+        JOIN outbox_event AS event ON event.event_type = 'photo.delete' AND event.aggregate_id = photo.id
+        WHERE photo.id = $1
+      `, [photoId, userId, adminId])).rows[0];
+      expect(state).toEqual({
+        photo_status: 'deleting',
+        moderation_status: 'rejected',
+        event_status: 'pending',
+        audit_actions: ['view_moderation_content', 'admin_review_content'],
+      });
+    } finally {
+      await pool.query('DELETE FROM outbox_event WHERE aggregate_id = $1', [photoId]);
+      await deleteAccounts(pool, userId, adminId);
     }
   });
 
@@ -1342,6 +1423,7 @@ describe('PostgreSQL schema contract', () => {
     const matchId = randomUUID();
     const viewerPhotoId = randomUUID();
     const otherPhotoId = randomUUID();
+    const otherAnswerId = randomUUID();
     await insertAccounts(pool, viewerId, otherId);
     await pool.query(`
       INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio) VALUES
@@ -1357,6 +1439,29 @@ describe('PostgreSQL schema contract', () => {
         ($2, $4, 'profile-photos/' || $4::uuid::text || '/' || $2::uuid::text || '.webp',
           'ready', 'image/webp', 100, 10, 10, $5)
     `, [viewerPhotoId, otherPhotoId, viewerId, otherId, Buffer.alloc(32, 1)]);
+    await pool.query(`
+      INSERT INTO content_moderation_case (
+        user_id, content_type, photo_id, status, policy_version, face_count,
+        sharpness_score, nsfw_score
+      ) VALUES
+        ($1, 'photo', $3, 'approved', 'test_v1', 1, 100, 0.01),
+        ($2, 'photo', $4, 'pending', 'test_v1', 1, 100, 0.01)
+    `, [viewerId, otherId, viewerPhotoId, otherPhotoId]);
+    await pool.query(`
+      INSERT INTO content_moderation_case (
+        user_id, content_type, bio_user_id, status, policy_version
+      ) VALUES ($1, 'bio', $1, 'pending', 'test_v1')
+    `, [otherId]);
+    await pool.query(`
+      INSERT INTO user_profile_answer (id, user_id, question_id, answer, position)
+      SELECT $1, $2, id, 'Réponse encore en revue', 1
+      FROM profile_question ORDER BY display_order, id LIMIT 1
+    `, [otherAnswerId, otherId]);
+    await pool.query(`
+      INSERT INTO content_moderation_case (
+        user_id, content_type, profile_answer_id, status, policy_version
+      ) VALUES ($1, 'profile_answer', $2, 'pending', 'test_v1')
+    `, [otherId, otherAnswerId]);
     const repository = new MatchesRepository(databaseFor(pool) as never);
     const match: MatchRow = {
       id: matchId,
@@ -1377,7 +1482,9 @@ describe('PostgreSQL schema contract', () => {
       expect(hidden[0]).toEqual(expect.objectContaining({
         other_user_id: otherId,
         other_firstname: 'Other',
+        other_bio: null,
         other_photo: null,
+        other_profile_answers: [],
         my_revealed: false,
         photos_revealed: false,
         unread_count: 1,
@@ -1385,9 +1492,26 @@ describe('PostgreSQL schema contract', () => {
       }));
 
       await pool.query('UPDATE match_state SET revealed = true WHERE match_id = $1', [matchId]);
+      const stillModerated = await repository.listDetailedForUser(viewerId, 20, 0);
+      expect(stillModerated[0]).toEqual(expect.objectContaining({
+        other_bio: null,
+        other_photo: null,
+        other_profile_answers: [],
+        photos_revealed: true,
+      }));
+
+      await pool.query(`
+        UPDATE content_moderation_case SET status = 'approved'
+        WHERE user_id = $1 AND content_type IN ('photo', 'bio', 'profile_answer')
+      `, [otherId]);
       const revealed = await repository.listDetailedForUser(viewerId, 20, 0);
       expect(revealed[0]).toEqual(expect.objectContaining({
+        other_bio: 'other bio',
         other_photo: `profile-photos/${otherId}/${otherPhotoId}.webp`,
+        other_profile_answers: [expect.objectContaining({
+          answer: 'Réponse encore en revue',
+          position: 1,
+        })],
         my_revealed: true,
         photos_revealed: true,
       }));

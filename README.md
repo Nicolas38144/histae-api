@@ -15,7 +15,7 @@ L’API expose des routes JSON sous le préfixe `/api` et s’appuie sur :
 - Node.js 22 ou plus récent ;
 - pnpm 11.22.0 ;
 - PostgreSQL ;
-- Docker dans WSL pour ScyllaDB, Redis et SeaweedFS en développement.
+- Docker dans WSL pour ScyllaDB, Redis, SeaweedFS et l’analyse photo locale en développement.
 
 Le gestionnaire de paquets est déclaré dans `package.json`. Corepack peut sélectionner automatiquement la bonne version :
 
@@ -48,9 +48,11 @@ cd histae-api
 docker compose -f docker-compose.scylla.yml up -d
 docker compose -f docker-compose-redis.yaml up -d
 docker compose -f docker-compose.object-storage.yml up -d
+PHOTO_MODERATION_TOKEN='change-me-with-at-least-32-bytes' docker compose -f docker-compose.photo-moderation.yml up -d
 docker compose -f docker-compose.scylla.yml ps
 docker compose -f docker-compose-redis.yaml ps
 docker compose -f docker-compose.object-storage.yml ps
+docker compose -f docker-compose.photo-moderation.yml ps
 ```
 
 Attendez que ScyllaDB, Redis et SeaweedFS soient `healthy`, puis activez ScyllaDB dans `.env` :
@@ -63,6 +65,9 @@ OBJECT_STORAGE_BUCKET=histae-photos
 OBJECT_STORAGE_ACCESS_KEY=histae-dev
 OBJECT_STORAGE_SECRET_KEY=histae-dev-secret-change-me
 OBJECT_STORAGE_FORCE_PATH_STYLE=true
+PHOTO_MODERATION_PROVIDER=local_http
+PHOTO_MODERATION_ENDPOINT=http://127.0.0.1:8090
+PHOTO_MODERATION_TOKEN=change-me-with-at-least-32-bytes
 ```
 
 Revenez dans PowerShell pour préparer ScyllaDB et lancer l’API :
@@ -77,6 +82,11 @@ L’API écoute par défaut sur `http://localhost:8080/api`.
 Le Compose objet exécute SeaweedFS `weed mini`, crée le bucket privé, vérifie `/healthz` toutes les dix secondes et n’expose l’API S3 que sur
 `127.0.0.1:8333`. Le code applicatif utilise exclusivement le contrat S3 du SDK AWS v3 : un remplacement par un
 autre stockage compatible ne demande que la modification des six variables `OBJECT_STORAGE_*`.
+
+Le Compose de modération lie sur `127.0.0.1:8090` un petit service CPU sans stockage persistant. Il combine un
+classifieur NSFW ONNX, le détecteur de visages Haar d’OpenCV et un score de netteté par variance du Laplacien. Le
+token partagé doit être identique dans Compose et dans `.env`. `PHOTO_MODERATION_PROVIDER=disabled` reste possible :
+dans ce cas, ou si l’analyseur est indisponible, la photo est conservée privée et envoyée en revue manuelle.
 
 Les photos de profil sont reçues via `multipart/form-data`. Seules les extensions `.jpg`, `.jpeg`, `.png`,
 `.heic`, `.heif` et `.webp` sont acceptées. Le fichier reçu et le WebP privé enregistré sont chacun limités à
@@ -101,6 +111,14 @@ trois réponses ordonnées via un remplacement atomique. Elles sont exposées su
 les résumés de match, et figurent dans l’export RGPD. Le dashboard peut créer, modifier et supprimer une question ;
 une suppression efface également toutes les réponses associées après confirmation explicite.
 
+Une modération indépendante du cycle technique est créée à chaque nouvelle photo, bio ou réponse libre. Les textes
+sans signal sont approuvés automatiquement ; les coordonnées personnelles, insultes, signaux sexuels ou de spam
+restent privés jusqu’à décision humaine. Une photo n’est approuvée automatiquement que si l’analyse détecte
+exactement un visage, une netteté suffisante et un score NSFW sous le seuil. Aucun contenu suspect n’est rejeté
+automatiquement. Le dashboard possède une file centrale : la liste ne contient pas le texte ni la photo, l’ouverture
+du détail exige un motif audité et la décision exige un motif. Une photo refusée passe immédiatement à `deleting`
+et sa suppression objet est confiée à l’outbox.
+
 ## Authentification OTP
 
 L’authentification combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte
@@ -116,7 +134,7 @@ numéros acceptés utilisent actuellement le format français E.164, par exemple
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation et les questions de profil. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil et la modération des contenus. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
 | `pnpm run db:reset-scylla` | Vide les décisions de découverte du ScyllaDB local. |
@@ -169,4 +187,4 @@ Les erreurs de l’API conservent une structure stable :
 - [Résumé technique et fonctionnel](resume.md)
 - [Contrat exhaustif de l’API](routes.md)
 - [Stratégie, inventaire et exécution des tests](test.md)
-- [Check-up de sécurité du 2 septembre 2026](docs/security-checkup.md)
+- [Check-up de sécurité du 3 septembre 2026](docs/security-checkup.md)

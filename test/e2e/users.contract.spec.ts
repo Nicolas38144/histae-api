@@ -55,7 +55,11 @@ describe('Users HTTP contract', () => {
     getConsents: jest.fn().mockResolvedValue(consentState),
     updateConsents: jest.fn().mockResolvedValue(consentState),
     updateProfile: jest.fn().mockResolvedValue(undefined),
-    uploadPhoto: jest.fn().mockResolvedValue('https://storage.example.test/signed-photo.webp'),
+    uploadPhoto: jest.fn().mockResolvedValue({
+      photo: 'https://storage.example.test/signed-photo.webp',
+      moderation_status: 'pending',
+      moderation_reasons: ['analysis_unavailable'],
+    }),
     deletePhoto: jest.fn().mockResolvedValue(undefined),
     getPreferences: jest.fn().mockResolvedValue(preferences),
     updatePreferences: jest.fn().mockResolvedValue(undefined),
@@ -203,6 +207,8 @@ describe('Users HTTP contract', () => {
     expect(uploaded.json()).toEqual({
       message: 'photo updated',
       photo: 'https://storage.example.test/signed-photo.webp',
+      moderation_status: 'pending',
+      moderation_reasons: ['analysis_unavailable'],
     });
     expect(users.uploadPhoto).toHaveBeenCalledWith(USER_ID, {
       filename: 'portrait.webp',

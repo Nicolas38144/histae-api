@@ -163,7 +163,7 @@ describe('UsersService consent enforcement', () => {
       firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null,
     })).resolves.toBeUndefined();
     expect(repository.upsertProfile).toHaveBeenCalledWith('user-id', {
-      firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null,
+      firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null, bioModeration: null,
     });
   });
 

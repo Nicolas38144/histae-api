@@ -364,8 +364,9 @@ export class AdminRepository {
     `, [termsVersion, privacyVersion])).rows[0] ?? { total: 0, active: 0, banned: 0, onboarded: 0, created_last_30_days: 0 };
     const moderation = (await this.database.query<AdminMetrics['moderation']>(`
       SELECT (SELECT count(*)::int FROM user_report WHERE status = 'pending') AS pending_reports,
+        (SELECT count(*)::int FROM content_moderation_case WHERE status = 'pending') AS pending_content,
         (SELECT count(*)::int FROM data_subject_request WHERE status IN ('pending', 'in_progress')) AS open_data_requests
-    `)).rows[0] ?? { pending_reports: 0, open_data_requests: 0 };
+    `)).rows[0] ?? { pending_reports: 0, pending_content: 0, open_data_requests: 0 };
     const matchRows = (await this.database.query<{ status: keyof AdminMetrics['matches']; count: number }>(`
       SELECT status, count(*)::int AS count FROM match_init GROUP BY status
     `)).rows;

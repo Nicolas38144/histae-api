@@ -4,6 +4,7 @@ export type Environment = 'development' | 'test' | 'production';
 export type MaintenanceMode = 'api' | 'worker' | 'disabled';
 export type SmsProvider = 'disabled' | 'sweego';
 export type BillingProvider = 'disabled' | 'stripe';
+export type PhotoModerationProvider = 'disabled' | 'local_http';
 export type LimitPolicy = { max: number; windowMs: number };
 
 export function required(name: string): string {
@@ -75,6 +76,29 @@ export function trustProxy(value: string, environment: Environment): boolean | s
 export function billingProvider(value: string): BillingProvider {
   if (value === 'disabled' || value === 'stripe') return value;
   throw new Error('config: BILLING_PROVIDER must be disabled or stripe');
+}
+
+export function photoModerationProvider(value: string): PhotoModerationProvider {
+  if (value === 'disabled' || value === 'local_http') return value;
+  throw new Error('config: PHOTO_MODERATION_PROVIDER must be disabled or local_http');
+}
+
+export function numberInRange(value: string, name: string, min: number, max: number): number {
+  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error(`config: invalid ${name}`);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) throw new Error(`config: invalid ${name}`);
+  return parsed;
+}
+
+export function internalHttpOrigin(value: string, name: string): string {
+  try {
+    const parsed = new URL(value);
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+      || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') throw new Error();
+    return parsed.toString();
+  } catch {
+    throw new Error(`config: ${name} must be an absolute HTTP(S) origin`);
+  }
 }
 
 export function webOrigins(value: string, environment: Environment): string[] {

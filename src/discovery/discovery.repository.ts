@@ -106,7 +106,8 @@ export class DiscoveryRepository {
       ), candidates AS (
         SELECT target.user_id, target.firstname,
           date_part('year', age(current_date, target.birthdate))::integer AS age,
-          target.sex, target.bio,
+          target.sex,
+          CASE WHEN bio_moderation.status = 'approved' THEN target.bio ELSE NULL END AS bio,
           (6371.0088 * 2 * asin(sqrt(least(1.0, greatest(0.0,
             power(sin(radians((target_presence.latitude::double precision - viewer.latitude) / 2)), 2)
             + cos(radians(viewer.latitude)) * cos(radians(target_presence.latitude::double precision))
@@ -125,6 +126,8 @@ export class DiscoveryRepository {
         JOIN user_presence AS target_presence ON target_presence.user_id = target.user_id
           AND target_presence.is_location_fresh = true
           AND target_presence.updated_at > clock_timestamp() - INTERVAL '1 hour'
+        LEFT JOIN content_moderation_case AS bio_moderation
+          ON bio_moderation.bio_user_id = target.user_id
         LEFT JOIN LATERAL (
           SELECT array_agg(trait.name ORDER BY trait.name) AS names
           FROM user_trait JOIN trait ON trait.id = user_trait.trait_id
@@ -140,6 +143,8 @@ export class DiscoveryRepository {
           ) ORDER BY answer.position) AS items
           FROM user_profile_answer AS answer
           JOIN profile_question AS question ON question.id = answer.question_id
+          JOIN content_moderation_case AS moderation
+            ON moderation.profile_answer_id = answer.id AND moderation.status = 'approved'
           WHERE answer.user_id = target.user_id
         ) AS answers ON true
         WHERE target_presence.latitude::double precision BETWEEN

@@ -1,6 +1,6 @@
 # Histae API — résumé du projet
 
-Mise à jour : 2 septembre 2026.
+Mise à jour : 3 septembre 2026.
 
 Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
 de test : consulter respectivement `routes.md` et `test.md` pour ces inventaires détaillés.
@@ -19,6 +19,7 @@ Le socle fonctionnel principal est implémenté :
 - abonnement Premium et projection Stripe ;
 - demandes RGPD, export, effacement et maintenance de rétention ;
 - photos privées normalisées en WebP dans un stockage objet compatible S3 ;
+- qualité et modération des photos, bios et réponses libres avec file de revue auditée ;
 - health checks, migrations contrôlées et tests réels des stockages.
 
 Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
@@ -29,6 +30,8 @@ idempotent pendant 24 heures et découple les suppressions objet par une outbox 
 complet est dans `docs/security-checkup.md`. La migration `004_admin_photo_reconciliation` ajoute l’action d’audit
 qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard. La migration
 `005_profile_questions` fournit un catalogue initial administrable et jusqu’à trois réponses ordonnées par profil.
+La migration `006_content_moderation` sépare ensuite le statut éditorial du statut technique et crée la file de
+revue centrale pour les photos, bios et réponses.
 
 ## 2. Architecture
 
@@ -41,13 +44,14 @@ qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashb
 - Redis pour le rate limiting et le relais Pub/Sub SSE ;
 - SDK AWS v3 pour un stockage objet S3-compatible ;
 - Sharp et `heic-decode` pour les photos ;
+- un service local optionnel FastAPI/OpenCV/ONNX pour la détection de visage, la netteté et le score NSFW ;
 - Sweego pour les OTP, FCM pour le push, Stripe pour la facturation ;
 - Jest pour les tests unitaires, e2e et d’intégration.
 
 ### Responsabilité des stockages
 
 PostgreSQL est l’autorité transactionnelle pour les comptes, profils, questions/réponses, consentements, préférences, traits,
-abonnements, matchs, messages, signalements, appareils, notifications, audit et workflows RGPD.
+abonnements, matchs, messages, signalements, cas de modération, appareils, notifications, audit et workflows RGPD.
 
 ScyllaDB ne stocke que les décisions de découverte, dans deux tables orientées requêtes : actions sortantes et
 décisions reçues. Les profils ne sont jamais dupliqués dans Scylla. Un TTL limite naturellement la rétention.
@@ -60,7 +64,7 @@ pas une dépendance applicative : changer de fournisseur revient à modifier le
 
 ### Organisation des sources
 
-Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `outbox`, `photos`, `plans`,
+Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`,
 `privacy`, `profile-questions`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
 `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
@@ -137,9 +141,10 @@ types fermés et ne sont acceptées qu’avec le consentement requis.
 
 Le catalogue propose initialement quinze questions réparties en cinq catégories. Un utilisateur remplace
 atomiquement une sélection ordonnée de zéro à trois réponses, chacune liée à une question distincte et limitée à
-10–300 caractères. Les réponses apparaissent dans le profil personnel, le feed, le résumé des matchs et l’export
-RGPD. Le dashboard admin peut ajouter, modifier et supprimer les questions. Une suppression est physique et
-entraîne volontairement toutes les réponses liées par `ON DELETE CASCADE`, après avertissement sur leur nombre.
+10–300 caractères. Le propriétaire et l’export RGPD conservent toutes les réponses ; le feed et les matchs ne
+projettent que celles dont la modération est `approved`. Le dashboard admin peut ajouter, modifier et supprimer les
+questions. Une suppression est physique et entraîne volontairement toutes les réponses liées par `ON DELETE
+CASCADE`, après avertissement sur leur nombre.
 
 ### Découverte et matchs
 
@@ -173,10 +178,11 @@ par utilisateur. `photo_upload_request` conserve pendant 24 heures la clé d’i
 nom, du MIME et du contenu source, jamais la photo. Un retry identique d’une demande terminée renvoie la photo
 courante sans nouvelle conversion ; un contenu différent ou un résultat déjà remplacé est refusé explicitement.
 
-L’activation rend la nouvelle version visible, passe l’ancienne à `deleting`, termine l’état d’idempotence et
+L’activation rend la nouvelle version techniquement `ready`, passe l’ancienne à `deleting`, termine l’état d’idempotence et
 insère `photo.delete` dans `outbox_event`, le tout dans la même transaction. Le worker supprime ensuite l’objet et
 la ligne technique avec verrous `SKIP LOCKED`, concurrence bornée, backoff exponentiel, dix tentatives et état
-`dead_letter`. Une écriture S3 incertaine reste réconciliable par la maintenance horaire.
+`dead_letter`. Une écriture S3 incertaine reste réconciliable par la maintenance horaire. La photo n’est publique
+qu’après approbation de son cas de modération associé.
 
 `GET /api/admin/metrics` agrège les états photo, les traitements anciens de plus de 30 minutes, les dead letters et
 les suppressions sans événement actif. `GET /api/admin/photo-reconciliation` expose une file technique paginée sans clé
@@ -188,6 +194,25 @@ PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expi
 générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
 admin audité. Les collections admin et blocages renvoient toujours `photo: null`. Les appels S3 réseau sont bornés
 à dix secondes.
+
+### Qualité et modération des contenus
+
+`content_moderation_case` conserve un statut `pending | approved | rejected` indépendant du cycle technique et
+référence exactement une photo, une bio ou une réponse. Chaque modification remplace la décision précédente de ce
+contenu. Les contenus existant lors de la migration sont classés `pending/legacy_unreviewed` : ce choix fail-safe
+les masque du feed et des matchs jusqu’à leur revue, sans les supprimer ni les cacher à leur propriétaire.
+
+La bio et les réponses utilisent des règles locales explicables pour repérer spam, insultes, coordonnées
+personnelles et vocabulaire sexuel. Une photo WebP peut être transmise au service local optionnel
+`services/photo-moderation`, authentifié par token et borné par timeout : OpenCV compte les visages et mesure la
+netteté, tandis qu’un petit modèle ONNX calcule un score NSFW. Un contenu sans signal est automatiquement
+`approved`; un signal ou une analyse indisponible produit `pending`. L’automatisation ne rejette jamais seule.
+
+La liste `GET /api/admin/content-moderation` ne contient ni texte, ni clé objet, ni URL. Le détail exige un motif,
+audite `view_moderation_content`, puis seulement signe la photo éventuelle. Une décision est protégée par version
+optimiste et audite `admin_review_content`. Pour une photo, le reviewer doit attester visage détectable, netteté et
+contenu autorisé ; un rejet rend la photo invisible, la passe à `deleting` et écrit `photo.delete` dans l’outbox au
+sein de la même transaction.
 
 ## 5. Facturation
 
@@ -213,7 +238,8 @@ La migration incrémentale `002_user_photo_lifecycle` ajoute le registre version
 colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
 bornée et l’outbox générique. `004_admin_photo_reconciliation` étend la liste fermée des actions d’audit pour la
 relance opérateur. `005_profile_questions` ajoute le catalogue administrable et les réponses en cascade. Une base
-neuve applique donc la baseline puis ces migrations dans l’ordre.
+`006_content_moderation` ajoute les cas centraux, les signaux automatisés, la revue optimiste et les actions
+d’audit associées. Une base neuve applique donc la baseline puis ces migrations dans l’ordre.
 
 La compatibilité est sans perte :
 
@@ -246,9 +272,11 @@ effets externes, `MAINTENANCE_MODE=worker pnpm run outbox:work` lance un consomm
 Les événements terminés sont purgés après sept jours ; les dead letters restent visibles pour diagnostic et
 rejeu opérateur futur.
 
-En local, les Compose sont séparés pour ScyllaDB, Redis et SeaweedFS. Le Compose objet lie l’API S3 à
+En local, les Compose sont séparés pour ScyllaDB, Redis, SeaweedFS et l’analyse photo. Le Compose objet lie l’API S3 à
 `127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de
-production.
+production. `docker-compose.photo-moderation.yml` lie le service CPU sur `127.0.0.1:8090`, l’exécute sans
+privilège, en lecture seule, avec ressources bornées et healthcheck. Il ne reçoit que le WebP déjà normalisé et ne
+le persiste pas.
 
 ## 8. Validation et documents de référence
 
@@ -288,9 +316,9 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
    gestionnaire de secrets et procédures de rotation/révocation.
 3. Renforcer l’accès administrateur avec SSO/MFA résistante au phishing, sessions plus courtes et alertes sur les
    accès personnels ou actions de sûreté.
-4. Mettre en place les contrôles de qualité et de modération des photos, bios et réponses libres, avec signalement,
-   file de revue et règles explicables avant l’ouverture publique.
-5. Compléter les métriques déjà présentes pour `user_photo` par une collecte d’observabilité sur les latences,
+4. Calibrer les seuils photo et les règles texte sur un corpus représentatif, mesurer faux positifs, faux négatifs
+   et biais, formaliser toutes les catégories interdites, le SLA de revue et une procédure d’appel.
+5. Compléter les métriques déjà présentes pour `user_photo` et la file de modération par une collecte d’observabilité sur les latences,
    erreurs, pools, rate limits, OTP, Stripe, S3 et Scylla, puis définir les alertes. Déployer et superviser réellement
    les workers maintenance/outbox.
 6. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,

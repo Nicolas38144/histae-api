@@ -1,3 +1,8 @@
+import type {
+  ModerationReasonCode,
+  ModerationStatus,
+} from '../moderation/moderation.models';
+
 export const PROFILE_QUESTION_CATEGORIES = [
   'daily_life',
   'personality',
@@ -28,6 +33,8 @@ export type ProfileAnswer = {
   question: string;
   answer: string;
   position: number;
+  moderation_status?: ModerationStatus;
+  moderation_reasons?: ModerationReasonCode[];
 };
 
 export type ProfileAnswerInput = {

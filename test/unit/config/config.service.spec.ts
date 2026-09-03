@@ -157,6 +157,27 @@ describe('ConfigService SMS configuration', () => {
     expect(() => new ConfigService()).toThrow('config: OBJECT_STORAGE_ENDPOINT must be an absolute HTTP(S) origin and HTTPS in production');
   });
 
+  it('accepts the authenticated local photo moderation service and thresholds', () => {
+    process.env = baseEnvironment({
+      PHOTO_MODERATION_PROVIDER: 'local_http',
+      PHOTO_MODERATION_ENDPOINT: 'http://127.0.0.1:8090',
+      PHOTO_MODERATION_TOKEN: 'm'.repeat(32),
+      PHOTO_MODERATION_MIN_SHARPNESS: '90.5',
+      PHOTO_MODERATION_NSFW_REVIEW_THRESHOLD: '0.65',
+    });
+    expect(new ConfigService().photoModeration).toEqual({
+      provider: 'local_http', endpoint: 'http://127.0.0.1:8090/', token: 'm'.repeat(32),
+      timeoutMillis: 5_000, minSharpnessScore: 90.5, nsfwReviewThreshold: 0.65,
+    });
+  });
+
+  it('requires a strong shared token and bounded photo moderation thresholds', () => {
+    process.env = baseEnvironment({ PHOTO_MODERATION_PROVIDER: 'local_http', PHOTO_MODERATION_TOKEN: 'short' });
+    expect(() => new ConfigService()).toThrow('config: PHOTO_MODERATION_TOKEN');
+    process.env = baseEnvironment({ PHOTO_MODERATION_NSFW_REVIEW_THRESHOLD: '1.1' });
+    expect(() => new ConfigService()).toThrow('config: invalid PHOTO_MODERATION_NSFW_REVIEW_THRESHOLD');
+  });
+
   it.each(['59s', '31m'])('rejects the out-of-range account deletion token duration %s', (ttl) => {
     process.env = baseEnvironment({ ACCOUNT_DELETION_TOKEN_TTL: ttl });
 

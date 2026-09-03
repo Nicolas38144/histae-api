@@ -13,8 +13,17 @@ Avant chaque nouvelle version juridique :
   formulations qui solliciteraient inutilement des données sensibles, informer que les réponses sont visibles aux
   autres membres et vérifier que la suppression d’une question et de toutes ses réponses est compatible avec les
   procédures de modération, d’export et d’effacement ;
+- faire approuver la politique de modération, ses catégories et ses versions ; informer clairement l’utilisateur
+  des contrôles automatisés, de l’état de son contenu, de la décision humaine éventuelle et d’un moyen de la
+  contester, sans présenter un score probabiliste comme une certitude ;
+- évaluer et documenter les faux positifs, faux négatifs et biais du comptage de visages, du score de netteté, du
+  classifieur NSFW et des règles linguistiques sur un corpus représentatif des membres ; maintenir une revue
+  humaine et interdire tout rejet entièrement automatisé ;
+- définir les habilitations, la formation et le soutien des reviewers, le délai de traitement, la minimisation de
+  l’exposition au contenu sensible et la conservation des motifs/audits ;
 - documenter l’hébergeur objet de production, sa région, les transferts éventuels, le chiffrement, les habilitations, les sauvegardes, la purge des photos remplacées ou supprimées, la rétention de 24 h des empreintes d’idempotence et le traitement des dead letters `photo.delete`, y compris les habilitations et motifs de relance `admin_reconcile_photo` ;
-- intégrer `sharp`/libvips, `heic-decode`/libheif-js et le SDK AWS v3 à l’inventaire des composants et vérifier leurs licences et mises à jour de sécurité avant livraison ;
+- intégrer `sharp`/libvips, `heic-decode`/libheif-js, le SDK AWS v3, OpenCV, FastAPI et le modèle ONNX de modération
+  à l’inventaire des composants ; vérifier leurs licences, provenance, intégrité et mises à jour de sécurité avant livraison ;
 - enregistrer l’approbation dans un système durable (ticket signé, procès-verbal ou registre DPO) et placer son identifiant dans `LEGAL_REVIEW_REFERENCE` ;
 - incrémenter toute version de texte modifiée afin que l’application mobile la représente à l’utilisateur.
 

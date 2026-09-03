@@ -23,6 +23,11 @@ describe('ProfileQuestionsService', () => {
     expect(repository.replaceForUser).toHaveBeenCalledWith('user-id', [{
       question_id: QUESTION_ID,
       answer: 'Une longue balade en forêt.',
+      moderation: {
+        status: 'approved',
+        reasonCodes: [],
+        policyVersion: 'text_rules_v1',
+      },
     }]);
   });
 

@@ -122,7 +122,7 @@ export type AdminUserDetail = AdminUser & {
 
 export type AdminMetrics = {
   users: { total: number; active: number; banned: number; onboarded: number; created_last_30_days: number };
-  moderation: { pending_reports: number; open_data_requests: number };
+  moderation: { pending_reports: number; pending_content: number; open_data_requests: number };
   matches: Record<MatchStatus, number>;
   messages: { total: number };
   photos: AdminPhotoMetrics;

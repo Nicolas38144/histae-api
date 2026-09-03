@@ -1,4 +1,5 @@
 import type { ProfileAnswer } from '../profile-questions/profile-questions.models';
+import type { AutomatedModerationDecision, ModerationReasonCode, ModerationStatus } from '../moderation/moderation.models';
 
 export const SEXES = ['male', 'female', 'other'] as const;
 export type Sex = typeof SEXES[number];
@@ -14,6 +15,10 @@ export type ProfileRow = {
   bio: string | null;
   photo: string | null;
   profile_answers?: ProfileAnswer[] | null;
+  bio_moderation_status: ModerationStatus | null;
+  bio_moderation_reasons: ModerationReasonCode[] | null;
+  photo_moderation_status: ModerationStatus | null;
+  photo_moderation_reasons: ModerationReasonCode[] | null;
 };
 
 export type PreferencesRow = {
@@ -25,6 +30,7 @@ export type PreferencesRow = {
 };
 
 export type ProfileInput = { firstname: string; birthdate: string; sex: Sex | null; bio: string | null };
+export type ModeratedProfileInput = ProfileInput & { bioModeration: AutomatedModerationDecision | null };
 export type PreferencesInput = { min_age: number; max_age: number; max_distance_km: number; looking_for: LookingFor };
 export type PresenceInput = { latitude: number; longitude: number };
 

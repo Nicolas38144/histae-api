@@ -89,7 +89,8 @@ export class MatchesRepository {
         other_profile.firstname AS other_firstname,
         date_part('year', age(current_date, other_profile.birthdate))::integer AS other_age,
         other_profile.sex AS other_sex,
-        other_profile.bio AS other_bio,
+        CASE WHEN other_bio_moderation.status = 'approved'
+          THEN other_profile.bio ELSE NULL END AS other_bio,
         CASE WHEN COALESCE(my_state.revealed, false) AND COALESCE(other_state.revealed, false)
           THEN other_photo.object_key ELSE NULL END AS other_photo,
         COALESCE(other_traits.names, ARRAY[]::text[]) AS other_traits,
@@ -110,6 +111,12 @@ export class MatchesRepository {
         ON other_profile.user_id = CASE WHEN match_record.user1_id = $1 THEN match_record.user2_id ELSE match_record.user1_id END
       LEFT JOIN user_photo AS other_photo
         ON other_photo.user_id = other_profile.user_id AND other_photo.status = 'ready'
+        AND EXISTS (
+          SELECT 1 FROM content_moderation_case
+          WHERE photo_id = other_photo.id AND status = 'approved'
+        )
+      LEFT JOIN content_moderation_case AS other_bio_moderation
+        ON other_bio_moderation.bio_user_id = other_profile.user_id
       LEFT JOIN match_state AS my_state
         ON my_state.match_id = match_record.id AND my_state.user_id = $1
       LEFT JOIN match_state AS other_state
@@ -129,6 +136,8 @@ export class MatchesRepository {
         ) ORDER BY answer.position) AS items
         FROM user_profile_answer AS answer
         JOIN profile_question AS question ON question.id = answer.question_id
+        JOIN content_moderation_case AS moderation
+          ON moderation.profile_answer_id = answer.id AND moderation.status = 'approved'
         WHERE answer.user_id = other_profile.user_id
       ) AS other_answers ON true
       LEFT JOIN LATERAL (
