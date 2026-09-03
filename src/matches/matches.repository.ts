@@ -13,6 +13,7 @@ import type {
 } from './matches.models';
 import { MATCH_PURGE_MS } from './matches.constants';
 import { lockMessagingMatch } from './match-access';
+import { enqueueNotification } from '../mobile/notification-outbox';
 
 const MATCH_PAGE_CTE = `
   page AS MATERIALIZED (
@@ -93,6 +94,9 @@ export class MatchesRepository {
         INSERT INTO match_state (match_id, user_id, revealed, continued)
         VALUES ($1, $2, false, false), ($1, $3, false, false)
       `, [match.id, match.user1_id, match.user2_id]);
+      for (const userId of [match.user1_id, match.user2_id]) {
+        await enqueueNotification(client, userId, match.id, { type: 'new_match', matchId: match.id });
+      }
     });
   }
 

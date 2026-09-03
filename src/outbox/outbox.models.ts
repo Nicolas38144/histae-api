@@ -1,4 +1,4 @@
-export const OUTBOX_EVENT_TYPES = ['photo.delete'] as const;
+export const OUTBOX_EVENT_TYPES = ['photo.delete', 'notification.push'] as const;
 export type OutboxEventType = typeof OUTBOX_EVENT_TYPES[number];
 export type OutboxStatus =
   | 'pending'
@@ -56,4 +56,12 @@ export type OutboxStatusSnapshot = {
   dead_letter: number;
   discarded: number;
   oldest_pending_at: Date | null;
+  notification_push: {
+    pending: number;
+    processing: number;
+    completed: number;
+    dead_letter: number;
+    discarded: number;
+    oldest_pending_at: string | null;
+  };
 };

@@ -86,6 +86,18 @@ devra être réévalué après une période représentative.
 
 ## Exploitation
 
+Complément R01 : la migration `011_durable_notifications` ajoute l’unicité de la clé de notification, l’unicité
+notification/appareil et l’index de cascade par appareil. La programmation utilise une instruction avec CTE et
+insertion ensembliste des tâches, sans boucle d’appels SQL par appareil. La livraison part de la clé primaire de
+la tâche et relit les références et autorisations courantes. Les compteurs push sont agrégés dans la requête
+outbox existante. Ces chemins sont exécutés par les tests PostgreSQL réels ; les mesures de plans historiques
+ci-dessus ne constituent pas un benchmark des nouvelles requêtes. Leur charge reste à mesurer avec R06/R12.
+
+La migration 012 ajoute le contexte Stripe interne, sans nouvel index : les contrôles d’éligibilité communs à
+la programmation et à l’envoi accèdent aux clés primaires existantes de `billing_invoice` et `user_subscription`.
+Le nettoyage final à la désactivation utilise l’index de notifications par utilisateur. Les tests réels valident
+les comportements et verrous ; ils ne constituent pas une mesure de performance sous charge.
+
 - Exécuter `ANALYZE` après un import important ou laisser autovacuum mettre les statistiques à jour.
 - Observer en production les temps cumulés, lignes lues et blocs via `pg_stat_statements` si cette extension est
   activée par l’exploitant ; l’API n’en dépend pas.

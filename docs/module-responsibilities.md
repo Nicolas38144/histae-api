@@ -14,7 +14,10 @@ Il n'ajoute ni dépendance ni service à déployer.
 | Administration | `AdminMetricsRepository` | Agrégats de consultation et estimation de revenu, sans mutation métier. |
 | Administration | `AdminPhotoRepository` | Liste et remise en file des photos réconciliables, sans accès S3 ni signature d'URL. |
 | Facturation | `BillingService` | Projection utilisateur, Checkout, portail et suppression du Customer pour l'effacement. |
-| Facturation | `StripeWebhookService` | Vérification du webhook, mapping fournisseur, projection idempotente et effets après commit. |
+| Facturation | `StripeWebhookService` | Vérification du webhook, mapping fournisseur, projection et notifications transactionnelles ; SSE après commit. |
+| Mobile | `notification-outbox.ts` | Notifications et tâches par appareil dans la transaction métier de l’appelant. |
+| Mobile | `NotificationPushRepository` / `NotificationPushService` | Éligibilité courante et métadonnées minimales avant envoi FCM. |
+| Mobile | `MobileDeliveryService` / `PushService` | Signaux SSE best-effort / envoi vers un seul appareil avec erreurs normalisées. |
 
 Les modules Nest injectent directement ces composants. Il n'existe pas de façade de repository qui recrée ses
 dépendances avec `new` ou conserve une copie des anciennes méthodes. Les contrôleurs gardent leurs guards,
@@ -28,8 +31,10 @@ validations et limites de débit existants ; le dashboard n'a aucune adaptation 
 - `admin-audit.ts` reçoit la transaction de la consultation ou mutation protégée. La réconciliation photo
   conserve dans ce même commit le passage à `deleting`, la remise en file outbox et l'audit motivé.
 - Le webhook facture récupère la souscription Stripe avant d'ouvrir la transaction PostgreSQL. La projection
-  et la marque d'idempotence restent atomiques ; les notifications ne sont tentées qu'après succès du commit et
-  jamais pour un doublon. Leur mécanisme de livraison existant n'est pas changé par ce refactoring.
+  et la marque d'idempotence restent atomiques. Depuis R01, les notifications et intentions par appareil font
+  aussi partie de cette transaction ; seul le réseau est différé au worker. Un doublon ne recrée pas de tâche.
+  `notification-billing.ts` partage le prédicat de pertinence Stripe entre programmation et envoi ; le contexte
+  reste interne. Voir [notifications durables](durable-notifications.md) pour les migrations 011/012 et les limites d’acquittement.
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.
 

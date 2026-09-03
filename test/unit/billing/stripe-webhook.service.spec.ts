@@ -89,7 +89,11 @@ describe('StripeWebhookService', () => {
       currency: 'EUR',
       amountDue: 500,
     }), database);
-    expect(delivery.billingPaymentFailed).toHaveBeenCalledWith(USER_ID);
+    expect(database.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO notification'), [
+      expect.any(String), USER_ID, 'billing_payment_failed', '{}', expect.stringMatching(/^[0-9a-f]{64}$/),
+      'in_HistaeInvoice', null,
+    ]);
+    expect(delivery.billingPaymentFailed).not.toHaveBeenCalled();
   });
 
   it('short-circuits an already processed webhook before another Stripe API request', async () => {
@@ -108,6 +112,27 @@ describe('StripeWebhookService', () => {
 
     expect(stripe.retrieveSubscription).not.toHaveBeenCalled();
     expect(repository.processWebhook).not.toHaveBeenCalled();
+  });
+
+  it('persists trial-ending notification before committing the webhook', async () => {
+    const database = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+    const repository = {
+      webhookProcessed: jest.fn().mockResolvedValue(false),
+      processWebhook: jest.fn(async (_metadata, work) => {
+        const result = await work(database);
+        expect(database.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO notification'), [
+          expect.any(String), USER_ID, 'subscription_trial_ending', '{}', expect.any(String),
+          SUBSCRIPTION_ID, new Date(1_900_000_000_000),
+        ]);
+        return { duplicate: false, result };
+      }),
+      resolveBillingUser: jest.fn().mockResolvedValue(USER_ID),
+      upsertSubscription: jest.fn().mockResolvedValue(undefined),
+    };
+    const stripe = { constructWebhookEvent: jest.fn().mockReturnValue(stripeEvent('customer.subscription.trial_will_end',
+      stripeSubscription({ status: 'trialing', trial_end: 1_900_000_000 }))) };
+    await new StripeWebhookService(repository as never, stripe as never, config as never, noOpDelivery as never)
+      .handle(Buffer.from('{}'), 'signed');
   });
 
   it('rejects unsigned webhook bodies before any database write', async () => {
@@ -132,9 +157,9 @@ describe('StripeWebhookService', () => {
     expect(repository.processWebhook).not.toHaveBeenCalled();
   });
 
-  it('fetches provider data before the transaction and delivers only after commit', async () => {
+  it('fetches provider data before the transaction, persists notification before commit and emits SSE after', async () => {
     const order: string[] = [];
-    const database = {};
+    const database = { query: jest.fn(async () => { order.push('persist_notification'); }) };
     const repository = {
       webhookProcessed: jest.fn().mockResolvedValue(false),
       processWebhook: jest.fn(async (_metadata: unknown, work: (db: unknown) => Promise<unknown>) => {
@@ -148,12 +173,12 @@ describe('StripeWebhookService', () => {
       upsertInvoice: jest.fn(async () => { order.push('invoice'); }),
     };
     const stripe = {
-      constructWebhookEvent: jest.fn().mockReturnValue(stripeEvent('invoice.paid', stripeInvoice())),
+      constructWebhookEvent: jest.fn().mockReturnValue(stripeEvent('invoice.payment_failed', stripeInvoice())),
       retrieveSubscription: jest.fn(async () => { order.push('fetch'); return stripeSubscription(); }),
     };
     const delivery = { subscriptionUpdated: jest.fn(async () => { order.push('notify'); }) };
     await new StripeWebhookService(repository as never, stripe as never, config as never, delivery as never).handle(Buffer.from('{}'), 'signed');
-    expect(order).toEqual(['fetch', 'begin', 'subscription', 'invoice', 'commit', 'notify']);
+    expect(order).toEqual(['fetch', 'begin', 'subscription', 'invoice', 'persist_notification', 'commit', 'notify']);
   });
 
   it('does not deliver an effect if the webhook transaction rolls back', async () => {

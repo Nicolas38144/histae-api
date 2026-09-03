@@ -15,18 +15,19 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire actuel : **74 fichiers de test, 74 suites Jest et 504 cas** avec toutes les intégrations :
+Inventaire actuel : **76 fichiers de test, 76 suites Jest et 556 cas** avec toutes les intégrations :
 
-- 356 tests unitaires ;
-- 82 tests e2e ;
+- 373 tests unitaires ;
+- 83 tests e2e ;
 - 35 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 19 tests d’intégration PostgreSQL des sessions mobiles ;
+- 34 tests d’intégration PostgreSQL des notifications durables ;
 - 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 57 suites unitaires, 13 suites e2e et 4 suites d’intégration. `pnpm test` exécute les 70 suites autonomes et leurs 438 cas ; `pnpm run test:integration` exécute directement les 4 suites réelles et leurs 66 cas, sans flag d’activation.
+Jest affiche 58 suites unitaires, 13 suites e2e et 5 suites d’intégration. `pnpm test` exécute les 71 suites autonomes et leurs 456 cas ; `pnpm run test:integration` exécute directement les 5 suites réelles et leurs 100 cas, sans flag d’activation.
 
-Le 3 septembre 2026, après extraction des responsabilités métier, TypeScript, ESLint, le build, les **70 suites
+Avant R01, le 3 septembre 2026, après extraction des responsabilités métier, TypeScript, ESLint, le build, les **70 suites
 et 438 cas autonomes** ainsi que les **4 suites et 66 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis
 passent, soit **74 suites et 504 cas**. Le découpage est décrit dans `docs/module-responsibilities.md`.
 La migration `010_mobile_refresh_sessions` est appliquée sans reset sur `histae-dev` et un deuxième lancement
@@ -35,6 +36,19 @@ avec des refresh tokens historiques actifs et révoqués. Les premières erreurs
 le redémarrage des conteneurs locaux.
 
 ## Commandes
+
+Validation initiale R01 du 3 septembre 2026 : lint, typecheck, build, **456 tests autonomes** et **85 intégrations**
+réussis, soit **541 tests**. Migration `011_durable_notifications` appliquée sur `localhost/histae-dev` sans
+reset ; un second `db:migrate` confirme l’idempotence. Aucun push FCM réel : les réponses fournisseur sont
+simulées, les transactions/reprises sont testées sur PostgreSQL dans un schéma temporaire isolé.
+
+**Contre-vérification et correction de R01 :** deux cas ont d’abord reproduit une notification résiduelle
+après effacement concurrent et une alerte de fin d’essai après activation. La migration 012 et les contrôles
+partagés d’éligibilité corrigent ces cas ; 15 régressions et variantes complètent la suite notifications.
+Validation finale exécutée : lint, typecheck, build, **456 tests autonomes et 100 intégrations réussis**, soit
+**556 tests dans 76 suites**. Un lancement parallèle a dépassé les 5 secondes du test de création de schéma ;
+la relance complète des intégrations seules passe sans changement de timeout. Migration
+`012_notification_eligibility` appliquée localement sans reset, second passage sans changement.
 
 ```powershell
 # Tous les tests autonomes, sans infrastructure externe.
@@ -46,7 +60,7 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 66 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 100 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL et démarrage applicatif réels uniquement.
@@ -331,12 +345,16 @@ l’audit du repository précède la génération d’une URL signée.
 Vérifie la liste sans payload/agrégat, la normalisation des motifs, les conflits de concurrence et l’échec fermé
 de l’abandon non sûr.
 
-### `test/unit/outbox/outbox-worker.service.spec.ts` — 4 tests
+### `test/unit/outbox/outbox-worker.service.spec.ts` — 8 tests
 
 1. Supprime un objet puis termine la ligne photo et l’événement.
 2. Acquitte sans effet un agrégat déjà supprimé.
 3. Reprogramme une panne S3 avec un code d’erreur normalisé, sans détail sensible.
 4. Signale le passage en dead-letter après épuisement des dix tentatives.
+5. Refuse de traiter un claim repris par un autre worker.
+6. Acquitte un push seulement après succès du handler.
+7. Réessaie les erreurs push avec un code normalisé.
+8. Conserve une reprise possible si l’acquittement échoue après l’envoi.
 
 ### `test/unit/billing/billing.service.spec.ts` — 4 tests
 
@@ -345,16 +363,17 @@ de l’abandon non sûr.
 3. Supprime le Customer Stripe nouvellement créé si sa liaison locale échoue.
 4. Supprime le Customer Stripe pendant l’effacement du compte.
 
-### `test/unit/billing/stripe-webhook.service.spec.ts` — 8 tests
+### `test/unit/billing/stripe-webhook.service.spec.ts` — 9 tests
 
 1. Projette un webhook d’abonnement vérifié et émet `subscription.updated` une seule fois.
 2. Récupère l’état courant lors d’un échec de facture, persiste la facture et programme la notification.
 3. Acquitte un Event ID déjà traité sans nouvel appel réseau Stripe.
 4. Refuse un webhook sans signature avant toute écriture.
 5. Ignore les événements non pris en charge et refuse un mode live/test incohérent avant la base.
-6. Vérifie l'ordre récupération Stripe, transaction, projection, commit puis notification.
+6. Vérifie l’ordre récupération Stripe, transaction, projection, persistance notification, commit puis SSE.
 7. Ne livre aucun effet lorsque la transaction échoue.
 8. Ne livre aucun effet d'un doublon concurrent détecté dans la transaction.
+9. Persiste l’alerte de fin d’essai avant le commit du webhook.
 
 ### `test/unit/billing/stripe.gateway.spec.ts` — 1 test
 
@@ -404,7 +423,7 @@ Suite `PostgreSQL reset safety` :
 
 ### `test/unit/scripts/migration-catalog.spec.ts` — 2 tests
 
-1. Vérifie que la baseline est composée du schéma et des catalogues canoniques, puis que toutes les migrations de `002_user_photo_lifecycle` à `010_mobile_refresh_sessions` sont cataloguées, avec un checksum SHA-256 pour chaque version.
+1. Vérifie que la baseline est composée du schéma et des catalogues canoniques, puis que toutes les migrations de `002_user_photo_lifecycle` à `012_notification_eligibility` sont cataloguées, avec un checksum SHA-256 pour chaque version.
 2. Distingue une base neuve, une historique complète des 15 anciennes versions et une historique partielle refusée.
 
 ### `test/unit/discovery/discovery.store.spec.ts` — 3 tests
@@ -440,13 +459,20 @@ Suite `MatchesService mobile messaging` :
 3. Ferme une connexion SSE existante au prochain contrôle après révocation de sa famille.
 4. Ferme le flux à l'expiration du JWT même si sa famille reste active.
 
-### `test/unit/mobile/push.service.spec.ts` — 1 test
+### `test/unit/mobile/push.service.spec.ts` — 8 tests
 
-Vérifie que le mode push désactivé ne charge aucun jeton et n’effectue aucun appel réseau.
+Vérifie le mode désactivé sans réseau, l’envoi de métadonnées avec timeout/cache OAuth, les erreurs HTTP
+429/500/503/404, le retrait limité à `UNREGISTERED`, la réauthentification après 401 et les erreurs réseau normalisées.
 
 ### `test/unit/mobile/mobile-delivery.service.spec.ts` — 1 test
 
-Vérifie qu’un événement de message atteint les deux participants en temps réel, que seul le destinataire reçoit la notification et qu’aucun contenu privé du message n’est persisté ni transmis à FCM.
+Vérifie qu’un événement SSE de message atteint les deux participants sans texte privé ; la persistance des
+notifications relève désormais des transactions métier, pas de ce service.
+
+### `test/unit/mobile/notification-outbox.spec.ts` — 5 tests
+
+Vérifie la clé stable source/type/destinataire, l’allowlist de métadonnées, la propagation des erreurs de
+persistance, les tâches inéligibles, le `notification_id` stable et les erreurs transmises au worker.
 
 ### `test/unit/privacy/privacy.repository.spec.ts` — 1 test
 
@@ -511,7 +537,7 @@ du token, le premier enrôlement à usage unique, la lecture de session et la ge
 le refus des champs inconnus, le renommage des passkeys, la gestion ciblée des sessions, l’historique paginé et
 la révocation de la session courante à la déconnexion.
 
-### `test/e2e/outbox-admin.contract.spec.ts` — 3 tests
+### `test/e2e/outbox-admin.contract.spec.ts` — 4 tests
 
 Vérifie le contrat sans données techniques sensibles, les mutations retry/discard sous identité admin et le rejet
 strict des UUID, motifs et champs inconnus.
@@ -688,6 +714,21 @@ Cette suite utilise les repositories et de vraies transactions PostgreSQL, sans 
 18. impose en base la propriété des familles et l'unicité du token actif ;
 19. migre les tokens historiques sans prolonger leur expiration ni réactiver les révoqués.
 
+### `test/integration/postgres.notifications.integration.spec.ts` — 34 tests
+
+Schéma temporaire isolé, sans consommation des jobs de développement. Couvre visibilité au commit et rollback,
+déduplication concurrente, notifications match/message atomiques, échec de programmation annulant le message,
+marque Stripe et notification atomiques, claim abandonné, concurrence entre workers, reprise par appareil,
+réponse/acquittement perdu, bannissement, effacement, expiration, révocation/réaffectation de session, lecture et
+blocage du match, métriques, relance/abandon audités et cascades de rétention. Le test historique de migration
+refresh cible explicitement la version 010, indépendamment des migrations ajoutées ensuite.
+
+La contre-vérification R01 ajoute 15 cas : notification créée pendant l’effacement, verrouillage dans les deux
+ordres, ancien événement de fin d’essai après activation, alerte encore pertinente sans fuite du contexte,
+activation/prolongation/expiration avant envoi, échec de paiement ancien après règlement, puis facture
+payée/annulée/irrécouvrable/soldée/réaffectée ou notification historique sans référence vérifiable.
+Les deux régressions initiales ont échoué avant correction, puis passent avec la migration 012.
+
 ### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
 
 Cette suite contacte le Scylla local réellement migré et `histae-dev`. Elle vérifie au démarrage l’existence des deux tables et leur TTL de production de 31 536 000 secondes :
@@ -720,8 +761,8 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 438 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 66 cas réels et vérifier que les 504 cas passent au total.
+5. exécuter `pnpm test` pour les 456 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 100 cas réels et vérifier que les 556 cas passent au total.
 
 Voir le bilan exécuté en tête de document. La validation des sessions mobiles couvre PostgreSQL, ScyllaDB et Redis,
 mais ne rejoue pas l'analyse WebP réelle ni le smoke test du bucket S3-compatible précédemment validés.

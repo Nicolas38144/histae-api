@@ -234,6 +234,8 @@ Les erreurs de l’API conservent une structure stable :
 ## Documentation
 
 - [Résumé technique et fonctionnel](resume.md)
+- [Travaux restants, améliorations et défauts](docs/roadmap.md)
+- [Notifications durables et exploitation du worker](docs/durable-notifications.md)
 - [Contrat exhaustif de l’API](routes.md)
 - [Stratégie, inventaire et exécution des tests](test.md)
 - [Check-up de sécurité du 3 septembre 2026](docs/security-checkup.md)

@@ -52,6 +52,12 @@ export const migrations = [{
 }, {
   version: '010_mobile_refresh_sessions',
   filenames: ['010_mobile_refresh_sessions.sql'],
+}, {
+  version: '011_durable_notifications',
+  filenames: ['011_durable_notifications.sql'],
+}, {
+  version: '012_notification_eligibility',
+  filenames: ['012_notification_eligibility.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

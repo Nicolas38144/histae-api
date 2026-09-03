@@ -179,7 +179,7 @@ describe('PostgreSQL mobile refresh sessions', () => {
     await mobile.registerDevice(owner, own.session.sessionId, `test-push-${randomUUID()}`, 'ios', null);
     await expect(sessions.revoke(owner, own.session.sessionId)).resolves.toBe(2);
     await expect(sessions.list(owner, 21)).resolves.toHaveLength(0);
-    await expect(mobile.tokensForUser(owner)).resolves.toHaveLength(0);
+    await expect(mobile.devicesForUser(owner)).resolves.toHaveLength(0);
     await expect(sessions.isActive(other, foreign.session.sessionId)).resolves.toBe(true);
   });
 
@@ -227,7 +227,7 @@ describe('PostgreSQL mobile refresh sessions', () => {
     await pool.query('SELECT fct_anonymize_user($1)', [owner]);
     expect((await pool.query('SELECT id FROM refresh_token_family WHERE user_id = $1', [owner])).rows).toHaveLength(0);
     expect((await pool.query('SELECT id FROM refresh_tokens WHERE user_id = $1', [owner])).rows).toHaveLength(0);
-    await expect(mobile.tokensForUser(owner)).resolves.toHaveLength(0);
+    await expect(mobile.devicesForUser(owner)).resolves.toHaveLength(0);
   });
 
   it('purges expired ancestors without deleting an active child or losing its family', async () => {
@@ -263,7 +263,9 @@ describe('PostgreSQL mobile refresh sessions', () => {
       await client.query('BEGIN');
       await client.query(`CREATE SCHEMA ${schema}`);
       await client.query(`SET LOCAL search_path TO ${schema}, public`);
-      for (const migration of migrations.slice(0, -1)) await client.query((await loadMigration(migration)).sql);
+      const refreshMigrationIndex = migrations.findIndex((migration) => migration.version === '010_mobile_refresh_sessions');
+      expect(refreshMigrationIndex).toBeGreaterThan(0);
+      for (const migration of migrations.slice(0, refreshMigrationIndex)) await client.query((await loadMigration(migration)).sql);
       const id = randomUUID();
       await client.query(`INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
         VALUES ($1, 'user', $2, $3)`, [id, `test-${id}`, Buffer.alloc(0)]);
@@ -273,7 +275,7 @@ describe('PostgreSQL mobile refresh sessions', () => {
         await client.query(`INSERT INTO refresh_tokens (id, user_id, token_hash, jti, revoked, expires_at, created_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7)`, [token.id, id, token.hash, token.jti, revoked, token.expiresAt, token.createdAt]);
       }
-      await client.query((await loadMigration(migrations.at(-1)!)).sql);
+      await client.query((await loadMigration(migrations[refreshMigrationIndex]!)).sql);
       const rows = (await client.query('SELECT * FROM refresh_token_family WHERE user_id = $1 ORDER BY id', [id])).rows;
       expect(rows).toHaveLength(2);
       expect(rows.find((row) => row.id === first.id)).toMatchObject({ expires_at: first.expiresAt, revoked_at: null });

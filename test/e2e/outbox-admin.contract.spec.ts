@@ -81,6 +81,19 @@ describe('Administrator dead-letter HTTP contract', () => {
     expect(outbox.retry).not.toHaveBeenCalled();
   });
 
+  it('exposes push failures through the same minimal administrative contract', async () => {
+    outbox.deadLetters.mockResolvedValueOnce({
+      items: [{ event_id: EVENT_ID, event_type: 'notification.push', attempts: 10, last_error_code: 'push_delivery_unavailable' }],
+      next_cursor: null,
+    });
+    const response = await inject({ method: 'GET', url: '/api/admin/outbox/dead-letters' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().events[0]).toEqual({
+      event_id: EVENT_ID, event_type: 'notification.push', attempts: 10, last_error_code: 'push_delivery_unavailable',
+    });
+    expect(response.body).not.toMatch(/payload|aggregate_id|device_id|token|notification_id/);
+  });
+
   function inject(input: {
     method: 'GET' | 'POST';
     url: string;

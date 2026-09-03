@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createSign } from 'node:crypto';
 import { ConfigService } from '../config/config.service';
 import type { NotificationType } from './mobile.models';
@@ -6,9 +6,12 @@ import { MobileRepository } from './mobile.repository';
 
 type AccessToken = { value: string; expiresAt: number };
 
+export class PushDeliveryError extends Error {
+  constructor() { super('push_delivery_unavailable'); }
+}
+
 @Injectable()
 export class PushService {
-  private readonly logger = new Logger(PushService.name);
   private accessToken?: AccessToken;
 
   constructor(
@@ -16,13 +19,8 @@ export class PushService {
     private readonly mobile: MobileRepository,
   ) {}
 
-  async sendToUser(userId: string, type: NotificationType, data: Record<string, string>): Promise<void> {
+  async sendToDevice(token: string, type: NotificationType, data: Record<string, string>): Promise<void> {
     if (this.config.push.provider === 'disabled') return;
-    const tokens = await this.mobile.tokensForUser(userId);
-    await Promise.all(tokens.map((token) => this.send(token, type, data)));
-  }
-
-  private async send(token: string, type: NotificationType, data: Record<string, string>): Promise<void> {
     try {
       const accessToken = await this.googleAccessToken();
       const copy = notificationCopy(type);
@@ -41,9 +39,11 @@ export class PushService {
         await this.mobile.removeToken(token);
         return;
       }
-      this.logger.warn(`FCM delivery failed with HTTP ${response.status}`);
-    } catch (error) {
-      this.logger.warn(`FCM delivery failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      if (response.status === 401) this.accessToken = undefined;
+      throw new PushDeliveryError();
+    } catch {
+      // Never persist/log provider responses, assertions, device tokens or raw network errors.
+      throw new PushDeliveryError();
     }
   }
 
@@ -83,8 +83,7 @@ export class PushService {
 type FcmErrorResponse = { error?: { status?: string; details?: Array<{ errorCode?: string }> } };
 
 function isUnregistered(body: FcmErrorResponse | undefined): boolean {
-  return body?.error?.status === 'NOT_FOUND'
-    || body?.error?.details?.some((detail) => detail.errorCode === 'UNREGISTERED') === true;
+  return body?.error?.details?.some((detail) => detail.errorCode === 'UNREGISTERED') === true;
 }
 
 function base64Url(value: string): string {

@@ -13,6 +13,8 @@ import { OUTBOX_LOCK_TIMEOUT_MILLIS } from './outbox.constants';
 import type { OutboxEvent, OutboxWorkerResult } from './outbox.models';
 import { OutboxRepository } from './outbox.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
+import { NotificationPushService } from '../mobile/notification-push.service';
+import { PushDeliveryError } from '../mobile/push.service';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -38,6 +40,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     private readonly storage: ObjectStorageService,
     private readonly config: ConfigService,
     private readonly tracker: MaintenanceTrackerService,
+    private readonly notifications: NotificationPushService,
   ) {}
 
   onModuleInit(): void {
@@ -94,6 +97,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     result: OutboxWorkerResult,
   ): Promise<void> {
     try {
+      // A claimed batch can wait behind slow handlers. Recheck ownership before each send.
+      if (!await this.outbox.renewClaim(event.id, this.workerId)) return;
       await this.dispatch(event);
       if (await this.outbox.complete(event.id, this.workerId, new Date())) {
         result.completed += 1;
@@ -117,6 +122,10 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async dispatch(event: OutboxEvent): Promise<void> {
+    if (event.eventType === 'notification.push') {
+      await this.notifications.deliver(event.aggregateId);
+      return;
+    }
     if (event.eventType === 'photo.delete') {
       const photo = await this.photos.findDeleting(event.aggregateId);
       if (!photo) return;
@@ -150,10 +159,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         await this.tracker.recordFailure('outbox', error);
         this.lastStatusRecordedAt = Date.now();
       }
-      this.logger.error(
-        'Outbox polling failed',
-        error instanceof Error ? error.stack : undefined,
-      );
+      this.logger.error('outbox_poll_failed');
     } finally {
       this.polling = false;
     }
@@ -165,6 +171,7 @@ function retryDelayMillis(attempts: number): number {
 }
 
 function outboxErrorCode(error: unknown): string {
+  if (error instanceof PushDeliveryError) return 'push_delivery_unavailable';
   return error instanceof ObjectStorageUnavailableError
     ? 'object_storage_unavailable'
     : 'handler_failed';

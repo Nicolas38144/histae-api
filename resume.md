@@ -182,6 +182,12 @@ du match et utilisent un UUID v4 d’idempotence ; rejouer la même mutation re
 Le push ne contient jamais le texte d’un message. Il transporte uniquement des identifiants de resynchronisation.
 Le flux SSE annonce les créations/mises à jour de match, invalidations, messages, lectures et abonnements.
 
+Depuis R01, les notifications de match/message et les alertes Stripe sont persistées dans la transaction métier,
+avec une tâche outbox `notification.push` par appareil. Les reprises sont indépendantes, dédupliquées en base,
+et revérifient compte, session et contexte métier avant envoi. `notification_id` reste stable lors des retries ;
+FCM peut néanmoins livrer un doublon après une issue réseau incertaine. SSE reste best-effort.
+Voir [notifications durables](docs/durable-notifications.md) pour l’exploitation, les métriques et les limites.
+
 ### Photos privées
 
 `PUT /api/users/me/photo` exige `Idempotency-Key: <UUID v4>` et accepte un unique champ multipart `photo`. Les
@@ -279,6 +285,14 @@ avec migration conservatrice des tokens existants. Déployer code et migration e
 ne savent pas renseigner la famille. Les anciens JWT sans `sid`/`kid` nécessitent un refresh ; les anciens refresh
 actifs gardent leur expiration initiale.
 
+`011_durable_notifications` ajoute la clé de déduplication des notifications et leurs références de livraison
+par appareil vers l’outbox. Aucune notification historique n’est réémise. Les nouvelles API et les workers
+doivent être déployés ensemble ; les anciennes instances ne connaissent pas `notification.push`.
+
+`012_notification_eligibility` complète R01 : nettoyage final des notifications lors de la désactivation du
+compte et contexte Stripe interne pour filtrer les alertes obsolètes à la programmation comme à l’envoi.
+Les anciennes notifications sans ce contexte ne sont pas poussées ; aucune durée de conservation ne change.
+
 La compatibilité est sans perte :
 
 - une base neuve applique la baseline puis toutes les migrations incrémentales ;
@@ -352,37 +366,21 @@ L’inventaire, les prérequis et les derniers résultats se trouvent dans `test
 
 ## 9. Ce qu’il reste à faire
 
-### Priorité production
+Le backlog détaillé est centralisé dans [docs/roadmap.md](docs/roadmap.md) : limites constatées,
+améliorations, tests manquants, périmètres API/dashboard et critères de fin.
 
-1. Choisir l’architecture cible et tester sauvegarde/restauration de PostgreSQL et du stockage objet, ainsi que
-   réplication, réparation et montée de version ScyllaDB. Prévoir Redis hautement disponible.
-2. Déployer une chaîne TLS complète avec reverse proxy/WAF, IP/CIDR de confiance précis, protection DDoS,
-   gestionnaire de secrets et procédures de rotation/révocation.
-3. Formaliser l’exploitation de WebAuthn : deux passkeys minimum par administrateur, clé physique de secours,
-   procédure d’enrôlement/récupération hors bande et alertes sur les connexions et actions de sûreté.
-4. Calibrer les seuils photo et les règles texte sur un corpus représentatif, mesurer faux positifs, faux négatifs
-   et biais, formaliser toutes les catégories interdites, le SLA de revue et une procédure d’appel.
-5. Brancher les métriques internes déjà présentes sur le mécanisme d’alertes retenu en production et superviser
-   réellement les workers maintenance/outbox.
-6. Implémenter le suivi asynchrone Sweego (webhook/statut) pour distinguer acceptation fournisseur et livraison,
-   puis gérer explicitement la perte de réponse réseau.
-7. Ajouter une réconciliation Stripe planifiée et un traitement opérable des webhooks durablement en échec.
+Ordre conseillé côté API :
 
-### Validation à étendre
+1. Rendre l’effacement de compte reprenable par étapes, sans longs appels réseau sous transaction (R02).
+2. Compléter les tests de concurrence métier et de panne/reprise.
+3. Finaliser le suivi Sweego et la réconciliation Stripe.
+4. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
 
-1. Pentest externe authentifié et tests d’abus/charge, notamment OTP, autorisations objet, multipart/HEIC,
-   concurrence de swipes/continuations, webhooks et URLs signées.
-2. Tests PostgreSQL réels supplémentaires sur tombstones, retraits de consentement, quota Free
-   concurrent, pagination matchs/signalements et maintenance avec données expirées.
-3. Tests de panne/reprise Redis, Scylla, S3, Sweego et Stripe, plus un parcours Stripe sandbox complet.
-4. Intégrer audit de dépendances, secret scanning et SAST récurrents quand la chaîne CI/CD sera décidée.
+R01 est terminé après contre-vérification et correction de l’effacement concurrent des notifications et des
+alertes Stripe obsolètes. Les migrations 011 et 012 sont appliquées localement sans reset ; les notifications
+historiques ne sont pas rejouées. Les 556 tests et les contrôles statiques passent ; détails dans `test.md`.
 
-### Décisions produit, juridique et exploitation
-
-Finaliser avec le DPO/juriste l’AIPD, les durées des comptes inactifs, les sous-traitants/transferts, la gestion des
-sauvegardes lors d’un effacement et les textes/versionnements de production. Ces choix ne doivent pas être inventés
-dans le code.
-
-À court terme, le meilleur prochain lot côté API est le suivi asynchrone Sweego. Le socle métier n’a pas
-besoin d’une nouvelle réécriture générale ; les risques principaux sont désormais les procédures de récupération
-WebAuthn et les garanties opérationnelles des services externes.
+Avant production : calibration et recours de modération, alertes et supervision des workers,
+sauvegardes/restaurations éprouvées, exploitation WebAuthn, tests de charge et audit indépendant.
+Les décisions DPO/juridiques et de rétention restent des dépendances explicites, pas des choix à inventer dans le code.
+Une nouvelle réécriture générale ou une migration vers des microservices n’est pas justifiée à ce stade.

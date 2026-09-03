@@ -154,6 +154,23 @@ Toutes ces routes sont authentifiées.
 
 Le temps réel est relayé entre instances via Redis en production et fonctionne localement en mémoire lorsque Redis est explicitement désactivé. Les notifications push FCM sont optionnelles (`PUSH_PROVIDER=fcm`) et ne contiennent jamais le texte d’un message : seulement des identifiants nécessaires à la resynchronisation. Un jeton signalé `UNREGISTERED` par FCM est supprimé automatiquement.
 
+Les notifications de match, message, paiement échoué et fin d’essai sont persistées avec leurs tâches
+`notification.push` dans la transaction métier. L’envoi FCM est asynchrone via le worker outbox, séparé par
+appareil, avec reprises et dead letters. Le push ajoute un `notification_id` stable pour permettre la
+déduplication côté mobile ; une issue réseau incertaine peut produire un nouvel envoi, sans nouvelle notification
+métier. SSE reste best-effort, sans replay hors ligne : relire les ressources après reconnexion.
+Les alertes de facturation sont filtrées à la programmation puis avant envoi : facture encore ouverte et due,
+ou même essai encore actif avec la même échéance future. Les références de facture/abonnement restent internes,
+hors payload ; une ancienne notification sans contexte vérifiable n’est pas poussée.
+Avec `PUSH_PROVIDER=disabled`, les tâches consommées sont acquittées sans réseau ni rattrapage ultérieur.
+Voir [notifications durables](docs/durable-notifications.md).
+
+Les métriques `operations.outbox.notification_push` de `/admin/metrics` détaillent `pending`, `processing`,
+`completed`, `dead_letter`, `discarded` et `oldest_pending_at`. Ces compteurs sont persistants et agrégés ;
+`completed` compte les tâches acquittées encore conservées, pas les push reçus. Les routes admin de dead letters
+acceptent aussi `notification.push`. Leur abandon est audité et ne supprime pas la notification ; la protection
+des suppressions photo encore nécessaires reste inchangée.
+
 ### Consentements
 
 | Methode | Route | Corps / parametres | Resultat |

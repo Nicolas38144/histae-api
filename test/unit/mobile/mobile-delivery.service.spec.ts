@@ -4,11 +4,9 @@ const SENDER_ID = '11111111-1111-4111-8111-111111111111';
 const RECIPIENT_ID = '22222222-2222-4222-8222-222222222222';
 
 describe('MobileDeliveryService', () => {
-  it('sends realtime metadata to both participants but a content-free push only to the recipient', async () => {
+  it('sends only realtime metadata; durable notifications belong to the business transaction', async () => {
     const realtime = { emit: jest.fn().mockResolvedValue(undefined) };
-    const repository = { createNotification: jest.fn().mockResolvedValue(undefined) };
-    const push = { sendToUser: jest.fn().mockResolvedValue(undefined) };
-    const service = new MobileDeliveryService(realtime as never, repository as never, push as never);
+    const service = new MobileDeliveryService(realtime as never);
     const message = {
       id: '33333333-3333-4333-8333-333333333333',
       match_id: '44444444-4444-4444-8444-444444444444',
@@ -21,8 +19,6 @@ describe('MobileDeliveryService', () => {
 
     const expectedMetadata = { match_id: message.match_id, message_id: message.id, sender_id: SENDER_ID };
     expect(realtime.emit).toHaveBeenCalledWith([SENDER_ID, RECIPIENT_ID], 'message.created', expectedMetadata);
-    expect(repository.createNotification).toHaveBeenCalledWith(RECIPIENT_ID, 'new_message', expectedMetadata);
-    expect(push.sendToUser).toHaveBeenCalledWith(RECIPIENT_ID, 'new_message', expectedMetadata);
-    expect(JSON.stringify(repository.createNotification.mock.calls)).not.toContain(message.content);
+    expect(JSON.stringify(realtime.emit.mock.calls)).not.toContain(message.content);
   });
 });

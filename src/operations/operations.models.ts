@@ -1,3 +1,5 @@
+import type { OutboxStatusSnapshot } from '../outbox/outbox.models';
+
 export const DEPENDENCY_NAMES = [
   'postgres',
   'redis',
@@ -80,12 +82,6 @@ export type OperationalSnapshot = {
   };
   dependencies: Record<DependencyName, DependencySnapshot>;
   postgres_pool: { total: number; idle: number; waiting: number };
-  outbox: {
-    pending: number;
-    processing: number;
-    dead_letter: number;
-    discarded: number;
-    oldest_pending_at: Date | null;
-  };
+  outbox: OutboxStatusSnapshot;
   maintenance: MaintenanceJobOperationalView[];
 };

@@ -4,6 +4,7 @@ import { DatabaseService } from '../database/database.service';
 import type { KeysetCursor } from '../common/pagination';
 import type { CursorMessageRow, MatchCommandResult, MatchRow, MessageCreationResult, MessageRead, MessageRow } from './matches.models';
 import { lockMessagingMatch } from './match-access';
+import { enqueueNotification } from '../mobile/notification-outbox';
 
 @Injectable()
 export class MatchMessageRepository {
@@ -57,6 +58,10 @@ export class MatchMessageRepository {
       }
       const message = inserted.rows[0];
       await client.query('UPDATE match_init SET last_message_at = $2 WHERE id = $1', [matchId, message.created_at]);
+      const recipientId = available.value.user1_id === senderId ? available.value.user2_id : available.value.user1_id;
+      await enqueueNotification(client, recipientId, message.id, {
+        type: 'new_message', matchId, messageId: message.id, senderId,
+      });
       return {
         ok: true,
         value: { message, participant_ids: [available.value.user1_id, available.value.user2_id], created: true },

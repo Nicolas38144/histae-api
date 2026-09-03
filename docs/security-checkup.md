@@ -93,8 +93,10 @@ directement corrigeables trouvés pendant la revue ont été traités.
 - Les commentaires SQL décrivent maintenant correctement le HMAC-SHA-256 et l’AES-256-GCM applicatifs.
 - Le refactoring des responsabilités conserve les transactions et guards existants : la révélation et les messages
   utilisent le même contrôle de match verrouillé, la réconciliation garde son audit dans le commit métier et les
-  notifications Stripe restent après commit uniquement. Les composants extraits sont couverts par le démarrage
-  Nest réel et les tests PostgreSQL, sans nouvelle dépendance ni migration.
+  appels réseau restent après commit. Depuis R01, les notifications Stripe/match/message et leurs intentions
+  d’envoi sont atomiques avec le métier, via la migration 011. Les contrôles avant push relisent compte, session,
+  appareil et contexte métier ; les erreurs FCM sont normalisées. Aucune dépendance n’a été ajoutée.
+  Voir [notifications durables](durable-notifications.md), notamment le risque de doublon externe après une réponse perdue.
 
 ## Risques résiduels et actions avant production
 
@@ -135,13 +137,16 @@ directement corrigeables trouvés pendant la revue ont été traités.
 ## Validation exécutée
 
 - Audit de dépendances du 1er septembre : `pnpm audit --audit-level low` et sa variante `--prod`, aucune
-  vulnérabilité connue à cette date. Non relancé pour les sessions mobiles ; aucune dépendance ajoutée ou modifiée.
+  vulnérabilité connue à cette date. Non relancé pour les sessions mobiles ni R01 ; aucune dépendance ajoutée ou modifiée.
 - `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` : réussis ;
-- tests unitaires : 57 suites, 356 cas réussis ;
-- tests e2e Fastify : 13 suites, 82 cas réussis ;
-- `pnpm test` : 70 suites et 438 cas autonomes réussis ;
-- intégrations PostgreSQL, ScyllaDB et Redis : 4 suites, 66 cas réussis après redémarrage des conteneurs locaux ;
-- migrations PostgreSQL : chaîne jusqu'à `010_mobile_refresh_sessions` vérifiée dans un schéma temporaire,
-  y compris des anciens tokens actifs/révoqués ; 010 appliquée sans reset sur `histae-dev` et deuxième migration idempotente ;
+- tests unitaires : 58 suites, 373 cas réussis dans la validation autonome ;
+- tests e2e Fastify : 13 suites, 83 cas réussis dans la validation autonome ;
+- `pnpm test` : 71 suites et 456 cas autonomes réussis ;
+- intégrations PostgreSQL, ScyllaDB et Redis : 5 suites, 100 cas réussis, dont 34 scénarios de notifications ;
+  les deux défauts reproduits en revue (effacement concurrent et alerte Stripe obsolète) sont corrigés et
+  couverts par des régressions. Un timeout de création de schéma lors du lancement parallèle ne se reproduit
+  pas lors de la relance complète des intégrations seules ; aucun délai de test n’a été modifié ;
+- migrations PostgreSQL : chaîne jusqu’à `012_notification_eligibility` vérifiée dans un schéma temporaire,
+  y compris des anciens tokens actifs/révoqués ; 012 appliquée sans reset sur `histae-dev` et deuxième passage idempotent ;
 - validation photo antérieure : analyse WebP authentifiée et smoke test S3-compatible réussis ; non rejoués
-  dans cette évolution des sessions mobiles.
+  dans cette évolution des sessions mobiles ou R01. Aucun push FCM réel n’a été envoyé.

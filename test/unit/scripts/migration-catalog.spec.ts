@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(10);
+    expect(migrations).toHaveLength(12);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -69,6 +69,13 @@ describe('PostgreSQL migration catalog', () => {
     expect(mobileSessions.sql).toContain('CREATE TABLE refresh_token_family');
     expect(mobileSessions.sql).toContain('fk_refresh_parent');
     expect(mobileSessions.checksum).toMatch(/^[0-9a-f]{64}$/);
+    const notifications = await loadMigration(migrations[10]);
+    expect(notifications.sql).toContain('CREATE TABLE notification_push_delivery');
+    expect(notifications.sql).toContain('REFERENCES outbox_event(id) ON DELETE CASCADE');
+    const eligibility = await loadMigration(migrations[11]);
+    expect(eligibility.sql).toContain('chk_notification_billing_context');
+    expect(eligibility.sql).toContain('CREATE TRIGGER trg_erase_notifications');
+    expect(eligibility.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

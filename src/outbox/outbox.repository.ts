@@ -86,6 +86,13 @@ export class OutboxRepository {
     `, [workerId, now, staleBefore, limit])).rows;
   }
 
+  async renewClaim(eventId: string, workerId: string): Promise<boolean> {
+    return (await this.database.query(`
+      UPDATE outbox_event SET locked_at = clock_timestamp()
+      WHERE id = $1 AND status = 'processing' AND locked_by = $2
+    `, [eventId, workerId])).rowCount === 1;
+  }
+
   async complete(
     eventId: string,
     workerId: string,
@@ -182,7 +189,15 @@ export class OutboxRepository {
         count(*) FILTER (WHERE status = 'processing')::int AS processing,
         count(*) FILTER (WHERE status = 'dead_letter')::int AS dead_letter,
         count(*) FILTER (WHERE status = 'discarded')::int AS discarded,
-        min(available_at) FILTER (WHERE status = 'pending') AS oldest_pending_at
+        min(available_at) FILTER (WHERE status = 'pending') AS oldest_pending_at,
+        jsonb_build_object(
+          'pending', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'pending'),
+          'processing', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'processing'),
+          'completed', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'completed'),
+          'dead_letter', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'dead_letter'),
+          'discarded', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'discarded'),
+          'oldest_pending_at', min(available_at) FILTER (WHERE event_type = 'notification.push' AND status = 'pending')
+        ) AS notification_push
       FROM outbox_event
     `)).rows[0] ?? {
       pending: 0,
@@ -190,6 +205,7 @@ export class OutboxRepository {
       dead_letter: 0,
       discarded: 0,
       oldest_pending_at: null,
+      notification_push: { pending: 0, processing: 0, completed: 0, dead_letter: 0, discarded: 0, oldest_pending_at: null },
     };
   }
 
@@ -212,7 +228,7 @@ export class OutboxRepository {
       if (!event) return 'not_found';
       if (event.status !== 'dead_letter') return 'not_dead_letter';
 
-      if (action === 'discard') {
+      if (action === 'discard' && event.event_type !== 'notification.push') {
         if (event.event_type !== 'photo.delete') return 'discard_not_allowed';
         const photoStillExists = (await client.query(
           'SELECT 1 FROM user_photo WHERE id = $1',

@@ -6,12 +6,15 @@ import { MobileRepository } from './mobile.repository';
 import { MobileService } from './mobile.service';
 import { PushService } from './push.service';
 import { RealtimeService } from './realtime.service';
+import { NotificationPushRepository } from './notification-push.repository';
+import { NotificationPushService } from './notification-push.service';
 
 @Global()
 @Module({
   imports: [AuthModule],
   controllers: [MobileController],
-  providers: [MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService],
-  exports: [MobileDeliveryService, RealtimeService],
+  providers: [MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
+    NotificationPushRepository, NotificationPushService],
+  exports: [MobileDeliveryService, RealtimeService, NotificationPushService],
 })
 export class MobileModule {}

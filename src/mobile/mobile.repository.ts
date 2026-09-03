@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../database/database.service';
-import type { DevicePlatform, DeviceRow, NotificationType } from './mobile.models';
+import type { DevicePlatform, DeviceRow } from './mobile.models';
 
 @Injectable()
 export class MobileRepository {
@@ -45,18 +45,5 @@ export class MobileRepository {
 
   async removeToken(token: string): Promise<void> {
     await this.database.query('DELETE FROM device_token WHERE token = $1', [token]);
-  }
-
-  async tokensForUser(userId: string): Promise<string[]> {
-    return (await this.database.query<{ token: string }>(`
-      SELECT token FROM device_token WHERE user_id = $1 ORDER BY id
-    `, [userId])).rows.map((row) => row.token);
-  }
-
-  async createNotification(userId: string, type: NotificationType, payload: Record<string, string>): Promise<void> {
-    await this.database.query(`
-      INSERT INTO notification (id, user_id, type, payload)
-      VALUES ($1, $2, $3, $4::jsonb)
-    `, [randomUUID(), userId, type, JSON.stringify(payload)]);
   }
 }

@@ -5,6 +5,8 @@ import { apiError } from '../common/api-error';
 import { ConfigService } from '../config/config.service';
 import type { Queryable } from '../database/database.service';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
+import { enqueueNotification } from '../mobile/notification-outbox';
+import type { BillingNotificationIntent } from '../mobile/notification-billing';
 import type { BillingPeriod, InvoiceProjection, StripeSubscriptionStatus, SubscriptionProjection, WebhookMetadata } from './billing.models';
 import { STRIPE_SUBSCRIPTION_STATUSES } from './billing.models';
 import { BillingMappingError, BillingRepository } from './billing.repository';
@@ -24,8 +26,7 @@ const SUPPORTED_WEBHOOK_EVENT_TYPES = new Set<string>([
 
 type WebhookEffect = {
   userId: string;
-  paymentFailed?: boolean;
-  trialEnding?: boolean;
+  notification?: BillingNotificationIntent;
   subscriptionStatus?: StripeSubscriptionStatus;
 };
 type ParsedSubscription = Omit<SubscriptionProjection, 'userId' | 'eventCreatedAt'> & { metadataUserId: string | null };
@@ -54,7 +55,13 @@ export class StripeWebhookService {
     try {
       processed = await this.billing.processWebhook(
         metadata,
-        (database) => this.processEvent(event, metadata, invoice, prefetchedSubscription, database),
+        async (database) => {
+          const effect = await this.processEvent(event, metadata, invoice, prefetchedSubscription, database);
+          if (effect?.notification) {
+            await enqueueNotification(database, effect.userId, event.id, effect.notification);
+          }
+          return effect;
+        },
       );
     } catch (error) {
       if (error instanceof BillingMappingError) throw apiError(400, 'invalid_stripe_event', error.message, error);
@@ -96,7 +103,12 @@ export class StripeWebhookService {
       const parsed = this.parseSubscription(event.data.object as Stripe.Subscription);
       const userId = await this.resolveUser(parsed, database, 'Stripe subscription has no Histae customer mapping');
       await this.billing.upsertSubscription({ ...parsed, userId, eventCreatedAt: metadata.createdAt }, database);
-      return { userId, subscriptionStatus: parsed.status, trialEnding: event.type === 'customer.subscription.trial_will_end' };
+      return {
+        userId, subscriptionStatus: parsed.status,
+        notification: event.type === 'customer.subscription.trial_will_end' && parsed.trialEndsAt
+          ? { type: 'subscription_trial_ending', subscriptionId: parsed.stripeSubscriptionId, trialEndsAt: parsed.trialEndsAt }
+          : undefined,
+      };
     }
     if (invoice && prefetchedSubscription) {
       if (prefetchedSubscription.stripeCustomerId !== customerId(invoice.customer)) {
@@ -107,7 +119,8 @@ export class StripeWebhookService {
       await this.billing.upsertInvoice(userId, parseInvoice(invoice, metadata.createdAt), database);
       return {
         userId, subscriptionStatus: prefetchedSubscription.status,
-        paymentFailed: event.type === 'invoice.payment_failed' || event.type === 'invoice.payment_action_required',
+        notification: event.type === 'invoice.payment_failed' || event.type === 'invoice.payment_action_required'
+          ? { type: 'billing_payment_failed', invoiceId: invoice.id } : undefined,
       };
     }
     if (CHECKOUT_EVENT_TYPES.has(event.type)) {
@@ -162,10 +175,8 @@ export class StripeWebhookService {
   private async deliverEffect(effect: WebhookEffect): Promise<void> {
     try {
       if (effect.subscriptionStatus) await this.delivery.subscriptionUpdated(effect.userId, effect.subscriptionStatus);
-      if (effect.paymentFailed) await this.delivery.billingPaymentFailed(effect.userId);
-      if (effect.trialEnding) await this.delivery.subscriptionTrialEnding(effect.userId);
-    } catch (error) {
-      this.logger.warn(`Billing notification delivery failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    } catch {
+      this.logger.warn('billing_realtime_delivery_failed');
     }
   }
 }

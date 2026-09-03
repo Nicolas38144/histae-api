@@ -9,6 +9,7 @@ DROP TABLE IF EXISTS billing_invoice CASCADE;
 DROP TABLE IF EXISTS billing_checkout_session CASCADE;
 DROP TABLE IF EXISTS billing_customer CASCADE;
 
+DROP TABLE IF EXISTS notification_push_delivery CASCADE;
 DROP TABLE IF EXISTS notification CASCADE;
 DROP TABLE IF EXISTS device_token CASCADE;
 DROP TABLE IF EXISTS account_deletion_token CASCADE;
@@ -48,6 +49,7 @@ DROP TABLE IF EXISTS subscription_plan CASCADE;
 
 DROP TABLE IF EXISTS user_account CASCADE;
 DROP FUNCTION IF EXISTS fct_erase_mobile_sessions();
+DROP FUNCTION IF EXISTS fct_erase_notifications();
 DROP TABLE IF EXISTS account_tombstone CASCADE;
 
 DROP EXTENSION IF EXISTS "uuid-ossp";

@@ -9,6 +9,7 @@ Histae API est le backend TypeScript de l'application mobile de rencontres Hista
 Les sources de référence à consulter avant une modification importante sont :
 
 - `resume.md` pour l'architecture, les règles métier, les risques ouverts et la feuille de route ;
+- `docs/roadmap.md` pour le backlog détaillé, les limites constatées, les priorités et les critères de fin ;
 - `routes.md` pour le contrat HTTP existant ;
 - `test.md` pour l'inventaire des tests et la procédure de validation ;
 - `docs/retention-policy.md` et `docs/legal-release-checklist.md` pour la rétention et les contraintes juridiques ;
@@ -65,6 +66,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Les transitions de match, la continuation, les quotas, l'expiration et l'envoi idempotent des messages doivent rester atomiques.
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
+- Les notifications match/message/Stripe et leurs tâches `notification.push` par appareil sont écrites dans la transaction métier via `notification-outbox.ts`. Ne jamais réintroduire une programmation après commit. Conserver la clé source/type/destinataire, le `notification_id` stable, les contrôles d’éligibilité avant envoi et les erreurs FCM normalisées. La migration 012 nettoie les notifications intercalées pendant l’effacement ; préserver le verrou partagé du destinataire et ce nettoyage final. Les alertes Stripe doivent respecter le prédicat partagé `notification-billing.ts` à la programmation et à l’envoi ; ne pas exposer leur contexte interne. SSE reste best-effort ; les issues FCM incertaines peuvent produire un doublon externe. Voir `docs/durable-notifications.md`.
 - Un utilisateur conserve au plus trois réponses de profil ordonnées, sur des questions distinctes. Leur remplacement reste atomique et leurs textes normalisés, sans caractères de contrôle, entre 10 et 300 caractères et 1 000 octets maximum.
 - Supprimer une question de profil supprime volontairement toutes ses réponses par cascade PostgreSQL. Le dashboard doit afficher `answer_count` et demander une confirmation explicite avant cette opération irréversible.
 - Une photo reçue ne peut dépasser 500 000 octets et doit porter l’une des extensions `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Vérifier aussi MIME, signature et dimensions ; ne stocker qu’un WebP privé sans métadonnées, lui-même limité à 500 000 octets.
@@ -91,7 +93,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 
 - PostgreSQL utilise la baseline consolidée `001_baseline_20260901`, construite depuis `db/schema_postgres.sql` et `db/insert_postgres.sql`. Les quinze anciennes versions ne subsistent que comme identifiants de compatibilité dans `scripts/migration-catalog.ts`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les migrations incrémentales `002_user_photo_lifecycle` à `010_mobile_refresh_sessions` ajoutent le cycle photo, l’idempotence/outbox, la réconciliation, les questions, la modération, WebAuthn admin, le suivi des maintenances/récupération auditée des dead letters, les index SQL puis les familles de refresh mobiles. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
+- Les migrations incrémentales `002_user_photo_lifecycle` à `012_notification_eligibility` ajoutent le cycle photo, l’idempotence/outbox, la réconciliation, les questions, la modération, WebAuthn admin, le suivi des maintenances/récupération auditée des dead letters, les index SQL, les familles de refresh mobiles puis les notifications durables par appareil et leurs contrôles d’effacement/facturation. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
@@ -127,21 +129,15 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État connu et priorités
 
-Au 3 septembre 2026, les migrations jusqu’à `010_mobile_refresh_sessions` sont cataloguées et appliquées localement ; consulter `test.md` pour les validations réelles. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, les décisions opérateur transactionnelles/auditées, la suppression en cascade des réponses, la revue photo et l’invalidation d’une session quand sa passkey est révoquée. `docs/sql-performance.md` décrit l’audit des requêtes et les plans mesurés.
+Au 3 septembre 2026, les migrations jusqu’à `012_notification_eligibility` sont cataloguées et appliquées localement ; consulter `test.md` pour les validations réelles. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, les notifications transactionnelles et reprises par appareil, l’effacement concurrent des notifications et les alertes Stripe obsolètes, les décisions opérateur auditées, la suppression en cascade des réponses, la revue photo et l’invalidation d’une session quand sa passkey est révoquée. `docs/sql-performance.md` décrit l’audit des requêtes et les plans mesurés.
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 
-Les prochains travaux API/infra prioritaires documentés sont :
+Le backlog détaillé et ses critères de validation sont centralisés dans `docs/roadmap.md`. R01 ajoute les notifications durables via l’outbox. Les prochains lots API conseillés sont l’effacement reprenable par étapes, les tests de concurrence/panne, puis le suivi Sweego et la réconciliation Stripe. Le bornage des traitements, les exports et les logs restent à consolider. Avant production, terminer également calibration/recours de modération, alertes/supervision, sauvegardes/restaurations, exploitation WebAuthn, charge et audit indépendant. Mettre à jour la feuille de route après chaque lot validé plutôt que dupliquer son inventaire ici.
 
-1. suivi opérationnel de la livraison Sweego, idéalement par webhook, et gestion/test de la perte de réponse fournisseur ;
-2. calibration sur un corpus représentatif, mesure des faux positifs/biais, élargissement documenté des catégories interdites et procédure d’appel de la modération ;
-3. raccordement des métriques internes au système d’alertes de production et observation du feed hybride ;
-4. déploiement/supervision des workers maintenance et outbox, avec Redis hautement disponible/managé dans l'environnement cible ;
-5. sauvegarde/restauration PostgreSQL, du stockage objet et stratégie de sauvegarde, réparation et montée de version Scylla ;
-6. réconciliation Stripe planifiée vers `user_subscription` et alerte sur les webhooks durablement en échec ;
-7. tests de charge, audit de sécurité externe et rotation opérationnelle des secrets.
+La migration `010_mobile_refresh_sessions` ajoute les familles et la filiation des refresh, les liens d'appareils push et l'effacement des sessions mobiles ; elle est incompatible avec les écritures de l'ancien code sans `family_id`. Les tests PostgreSQL réels couvrent rotation, rejeu, concurrence, logout, révocation, bannissement, rétention et migration des tokens historiques.
 
-La migration `010_mobile_refresh_sessions` ajoute les familles et la filiation des refresh, les liens d'appareils push et l'effacement des sessions mobiles. Ajouter une nouvelle migration après cette version ; la 010 est incompatible avec les écritures de l'ancien code sans `family_id`. Les tests PostgreSQL réels couvrent désormais rotation, rejeu, concurrence, logout, révocation, bannissement, rétention et migration des tokens historiques.
+La migration `011_durable_notifications` ajoute la déduplication des notifications et les références de livraison par appareil ; `012_notification_eligibility` ajoute le contexte interne de facturation et le nettoyage final des notifications lors de la désactivation. Toute évolution persistante suivante exige une migration après 012. Déployer API et workers compatibles ensemble : un ancien worker ne connaît pas `notification.push` ou ignore ses nouveaux contrôles. Les références sont effacées avec notification/appareil/événement purgé ; ne pas copier les tokens FCM dans l’outbox ni prolonger les rétentions existantes.
 
 La couverture à étendre concerne notamment la concurrence de continuation/quota Free, les tombstones, le retrait des consentements, la pagination matchs/signalements, la maintenance sur les autres données expirées, les coupures Redis/Scylla, le webhook Sweego et un parcours Stripe sandbox complet.
 
