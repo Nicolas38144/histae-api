@@ -64,7 +64,7 @@ Voir [les scénarios, leur isolation et leurs limites](resilience-tests.md).
 
 ## Issue incertaine Stripe
 
-La migration 013 conserve l’intention avant le POST Customer : `customer_creation_started_at`, puis
+La baseline conserve l’intention avant le POST Customer : `customer_creation_started_at`, puis
 `created_customer_id` lorsqu’il est connu et `customer_erased_at` après suppression confirmée, dans la tentative
 Checkout existante. Aucune clé secrète ni réponse Stripe n’y est copiée. Ces colonnes disparaissent avec les
 tentatives lors de l’anonymisation, sans nouvelle durée de conservation.
@@ -84,7 +84,8 @@ doivent aussi être vérifiées lors du déploiement ; cette migration ne peut p
 
 ## Exploitation et suivi admin
 
-- Déployer la migration **013** puis API et workers compatibles ensemble, après arrêt des anciens écrivains.
+- Appliquer la [baseline courante](postgres-migrations.md), qui inclut les anciens changements de **013**,
+  puis déployer API et workers compatibles ensemble, après arrêt des anciens écrivains.
   Ne pas laisser un ancien worker consommer `account.erase` ni un ancien écrivain contourner les verrous.
 - En développement, `MAINTENANCE_MODE=api` suffit. En mode séparé, conserver `pnpm run outbox:work` actif avec la
   même configuration PostgreSQL, Scylla, S3 et Stripe que l’API. Aucun composant supplémentaire n’est nécessaire.

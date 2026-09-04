@@ -23,19 +23,10 @@ Le socle fonctionnel principal est implémenté :
 - health checks, migrations contrôlées et tests réels des stockages.
 - observabilité interne, suivi persistant des maintenances et récupération auditée des dead letters.
 
-Le refactor du 1er septembre 2026 a séparé le cycle de vie HTTP du bootstrap, isolé les parseurs de configuration,
-consolidé les migrations PostgreSQL et corrigé plusieurs points de défense en profondeur. La migration
-`002_user_photo_lifecycle` a ensuite remplacé la clé provisoire du profil par un registre d’objets versionnés,
-réconciliable après une panne PostgreSQL/S3. La migration `003_photo_idempotency_and_outbox` rend l’upload
-idempotent pendant 24 heures et découple les suppressions objet par une outbox PostgreSQL durable. Le check-up
-complet est dans `docs/security-checkup.md`. La migration `004_admin_photo_reconciliation` ajoute l’action d’audit
-qui permet aux opérateurs de relancer les cycles photo bloqués depuis le dashboard. La migration
-`005_profile_questions` fournit un catalogue initial administrable et jusqu’à trois réponses ordonnées par profil.
-La migration `006_content_moderation` sépare ensuite le statut éditorial du statut technique et crée la file de
-revue centrale pour les photos, bios et réponses. `007_native_admin_webauthn` sépare enfin totalement le dashboard
-du parcours OTP : passkeys découvrables, sessions serveur courtes et audit d’authentification, sans SSO externe.
-`008_internal_operations` ajoute enfin les états de maintenance, la résolution explicite et auditée des dead
-letters, ainsi que les événements nécessaires à la gestion détaillée des passkeys et sessions.
+Les consolidations successives ont isolé les responsabilités HTTP, métier et stockage, puis renforcé les
+cycles photo/outbox, l’authentification et les workflows RGPD. L’état PostgreSQL final jusqu’au suivi Sweego R04
+est désormais défini dans une seule baseline. Les invariants sont dans `AGENTS.md`, les risques restants dans
+`docs/roadmap.md`, qui conserve aussi la portée et les limites des contrôles de sécurité.
 
 ## 2. Architecture
 
@@ -263,66 +254,22 @@ comptabilité de trésorerie.
 
 ## 6. PostgreSQL et migrations
 
-Le schéma canonique est `db/schema_postgres.sql`. Les catalogues de plans/traits et le seed conditionnel des 400
-profils de développement sont dans `db/insert_postgres.sql`. `db/drop_postgres.sql` n’est utilisé que par le reset
-local protégé.
+`db/schema_postgres.sql` définit directement tout le schéma jusqu’à l’ancienne migration 014 ; les catalogues
+plans/traits/questions et le seed optionnel des 400 profils restent dans `db/insert_postgres.sql`. La baseline
+`001_baseline_20260904` remplace l’ancienne baseline et les treize fichiers incrémentaux supprimés.
 
-Les quinze anciens fichiers incrémentaux ont été fusionnés dans la baseline logique `001_baseline_20260901`.
-Le moteur compose le schéma et les inserts canoniques, calcule un checksum SHA-256, acquiert un verrou consultatif
-et applique la baseline dans une transaction.
+`pnpm run db:migrate` initialise un schéma vide, contrôle strictement les versions et checksums déjà
+enregistrés, puis applique les futures migrations cataloguées. Le moteur courant n’adopte plus les anciennes
+chaînes. Le [guide de migration](docs/postgres-migrations.md) décrit le reset local protégé et la stratégie
+requise pour toute base déjà déployée dans un autre environnement.
 
-La migration incrémentale `002_user_photo_lifecycle` ajoute le registre versionné des objets photo et retire la
-colonne provisoire `user_profile.photo`. `003_photo_idempotency_and_outbox` ajoute les demandes d’upload à durée
-bornée et l’outbox générique. `004_admin_photo_reconciliation` étend la liste fermée des actions d’audit pour la
-relance opérateur. `005_profile_questions` ajoute le catalogue administrable et les réponses en cascade.
-`006_content_moderation` ajoute les cas centraux, les signaux automatisés, la revue optimiste et les actions
-d’audit associées. `007_native_admin_webauthn` ajoute les enrôlements temporaires, credentials publics, challenges,
-sessions opaques et événements d’authentification admin. Une base neuve applique donc la baseline puis ces migrations
-dans l’ordre. `008_internal_operations` ajoute la résolution/audit outbox, l’état de maintenance et enrichit
-l’historique WebAuthn. `009_sql_performance_indexes` aligne ensuite les index sur le feed, la pagination des matchs,
-les recherches administratives, les exports et les purges bornées. Les réécritures et plans mesurés sont détaillés
-dans `docs/sql-performance.md`.
+Les migrations restent sérialisées par verrou consultatif et transactionnelles. Le checksum de la nouvelle
+baseline est indépendant des fins de ligne LF/CRLF et ne doit plus changer après son enregistrement.
+La prochaine évolution persistante utilisera `015_<description>`, sans réutiliser les anciens identifiants.
 
-`010_mobile_refresh_sessions` ajoute les familles, la filiation des refresh, leur invalidation et les liens push,
-avec migration conservatrice des tokens existants. Déployer code et migration ensemble : les anciennes instances
-ne savent pas renseigner la famille. Les anciens JWT sans `sid`/`kid` nécessitent un refresh ; les anciens refresh
-actifs gardent leur expiration initiale.
-
-`011_durable_notifications` ajoute la clé de déduplication des notifications et leurs références de livraison
-par appareil vers l’outbox. Aucune notification historique n’est réémise. Les nouvelles API et les workers
-doivent être déployés ensemble ; les anciennes instances ne connaissent pas `notification.push`.
-
-`012_notification_eligibility` complète R01 : nettoyage final des notifications lors de la désactivation du
-compte et contexte Stripe interne pour filtrer les alertes obsolètes à la programmation comme à l’envoi.
-Les anciennes notifications sans ce contexte ne sont pas poussées ; aucune durée de conservation ne change.
-
-`013_resumable_account_erasure` ajoute les checkpoints RGPD, les intentions de création Customer et les
-guards SQL contre les écritures tardives. Le compte est désactivé dans la transaction d’acceptation, puis
-l’outbox reprend Stripe → photos → Scylla → PostgreSQL sans appel réseau sous transaction SQL. La route de
-suppression répond désormais **202** ; seul le dernier checkpoint termine la DSR. Le dashboard suit les étapes
-et permet une relance auditée. Un pool dédié ajoute au plus quatre connexions PostgreSQL par processus.
-Arrêter les anciens écrivains puis déployer migration, API et workers compatibles ensemble. Une création
-Stripe incertaine trop ancienne requiert une réconciliation contrôlée, pas un rejeu aveugle. Voir
-[docs/account-erasure.md](docs/account-erasure.md) pour les invariants et limites.
-
-La compatibilité est sans perte :
-
-- une base neuve applique la baseline puis toutes les migrations incrémentales ;
-- une base possédant les quinze anciennes versions est vérifiée structurellement puis reçoit la marque de baseline,
-  sans rejouer le schéma et sans supprimer son historique ;
-- une historique ancienne partielle est refusée avec une erreur explicite ;
-- une baseline déjà enregistrée dont le checksum change est refusée.
-
-`014_sweego_delivery_tracking` migre l’ancien `sent` (acceptation HTTP) vers `accepted`, distingue callbacks et
-issues incertaines, puis ordonne les tentatives existantes et nouvelles. Les métadonnées suivent la purge OTP,
-sans journal des payloads ni allongement de rétention. Arrêter les anciens écrivains OTP avant déploiement.
-
-Après déploiement de la baseline, toute évolution persistante doit reprendre sous forme de migration incrémentale.
-`pnpm run db:reset` reste séparé et refuse toute cible autre que `ENV=development`, PostgreSQL local et la base
-`histae-dev`.
-
-Scylla garde son registre `scylla_schema_migrations` et son unique fichier `scylla/001_discovery.cql`. Le reset
-Scylla ne touche que les tables de swipes du keyspace local autorisé et conserve le schéma/historique.
+`pnpm run db:reset` reste distinct, destructif et limité à `ENV=development`, PostgreSQL local et `histae-dev`.
+Il reconstruit les objets applicatifs et les utilisateurs factices, sans supprimer les extensions partagées.
+Le reset local a été choisi pour terminer cette consolidation. Scylla conserve son schéma, son historique et ses procédures.
 
 ## 7. Exploitation
 
@@ -375,7 +322,6 @@ Les commandes, prérequis et limites de validation se trouvent dans `test.md` ; 
 
 - `routes.md` : contrat HTTP exhaustif ;
 - `.env.example` : variables et valeurs locales documentées ;
-- `docs/security-checkup.md` : portée, corrections et risques résiduels de sécurité ;
 - `docs/retention-policy.md` : durées et opérations de purge ;
 - `docs/legal-release-checklist.md` : décisions juridiques à obtenir avant mise en production ;
 - `AGENTS.md` : invariants de travail pour les futures modifications.
@@ -391,7 +337,7 @@ Ordre conseillé côté API :
    configurer et éprouver la destination réelle avant production.
 2. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
 
-R01 à R04 sont terminés ; les migrations jusqu’à 014 sont appliquées localement sans reset. Les notifications
+R01 à R04 sont terminés ; leurs évolutions PostgreSQL sont réunies dans la baseline du 4 septembre. Les notifications
 historiques ne sont pas rejouées. Le pilote Scylla 4.9.0 conserve son correctif pnpm de fermeture des pools après
 coupure. R04 n’ajoute ni dépendance ni écran dashboard. Les bilans de validation sont dans la
 [roadmap](docs/roadmap.md), les règles d’isolation dans [les tests de résilience](docs/resilience-tests.md).

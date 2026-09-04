@@ -94,19 +94,19 @@ verrouillent d’abord la clé primaire du compte, puis relisent les consentemen
 anciens tests d’existence du compte devenus redondants sont retirés. Aucune migration ni nouvel index.
 Les tests réels valident ces courses ; leur passage n’est pas une mesure de débit ou de latence sous charge.
 
-Complément R01 : la migration `011_durable_notifications` ajoute l’unicité de la clé de notification, l’unicité
+Complément R01 : la baseline garantit l’unicité de la clé de notification, l’unicité
 notification/appareil et l’index de cascade par appareil. La programmation utilise une instruction avec CTE et
 insertion ensembliste des tâches, sans boucle d’appels SQL par appareil. La livraison part de la clé primaire de
 la tâche et relit les références et autorisations courantes. Les compteurs push sont agrégés dans la requête
 outbox existante. Ces chemins sont exécutés par les tests PostgreSQL réels ; les mesures de plans historiques
 ci-dessus ne constituent pas un benchmark des nouvelles requêtes. Leur charge reste à mesurer avec R06/R12.
 
-La migration 012 ajoute le contexte Stripe interne, sans nouvel index : les contrôles d’éligibilité communs à
+La baseline conserve le contexte Stripe interne, sans index supplémentaire : les contrôles d’éligibilité communs à
 la programmation et à l’envoi accèdent aux clés primaires existantes de `billing_invoice` et `user_subscription`.
 Le nettoyage final à la désactivation utilise l’index de notifications par utilisateur. Les tests réels valident
 les comportements et verrous ; ils ne constituent pas une mesure de performance sous charge.
 
-Complément R02 : la migration 013 indexe les intentions Customer restant à effacer par `(user_id, id)` avec
+Complément R02 : la baseline indexe les intentions Customer restant à effacer par `(user_id, id)` avec
 un prédicat partiel. Les checkpoints accèdent à la clé primaire de la demande et à l’unicité outbox
 `(event_type, aggregate_id)`. Les photos/Customers sont bornés à 50 par passage. Les listes de matchs vérifient
 l’activité du partenaire avant le `LIMIT`, pour ne pas créer de pages incomplètes à cause du filtrage ultérieur.
@@ -121,6 +121,6 @@ historique de 500 demandes, sans nouveau curseur (R06).
   tests ne représentent pas la production.
 - Comparer des paramètres réalistes avec `EXPLAIN (ANALYZE, BUFFERS)` sur une copie non sensible. Ne jamais analyser
   une écriture de production sans transaction annulée et procédure explicite.
-- La migration `009_sql_performance_indexes` crée les index dans une transaction. Comme Histae est encore en
-  développement, c’est acceptable ; sur une base devenue volumineuse, prévoir une fenêtre de migration ou une
-  stratégie `CREATE INDEX CONCURRENTLY` séparée.
+- Les index de l’ancienne migration `009_sql_performance_indexes` figurent maintenant dans la
+  [baseline](postgres-migrations.md). Ils ne sont pas recréés sur une base déjà migrée. Pour tout nouvel index
+  sur une base volumineuse, prévoir une fenêtre de migration ou une stratégie `CREATE INDEX CONCURRENTLY` séparée.

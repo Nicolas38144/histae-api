@@ -25,11 +25,7 @@ async function reset(): Promise<void> {
     await pool.query('SELECT 1');
     console.warn(`Resetting PostgreSQL database ${JSON.stringify(config.postgres.database)} on ${JSON.stringify(config.postgres.host)}.`);
 
-    const [dropSql, schemaSql, insertSql] = await Promise.all([
-      readSql('drop_postgres.sql'),
-      readSql('schema_postgres.sql'),
-      readSql('insert_postgres.sql'),
-    ]);
+    const dropSql = await readSql('drop_postgres.sql');
     const migrationFiles = await Promise.all(migrations.map(loadMigration));
     const client = await pool.connect();
     try {
@@ -38,11 +34,7 @@ async function reset(): Promise<void> {
       await client.query("SELECT set_config('histae.seed_fake_users', $1, true)", [seedFakeUsers ? 'on' : 'off']);
       await client.query(dropSql);
       await client.query('DROP TABLE IF EXISTS schema_migrations CASCADE');
-      await client.query(schemaSql);
-      await client.query(insertSql);
-      for (let index = 1; index < migrationFiles.length; index += 1) {
-        await client.query(migrationFiles[index].sql);
-      }
+      for (const migration of migrationFiles) await client.query(migration.sql);
       await client.query('CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
       for (let index = 0; index < migrations.length; index += 1) {
         await client.query('INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)', [

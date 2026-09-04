@@ -50,10 +50,10 @@ leur progression et les reprises, sans piloter directement les étapes internes.
   et la marque d'idempotence restent atomiques. Depuis R01, les notifications et intentions par appareil font
   aussi partie de cette transaction ; seul le réseau est différé au worker. Un doublon ne recrée pas de tâche.
   `notification-billing.ts` partage le prédicat de pertinence Stripe entre programmation et envoi ; le contexte
-  reste interne. Voir [notifications durables](durable-notifications.md) pour les migrations 011/012 et les limites d’acquittement.
+  reste interne. Voir [notifications durables](durable-notifications.md) pour le schéma et les limites d’acquittement.
 - L’effacement ne fournit plus de callback réseau à `PrivacyRepository`. Le worker prend un verrou de session,
   effectue un lot externe, puis enregistre sa progression avec contrôle du propriétaire outbox. Les écrivains
-  locaux sont coordonnés par les triggers de la migration 013 ; les webhooks ignorent un compte désactivé en
+  locaux sont coordonnés par les triggers de la baseline ; les webhooks ignorent un compte désactivé en
   conservant la sérialisation de la relation Customer. Voir [effacement reprenable](account-erasure.md).
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.

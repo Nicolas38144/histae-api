@@ -44,6 +44,24 @@ INSERT INTO trait (name) VALUES
   ('Gourmand')
 ON CONFLICT (name) DO NOTHING;
 
+-- Initial catalogue moved from the former migration 005.
+INSERT INTO profile_question(id, code, prompt, category, display_order) VALUES
+  ('51000000-0000-4000-8000-000000000001', 'ideal_sunday', 'À quoi ressemble ton dimanche idéal ?', 'daily_life', 10),
+  ('51000000-0000-4000-8000-000000000002', 'talk_for_hours', 'De quoi pourrais-tu parler pendant des heures ?', 'conversation', 20),
+  ('51000000-0000-4000-8000-000000000003', 'small_joy', 'Quel petit plaisir améliore toujours ta journée ?', 'daily_life', 30),
+  ('51000000-0000-4000-8000-000000000004', 'make_me_laugh', 'Qu’est-ce qui te fait rire à tous les coups ?', 'personality', 40),
+  ('51000000-0000-4000-8000-000000000005', 'ideal_date', 'Quel serait ton rendez-vous idéal ?', 'relationships', 50),
+  ('51000000-0000-4000-8000-000000000006', 'want_to_learn', 'Qu’aimerais-tu apprendre prochainement ?', 'interests', 60),
+  ('51000000-0000-4000-8000-000000000007', 'valued_quality', 'Quelle qualité apprécies-tu le plus chez les autres ?', 'relationships', 70),
+  ('51000000-0000-4000-8000-000000000008', 'useless_talent', 'Quel est ton talent le plus inutile ?', 'personality', 80),
+  ('51000000-0000-4000-8000-000000000009', 'recent_surprise', 'Quelle est la dernière chose qui t’a agréablement surpris·e ?', 'conversation', 90),
+  ('51000000-0000-4000-8000-000000000010', 'well_get_along_if', 'On s’entendra bien si…', 'relationships', 100),
+  ('51000000-0000-4000-8000-000000000011', 'perfect_evening', 'Pour toi, une soirée réussie, c’est quoi ?', 'daily_life', 110),
+  ('51000000-0000-4000-8000-000000000012', 'spontaneous_adventure', 'Quelle aventure spontanée serais-tu prêt·e à tenter ?', 'interests', 120),
+  ('51000000-0000-4000-8000-000000000013', 'favorite_tradition', 'Quelle tradition aimerais-tu toujours conserver ?', 'daily_life', 130),
+  ('51000000-0000-4000-8000-000000000014', 'current_curiosity', 'Qu’est-ce qui éveille ta curiosité en ce moment ?', 'interests', 140),
+  ('51000000-0000-4000-8000-000000000015', 'comfort_food', 'Quel plat te réconforte instantanément ?', 'daily_life', 150) ON CONFLICT DO NOTHING;
+
 
 -- =========================================
 -- 400 COMPLETE FAKE USERS (DEVELOPMENT ONLY)
@@ -145,7 +163,7 @@ WITH seed_values AS (
   FROM generate_series(1, 400) AS generated(seed_number)
   WHERE current_setting('histae.seed_fake_users', true) = 'on'
 )
-INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio, photo)
+INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
 SELECT
   fake_users.user_id,
   CASE
@@ -166,8 +184,7 @@ SELECT
     ELSE 'male'
   END,
   seed_values.bios[1 + ((seed_number - 1) % array_length(seed_values.bios, 1))]
-    || ' J''aime ' || seed_values.interests[1 + ((seed_number * 3 - 1) % array_length(seed_values.interests, 1))] || '.',
-  NULL
+    || ' J''aime ' || seed_values.interests[1 + ((seed_number * 3 - 1) % array_length(seed_values.interests, 1))] || '.'
 FROM fake_users
 CROSS JOIN seed_values
 ON CONFLICT (user_id) DO UPDATE SET
@@ -342,6 +359,19 @@ JOIN ranked_traits ON ranked_traits.position IN (
   1 + mod(fake_users.seed_number + 9, ranked_traits.trait_count)
 )
 ON CONFLICT (user_id, trait_id) DO NOTHING;
+
+-- Keep development bios private until reviewed, as the former moderation migration did.
+WITH fake_users AS (
+  SELECT uuid_generate_v5('47b99d44-aed4-4b6f-9a2f-66f8655170e1'::uuid,
+    'histae-development-fake-user-' || seed_number) AS user_id
+  FROM generate_series(1, 400) AS generated(seed_number)
+  WHERE current_setting('histae.seed_fake_users', true) = 'on'
+)
+INSERT INTO content_moderation_case (user_id, content_type, bio_user_id, status, reason_codes, policy_version)
+SELECT user_id, 'bio', user_id, 'pending', ARRAY['legacy_unreviewed'], 'legacy_import_v1'
+FROM user_profile JOIN fake_users USING (user_id)
+WHERE bio IS NOT NULL AND btrim(bio) <> ''
+ON CONFLICT DO NOTHING;
 
 DO $$
 DECLARE

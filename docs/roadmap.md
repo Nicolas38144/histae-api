@@ -36,6 +36,33 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 | R12 | Charge et vérifications de sécurité complémentaires | P1 avant production | API, exploitation |
 | R13 | Décisions produit et juridiques | P1 avant production | Produit, DPO/juriste |
 
+### Consolidation PostgreSQL du 4 septembre
+
+Le schéma final jusqu’à 014 est réuni dans `db/schema_postgres.sql`, avec une unique baseline
+`001_baseline_20260904`. Les treize fichiers incrémentaux et la compatibilité historique sont retirés.
+Le moteur initialise un schéma vide et refuse les versions inconnues ou checksums divergents.
+La prochaine migration sera 015. Voir [la procédure](postgres-migrations.md).
+
+La réécriture de lisibilité intègre les 133 anciens `ALTER TABLE` aux 44 `CREATE TABLE`, organisés par domaine
+et dépendances. Les 98 index restent proches de leur table ; fonctions et triggers terminent le fichier.
+La comparaison avant/après retrouve les mêmes 1 108 définitions, 17 commentaires SQL, valeurs de séquences
+et seeds (400 profils, 15 questions, 400 bios en attente), dans deux schémas transactionnels ensuite annulés.
+Le contrôle unitaire du catalogue protège cette organisation. Aucun objet du schéma public n’a été modifié.
+Le rapport de sécurité redondant est retiré ; sa portée et ses limites restent en R12.
+
+Le seed n’emploie plus la colonne photo retirée ; le reset connaît toutes les tables récentes et conserve les
+extensions partagées. Il a d’abord été vérifié dans un schéma temporaire avant l’exécution locale autorisée.
+
+**Validation exécutée :** lint, typecheck, build, 537 tests autonomes et 185 intégrations réussis, soit
+722 tests dans 87 suites, avec sortie naturelle. Les 8 tests ciblés du catalogue et de la baseline sont inclus
+dans ce total. Les anciens tests de transformation et d’adoption sont retirés ; les suites métier OTP/refresh
+restent conservées.
+Aucun contrat HTTP ni changement dashboard.
+
+**Base locale :** le développeur a autorisé sa reconstruction sans sauvegarde. Le reset a supprimé l’ancien
+schéma public et ses données de développement, puis installé exclusivement la baseline et ses 400 fixtures.
+Un second `db:migrate` n’a appliqué aucun changement, confirmant le checksum courant.
+
 ## 2. Fiabilité métier
 
 ### R01 — Rendre les notifications durables — terminé après revue
@@ -206,7 +233,16 @@ audit des dépendances ni pentest n’est revendiqué.
 - [ ] Réexécuter régulièrement audit de dépendances, recherche de secrets et analyse statique ; suivre les correctifs réellement applicables.
 - [ ] Automatiser ces contrôles lorsque la chaîne CI/CD sera décidée explicitement, sans créer de workflow par défaut.
 
-**Terminé lorsque :** les résultats, limites et correctifs sont documentés. Le [check-up interne](security-checkup.md) et les tests verts ne remplacent pas un pentest ; l’audit des dépendances n’a pas été renouvelé simplement parce que le refactoring est passé.
+**Portée des contrôles déjà réalisés :** les revues internes ont porté sur le code, la configuration, les
+schémas, les contrats HTTP et les photos, avec des tests automatisés. Les contrôles en place sont décrits dans
+`AGENTS.md` et `resume.md` ; les correctifs et validations R01–R04 restent dans leurs bilans ci-dessus.
+Les audits `pnpm audit --audit-level low` et `pnpm audit --prod --audit-level low` du 1er septembre 2026
+n’avaient signalé aucune vulnérabilité connue à cette date. Ils n’ont pas été renouvelés par les refactorings,
+le patch Scylla ou la consolidation SQL. Aucun pentest indépendant, audit de l’infrastructure de production
+ou avis juridique n’est attesté par ces résultats. L’ancien rapport détaillé redondant reste récupérable dans Git.
+
+**Terminé lorsque :** les résultats, limites et correctifs sont documentés. Une revue interne et des tests verts
+ne remplacent pas un pentest ni une vérification actuelle des dépendances.
 
 ### R13 — Obtenir les décisions produit et juridiques
 

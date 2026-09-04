@@ -66,14 +66,12 @@ Les métadonnées de famille et le motif normalisé de révocation sont inclus d
 de tokens. Elles disparaissent à l'anonymisation ou à la suppression du compte. Les règles restent soumises à la
 validation de la politique de conservation avant production.
 
-## Migration 010 et déploiement
+## Déploiement
 
-La migration conserve chaque ancien refresh dans une famille distincte, avec la même expiration ; les anciennes
-filiations ne sont pas reconstructibles. Les tokens déjà révoqués le restent. Un ancien token actif peut être
-renouvelé une fois pour recevoir un JWT au nouveau format.
+Les familles et filiations sont définies dans la [baseline consolidée](postgres-migrations.md).
 
 Déployer de manière coordonnée : arrêter les anciennes instances HTTP/workers, appliquer `pnpm run db:migrate`,
-puis démarrer le nouveau code. L'ancien code ne sait pas remplir `family_id` ; ne pas le laisser écrire après la
+puis démarrer le nouveau code. Un ancien code sans `family_id` ne doit jamais écrire après la
 migration. Les anciens JWT sans `sid`/`kid` sont refusés et nécessitent un refresh. Les tokens de `seed:swipes`
 utilisent eux aussi une famille temporaire et le contrat JWT courant.
 

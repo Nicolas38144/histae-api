@@ -23,9 +23,10 @@ La [signature officielle](https://learn.sweego.io/docs/webhooks/webhook_signatur
 
 ## Configuration locale et déploiement
 
-1. Arrêter les anciens écrivains OTP, appliquer `014_sweego_delivery_tracking`, puis relancer API/workers
-   compatibles. L’ancien état `sent` signifiait acceptation HTTP : la migration le convertit en `accepted`.
-   Ne pas redémarrer l’ancien code sur cette migration. Aucun reset de développement n’est nécessaire.
+1. Arrêter les anciens écrivains OTP, exécuter `pnpm run db:migrate`, puis relancer API/workers compatibles.
+   Le schéma final est intégré à `001_baseline_20260904`. Une base antérieure à 014 doit d’abord appliquer cette
+   ancienne migration avec la version précédente : elle convertissait `sent` (acceptation HTTP) en `accepted`.
+   Voir [la transition sans reset](postgres-migrations.md). Ne pas redémarrer les anciens écrivains pré-014.
 2. Conserver les paramètres d’envoi existants. Renseigner `SWEEGO_WEBHOOK_SECRET` avec le secret de la destination
    Sweego ; ce n’est **pas** `SWEEGO_API_KEY`. Une valeur vide désactive les callbacks (503), sans désactiver l’envoi.
 3. Configurer dans Sweego une destination vers `POST /api/auth/sweego/webhook`, abonnée à `sms_sent` et

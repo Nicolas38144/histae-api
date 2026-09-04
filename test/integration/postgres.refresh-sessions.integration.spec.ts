@@ -10,7 +10,6 @@ import { JwtActiveGuard } from '../../src/auth/auth.guard';
 import { MobileRepository } from '../../src/mobile/mobile.repository';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { AdminRepository } from '../../src/admin/admin.repository';
-import { loadMigration, migrations } from '../../scripts/migration-catalog';
 
 dotenv.config();
 if (process.env.ENV !== 'development' || process.env.POSTGRES_DB !== 'histae-dev'
@@ -256,30 +255,4 @@ describe('PostgreSQL mobile refresh sessions', () => {
       VALUES ($1, $2, $3, $4, $5)`, [owner, own.session.sessionId, own.token.hash, randomUUID(), own.token.expiresAt])).rejects.toMatchObject({ code: '23505' });
   });
 
-  it('migrates legacy active and revoked tokens without extending expiry', async () => {
-    const client = await pool.connect();
-    const schema = `refresh_migration_${randomUUID().replaceAll('-', '')}`;
-    try {
-      await client.query('BEGIN');
-      await client.query(`CREATE SCHEMA ${schema}`);
-      await client.query(`SET LOCAL search_path TO ${schema}, public`);
-      const refreshMigrationIndex = migrations.findIndex((migration) => migration.version === '010_mobile_refresh_sessions');
-      expect(refreshMigrationIndex).toBeGreaterThan(0);
-      for (const migration of migrations.slice(0, refreshMigrationIndex)) await client.query((await loadMigration(migration)).sql);
-      const id = randomUUID();
-      await client.query(`INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
-        VALUES ($1, 'user', $2, $3)`, [id, `test-${id}`, Buffer.alloc(0)]);
-      const first = tokens.newRefreshToken();
-      const second = tokens.newRefreshToken();
-      for (const [token, revoked] of [[first, false], [second, true]] as const) {
-        await client.query(`INSERT INTO refresh_tokens (id, user_id, token_hash, jti, revoked, expires_at, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)`, [token.id, id, token.hash, token.jti, revoked, token.expiresAt, token.createdAt]);
-      }
-      await client.query((await loadMigration(migrations[refreshMigrationIndex]!)).sql);
-      const rows = (await client.query('SELECT * FROM refresh_token_family WHERE user_id = $1 ORDER BY id', [id])).rows;
-      expect(rows).toHaveLength(2);
-      expect(rows.find((row) => row.id === first.id)).toMatchObject({ expires_at: first.expiresAt, revoked_at: null });
-      expect(rows.find((row) => row.id === second.id)).toMatchObject({ expires_at: second.expiresAt, revocation_reason: 'legacy_revoked' });
-    } finally { await client.query('ROLLBACK'); client.release(); }
-  }, 30_000);
 });

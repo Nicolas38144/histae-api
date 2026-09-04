@@ -1,90 +1,42 @@
-import {
-  LEGACY_MIGRATION_VERSIONS,
-  legacyHistoryState,
-  loadMigration,
-  migrations,
-} from '../../../scripts/migration-catalog';
+import { readdir, readFile } from 'node:fs/promises';
+import { CONSOLIDATED_BASELINE_VERSION, loadMigration, migrations } from '../../../scripts/migration-catalog';
 
-describe('PostgreSQL migration catalog', () => {
-  it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(14);
-    const migration = await loadMigration(migrations[0]);
-    expect(migration.sql).toContain('-- source: schema_postgres.sql');
-    expect(migration.sql).toContain('CREATE TABLE user_account');
-    expect(migration.sql).toContain('-- source: insert_postgres.sql');
-    expect(migration.sql).toContain('INSERT INTO subscription_plan');
-    expect(migration.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const photos = await loadMigration(migrations[1]);
-    expect(photos.sql).toContain('-- source: 002_user_photo_lifecycle.sql');
-    expect(photos.sql).toContain('CREATE TABLE user_photo');
-    expect(photos.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const outbox = await loadMigration(migrations[2]);
-    expect(outbox.sql).toContain(
-      '-- source: 003_photo_idempotency_and_outbox.sql',
-    );
-    expect(outbox.sql).toContain('CREATE TABLE photo_upload_request');
-    expect(outbox.sql).toContain('CREATE TABLE outbox_event');
-    expect(outbox.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const reconciliation = await loadMigration(migrations[3]);
-    expect(reconciliation.sql).toContain(
-      '-- source: 004_admin_photo_reconciliation.sql',
-    );
-    expect(reconciliation.sql).toContain('admin_reconcile_photo');
-    expect(reconciliation.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const profileQuestions = await loadMigration(migrations[4]);
-    expect(profileQuestions.sql).toContain('-- source: 005_profile_questions.sql');
-    expect(profileQuestions.sql).toContain('CREATE TABLE profile_question');
-    expect(profileQuestions.sql).toContain('CREATE TABLE user_profile_answer');
-    expect(profileQuestions.sql).toContain('ON DELETE CASCADE');
-    expect(profileQuestions.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const moderation = await loadMigration(migrations[5]);
-    expect(moderation.sql).toContain('-- source: 006_content_moderation.sql');
-    expect(moderation.sql).toContain('CREATE TABLE content_moderation_case');
-    expect(moderation.sql).toContain('view_moderation_content');
-    expect(moderation.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const adminWebAuthn = await loadMigration(migrations[6]);
-    expect(adminWebAuthn.sql).toContain('-- source: 007_native_admin_webauthn.sql');
-    expect(adminWebAuthn.sql).toContain('CREATE TABLE admin_webauthn_credential');
-    expect(adminWebAuthn.sql).toContain('CREATE TABLE admin_session');
-    expect(adminWebAuthn.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const internalOperations = await loadMigration(migrations[7]);
-    expect(internalOperations.sql).toContain('-- source: 008_internal_operations.sql');
-    expect(internalOperations.sql).toContain('CREATE TABLE maintenance_job_status');
-    expect(internalOperations.sql).toContain('CREATE TABLE outbox_operator_action');
-    expect(internalOperations.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const sqlPerformance = await loadMigration(migrations[8]);
-    expect(sqlPerformance.sql).toContain('-- source: 009_sql_performance_indexes.sql');
-    expect(sqlPerformance.sql).toContain('idx_match_init_user1_activity');
-    expect(sqlPerformance.sql).toContain('idx_user_presence_updated');
-    expect(sqlPerformance.checksum).toMatch(/^[0-9a-f]{64}$/);
-    const mobileSessions = await loadMigration(migrations[9]);
-    expect(mobileSessions.sql).toContain('CREATE TABLE refresh_token_family');
-    expect(mobileSessions.sql).toContain('fk_refresh_parent');
-    expect(mobileSessions.checksum).toMatch(/^[0-9a-f]{64}$/);
-    const notifications = await loadMigration(migrations[10]);
-    expect(notifications.sql).toContain('CREATE TABLE notification_push_delivery');
-    expect(notifications.sql).toContain('REFERENCES outbox_event(id) ON DELETE CASCADE');
-    const eligibility = await loadMigration(migrations[11]);
-    expect(eligibility.sql).toContain('chk_notification_billing_context');
-    expect(eligibility.sql).toContain('CREATE TRIGGER trg_erase_notifications');
-    expect(eligibility.checksum).toMatch(/^[0-9a-f]{64}$/);
-    const erasure = await loadMigration(migrations[12]);
-    expect(erasure.sql).toContain('CREATE TABLE account_erasure');
-    expect(erasure.sql).toContain('customer_creation_started_at');
-    expect(erasure.checksum).toMatch(/^[0-9a-f]{64}$/);
+describe('PostgreSQL consolidated migration catalog', () => {
+  it('loads one complete baseline with portable checksums and reference data', async () => {
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0].version).toBe(CONSOLIDATED_BASELINE_VERSION);
+    const { sql, checksum } = await loadMigration(migrations[0]);
+    for (const table of ['user_account', 'user_photo', 'photo_upload_request', 'outbox_event',
+      'profile_question', 'user_profile_answer', 'content_moderation_case', 'admin_webauthn_credential',
+      'admin_session', 'maintenance_job_status', 'outbox_operator_action', 'refresh_token_family',
+      'notification_push_delivery', 'account_erasure']) expect(sql).toContain(`CREATE TABLE ${table} (`);
+    for (const invariant of ['fk_refresh_parent', 'chk_notification_billing_context', 'trg_erase_notifications',
+      'trg_live_photo', 'idx_match_init_user1_activity', 'idx_user_presence_updated', 'attempt_number',
+      'customer_creation_started_at', 'INSERT INTO profile_question', 'INSERT INTO subscription_plan']) {
+      expect(sql).toContain(invariant);
+    }
+    expect(sql).not.toContain('\r');
+    expect(checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect((await loadMigration(migrations[0])).checksum).toBe(checksum);
+    expect((await readdir('db')).filter(name => name.endsWith('.sql')).sort())
+      .toEqual(['drop_postgres.sql', 'insert_postgres.sql', 'schema_postgres.sql']);
   });
 
-  it('distinguishes fresh, complete and unsafe partial legacy histories', () => {
-    expect(legacyHistoryState([])).toBe('fresh');
-    expect(legacyHistoryState([...LEGACY_MIGRATION_VERSIONS])).toBe('complete');
-    expect(legacyHistoryState([LEGACY_MIGRATION_VERSIONS[0]])).toBe('partial');
+  it('defines constraints with their tables and creates foreign-key parents first', async () => {
+    const schema = await readFile('db/schema_postgres.sql', 'utf8');
+    expect(schema).not.toMatch(/^ALTER TABLE\b/m);
+    expect(schema).toContain('attempt_number bigint GENERATED ALWAYS AS IDENTITY NOT NULL');
+    expect(schema).toContain('event_sequence bigserial NOT NULL');
+    const tables = [...schema.matchAll(/^CREATE TABLE (\w+) \(\r?\n([\s\S]*?)^\);/gm)];
+    expect(tables.length).toBeGreaterThan(0);
+    const created = new Set<string>();
+    for (const [, name, definition] of tables) {
+      expect(definition).toMatch(/CONSTRAINT \w+ PRIMARY KEY\s*\(/);
+      created.add(name); // Self-references are valid in CREATE TABLE.
+      for (const [, parent] of definition.matchAll(/\bREFERENCES (\w+)\s*\(/g)) {
+        expect({ table: name, parent, exists: created.has(parent) })
+          .toEqual({ table: name, parent, exists: true });
+      }
+    }
   });
 });

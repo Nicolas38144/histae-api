@@ -142,8 +142,8 @@ et sa suppression objet est confiée à l’outbox.
 
 `DELETE /api/users/me` accepte le jeton dédié et répond **202** avec `request_id` et `status: in_progress`.
 Le compte est immédiatement désactivé ; l’outbox reprend Stripe, les photos, Scylla puis l’anonymisation
-PostgreSQL. Le dashboard suit les étapes et propose une reprise auditée en cas de dead letter. La migration
-`013_resumable_account_erasure` et le code API/worker doivent être déployés ensemble, après arrêt des anciens
+PostgreSQL. Le dashboard suit les étapes et propose une reprise auditée en cas de dead letter. Le schéma
+courant et le code API/worker doivent être déployés ensemble, après arrêt des anciens
 écrivains. Aucun nouveau service externe n’est nécessaire ; prévoir jusqu’à quatre connexions PostgreSQL
 supplémentaires par processus. Voir [le protocole, les limites et l’exploitation](docs/account-erasure.md).
 
@@ -156,14 +156,14 @@ par les routes administratives.
 Chaque connexion mobile possède une famille de refresh tokens : leur rejeu révoque tous les descendants et
 invalide les JWT associés. Les routes `/api/auth/sessions` et `/api/auth/logout-all` permettent de gérer les
 connexions et leurs appareils push. Le mobile doit sérialiser les refresh, sans retry aveugle après perte de réponse.
-La migration `010_mobile_refresh_sessions`, les contraintes de déploiement et la rotation HS256 via
+Les contraintes de déploiement des sessions mobiles et la rotation HS256 via
 `JWT_ACTIVE_KID` / `JWT_PREVIOUS_KEYS` sont décrites dans [`docs/mobile-sessions.md`](docs/mobile-sessions.md).
 
 La livraison réelle des SMS nécessite `SMS_PROVIDER=sweego` et les identifiants Sweego correspondants. Les
 numéros acceptés utilisent actuellement le format français E.164, par exemple `+33612345678`.
 Le suivi des envois/échecs exige aussi `SWEEGO_WEBHOOK_SECRET` et une destination Sweego vers
 `POST /api/auth/sweego/webhook`. Une réponse perdue reste incertaine, sans renvoi automatique ; un callback signé
-peut confirmer le code initial sans le réutiliser. Migration 014, configuration localhost et limites de réception :
+peut confirmer le code initial sans le réutiliser. Configuration localhost et limites de réception :
 [`docs/sweego-delivery.md`](docs/sweego-delivery.md).
 
 Le dashboard utilise exclusivement WebAuthn, sans SSO ni fournisseur d’identité externe. Les clés privées restent
@@ -181,8 +181,8 @@ maintenance et l’état de l’outbox sont conservés dans PostgreSQL pour sign
 `operations.sms_delivery` ajoute les états OTP non expirés, les délais observés et les issues des callbacks,
 sans données individuelles ni garantie de réception au téléphone.
 
-Les chemins SQL critiques (feed, matchs, recherche admin, exports et rétention) sont alignés avec des index dédiés
-par la migration `009_sql_performance_indexes`. La méthode, les choix d’index et les plans locaux mesurés sont
+Les chemins SQL critiques (feed, matchs, recherche admin, exports et rétention) disposent d’index dédiés
+dans `db/schema_postgres.sql`. La méthode, les choix d’index et les plans locaux mesurés sont
 documentés dans [`docs/sql-performance.md`](docs/sql-performance.md).
 
 Le découpage interne des matchs, de l'administration et de la facturation est décrit dans
@@ -196,7 +196,7 @@ les mêmes transactions et contrats HTTP, sans composant supplémentaire à dép
 | `pnpm run start:dev` | Lance l’API en développement avec rechargement automatique. |
 | `pnpm run build` | Compile l’application dans `dist/`. |
 | `pnpm run start:prod` | Exécute le build de production. |
-| `pnpm run db:migrate` | Applique la baseline PostgreSQL puis les migrations incrémentales, dont le cycle photo, son outbox, la réconciliation, les questions de profil, la modération, WebAuthn administrateur, le suivi opérationnel et les index de performance SQL. Une base ayant les 15 anciennes versions est reconnue sans rejouer le schéma. |
+| `pnpm run db:migrate` | Applique `001_baseline_20260904` sur un schéma vide, puis les futures migrations cataloguées. Vérifie strictement versions et checksums ; voir [le guide des migrations](docs/postgres-migrations.md). |
 | `pnpm run admin:webauthn:bootstrap -- <uuid>` | Crée pour un administrateur actif un jeton à usage unique permettant d’enregistrer sa première passkey. |
 | `pnpm run scylla:migrate` | Applique les migrations ScyllaDB. |
 | `pnpm run db:reset` | Reconstruit la base locale protégée `histae-dev`. |
@@ -255,4 +255,4 @@ Les erreurs de l’API conservent une structure stable :
 - [Contrat exhaustif de l’API](routes.md)
 - [Guide de validation : commandes, prérequis et limites](test.md)
 - [Tests de concurrence et de reprise après panne](docs/resilience-tests.md)
-- [Check-up de sécurité du 3 septembre 2026](docs/security-checkup.md)
+- [Portée des contrôles de sécurité et travaux restants](docs/roadmap.md#r12--étendre-les-vérifications-de-sécurité-et-de-charge)

@@ -280,7 +280,7 @@ describe('PostgreSQL schema contract', () => {
     }));
   });
 
-  it('contains the useful indexes and excludes the ten redundant or obsolete indexes', async () => {
+  it('contains the useful indexes and excludes redundant or obsolete indexes', async () => {
     const result = await pool.query<{ name: string | null }>(`
       SELECT to_regclass('public.' || name) AS name
       FROM unnest($1::text[]) AS name
@@ -294,7 +294,7 @@ describe('PostgreSQL schema contract', () => {
       'idx_user_report_created_desc', 'idx_user_report_status_created_desc',
       'idx_chat_message_sender_idempotency', 'idx_chat_message_match_unread',
       'idx_account_deletion_token_expires',
-      'idx_user_subscription_provider_id', 'idx_billing_checkout_one_live_per_user',
+      'user_subscription_provider_subscription_id_key', 'idx_billing_checkout_one_live_per_user',
       'idx_billing_checkout_expiry', 'idx_stripe_webhook_processed', 'idx_billing_invoice_user_created',
       'idx_billing_customer_active_stripe_id',
       'uq_user_photo_ready', 'uq_user_photo_in_progress', 'idx_user_photo_cleanup',
@@ -324,11 +324,13 @@ describe('PostgreSQL schema contract', () => {
       FROM unnest($1::text[]) AS name
     `, [[
       'idx_user_account_phone_hash', 'idx_refresh_tokens_jti', 'idx_message_match_created',
+      'idx_user_subscription_provider_id',
       'idx_user_report_status', 'idx_consent_user', 'idx_match_init_last_message',
       'idx_user_account_active', 'idx_user_account_to_anon', 'idx_refresh_tokens_active',
       'idx_otp_phone_usable',
     ]]);
-    expect(removed.rows.map((row) => row.name)).toEqual(Array(10).fill(null));
+    expect(removed.rows).toHaveLength(11);
+    expect(removed.rows.every(row => row.name === null)).toBe(true);
 
     const activeConsentIndex = await pool.query<{ is_unique: boolean }>(`
       SELECT index_definition.indisunique AS is_unique

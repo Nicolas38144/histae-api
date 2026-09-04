@@ -1,6 +1,6 @@
 # Notifications durables
 
-Mise à jour : 3 septembre 2026. Lot R01, migrations `011_durable_notifications` et `012_notification_eligibility`.
+Mise à jour : 4 septembre 2026. Lot R01, désormais intégré à la baseline PostgreSQL.
 
 La contre-vérification a révélé puis corrigé une notification résiduelle après effacement concurrent et un push
 de fin d’essai devenu obsolète. Les 34 scénarios PostgreSQL notifications couvrent désormais ces cas ; voir
@@ -36,7 +36,7 @@ du client et de la plateforme. L’acceptation FCM ne prouve pas la réception p
 
 Un conflit sur la clé ne recrée ni notification ni tâche. Les protections source restent indispensables : unicité
 des matchs, idempotence des messages et déduplication Stripe. Le compte destinataire est verrouillé en lecture
-partagée pendant la programmation, sans réseau. La migration 012 ajoute un nettoyage des notifications après
+partagée pendant la programmation, sans réseau. Le schéma ajoute un nettoyage des notifications après
 la désactivation du compte, alors que son verrou exclusif est détenu : les écritures intercalées après le premier
 nettoyage de `fct_anonymize_user` disparaissent dans la même transaction. Un écrivain attendant la désactivation
 relit le compte et ne crée rien. Cela ne change pas l’ordre des verrous du flux d’effacement existant et ne prétend
@@ -98,9 +98,9 @@ le seuil d’éligibilité à la purge, pas une garantie de délai effectif si l
 ## Déploiement et validation
 
 Arrêter les anciennes instances API/workers, appliquer `pnpm run db:migrate`, puis déployer le code API et worker
-compatible avec `notification.push` et les contrôles de la migration 012. Ne pas laisser un ancien worker
-consommer ce type ou ignorer ses nouveaux contrôles. Les migrations ne rejouent aucune notification historique
-et ne modifient aucune migration déjà déployée.
+compatible avec `notification.push` et les contrôles historiques de 012, intégrés à la
+[baseline consolidée](postgres-migrations.md). Ne pas laisser un ancien worker consommer ce type ou ignorer ses
+contrôles. Une migration ordinaire ne rejoue aucune notification historique.
 
 En développement, `MAINTENANCE_MODE=api` lance le worker intégré. Sinon, garder un processus
 `MAINTENANCE_MODE=worker pnpm run outbox:work` actif. La configuration FCM doit être présente dans ce worker.

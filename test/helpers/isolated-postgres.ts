@@ -27,12 +27,12 @@ export class IsolatedPostgres {
   private readonly admin = new Pool(localPostgresConfig());
   private created = false;
 
-  async start(throughVersion: typeof migrations[number]['version'] = migrations.at(-1)!.version) {
+  async start(options: { migrate?: boolean } = {}) {
     await this.admin.query(`CREATE SCHEMA ${this.schema}`);
     this.created = true;
+    if (options.migrate === false) return;
     for (const migration of migrations) {
       await this.database.transaction(async client => { await client.query((await loadMigration(migration)).sql); });
-      if (migration.version === throughVersion) break;
     }
   }
 
