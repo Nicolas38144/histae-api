@@ -69,7 +69,7 @@ describe('Users HTTP contract', () => {
       confirmation_token: DELETION_TOKEN,
       expires_at: new Date('2030-01-01T00:10:00.000Z'),
     }),
-    confirmAnonymize: jest.fn().mockResolvedValue(undefined),
+    confirmAnonymize: jest.fn().mockResolvedValue({ request_id: USER_ID, status: 'in_progress' }),
   };
   const traits = {
     list: jest.fn().mockResolvedValue([trait]),
@@ -222,8 +222,8 @@ describe('Users HTTP contract', () => {
     expect(limits.enforce).toHaveBeenCalledWith(
       'photo', USER_ID, config.rateLimit.photo, 'photo_rate_limit_exceeded',
     );
-    expect(deleted.statusCode).toBe(204);
     expect(users.deletePhoto).toHaveBeenCalledWith(USER_ID);
+    expect(deleted.statusCode).toBe(204);
   });
 
   it('rejects a photo upload larger than 500,000 bytes', async () => {
@@ -300,7 +300,8 @@ describe('Users HTTP contract', () => {
 
     expect(issued.statusCode).toBe(201);
     expect(issued.json()).toEqual({ confirmation_token: DELETION_TOKEN, expires_at: '2030-01-01T00:10:00.000Z' });
-    expect(deleted.statusCode).toBe(204);
+    expect(deleted.statusCode).toBe(202);
+    expect(deleted.json()).toEqual({ request_id: USER_ID, status: 'in_progress' });
     expect(users.issueDeletionToken).toHaveBeenCalledWith(USER_ID);
     expect(users.confirmAnonymize).toHaveBeenCalledWith(USER_ID, DELETION_TOKEN);
   });
@@ -313,6 +314,14 @@ describe('Users HTTP contract', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe('invalid_account_deletion_payload');
     expect(users.confirmAnonymize).not.toHaveBeenCalled();
+  });
+
+  it('translates a late-write database refusal without exposing driver details', async () => {
+    users.updatePresence.mockRejectedValueOnce(Object.assign(new Error('private query detail'), { code: 'P0E01' }));
+    const response = await app.inject({ method: 'PATCH', url: '/api/users/me/presence', payload: { latitude: 48, longitude: 2 } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: { code: 'account_unavailable', message: 'An account is no longer available.' } });
+    expect(response.body).not.toContain('private');
   });
 
   it('lists, adds, and removes traits for the authenticated account', async () => {

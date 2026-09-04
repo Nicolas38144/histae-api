@@ -93,6 +93,10 @@ export class StripeGateway {
     return this.measure(this.requireClient().customers.del(customerId, {}, { idempotencyKey }));
   }
 
+  retrieveCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
+    return this.measure(this.requireClient().customers.retrieve(customerId));
+  }
+
   private requireClient(): Stripe {
     if (!this.client) throw new Error('Stripe billing is disabled');
     return this.client;

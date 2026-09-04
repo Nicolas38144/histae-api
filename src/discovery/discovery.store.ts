@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { types } from 'cassandra-driver';
-import { ScyllaService } from '../scylla/scylla.service';
-import type { DiscoveryAction, DiscoveryDataReferences, SwipeDecision } from './discovery.models';
+import { ScyllaService, ScyllaUnavailableError } from '../scylla/scylla.service';
+import { AccountActivityService, type AssertActivity } from '../database/account-activity.service';
+import type { DiscoveryAction, SwipeDecision } from './discovery.models';
 import { SWIPE_DECISIONS } from './discovery.models';
 
 const BUCKET_COUNT = 32;
@@ -9,13 +10,18 @@ const MAX_PARALLEL_QUERIES = 20;
 
 @Injectable()
 export class DiscoveryStore {
-  constructor(private readonly scylla: ScyllaService) {}
+  constructor(private readonly scylla: ScyllaService, private readonly activity: AccountActivityService) {}
 
   get available(): boolean {
     return this.scylla.enabled;
   }
 
   async recordSwipe(actorId: string, targetId: string, decision: SwipeDecision): Promise<{ created: boolean; decision: SwipeDecision }> {
+    return this.activity.run([actorId, targetId], (assertHeld) => this.recordWhileActive(actorId, targetId, decision, assertHeld));
+  }
+
+  private async recordWhileActive(actorId: string, targetId: string, decision: SwipeDecision, assertHeld: AssertActivity) {
+    assertHeld();
     const now = new Date();
     const result = await this.scylla.execute(`
       INSERT INTO swipes_by_actor_bucket (actor_id, bucket, target_id, decision, swiped_at)
@@ -37,6 +43,7 @@ export class DiscoveryStore {
       storedAt = asDate(row.get('swiped_at'));
       remainingTtl = positiveTtl(row.get('remaining_ttl'));
     }
+    assertHeld();
     await this.writeTargetMirror(actorId, targetId, storedDecision, storedAt, remainingTtl);
     return { created: result.wasApplied(), decision: storedDecision };
   }
@@ -76,35 +83,37 @@ export class DiscoveryStore {
     return outgoingRows.flatMap((result) => result.rows.map(actorRow));
   }
 
-  private async userReferences(userId: string): Promise<DiscoveryDataReferences> {
-    if (!this.available) return { outgoing: [], incoming: [] };
-    const outgoing = await this.exportOwnActions(userId);
-    const incomingRows = await Promise.all(Array.from({ length: BUCKET_COUNT }, (_, bucket) => this.scylla.execute(`
-      SELECT target_id, actor_id, decision, swiped_at
-      FROM swipes_by_target_bucket WHERE target_id = ? AND bucket = ?
-    `, [userId, bucket], { isIdempotent: true })));
-    return {
-      outgoing,
-      incoming: incomingRows.flatMap((result) => result.rows.map(targetRow)),
-    };
+  async deleteUserData(userId: string): Promise<void> {
+    for (let partition = 0; partition < BUCKET_COUNT * 2;) {
+      if (await this.deleteUserDataBatch(userId, partition)) partition++;
+    }
   }
 
-  async deleteUserData(userId: string): Promise<void> {
-    if (!this.available) return;
-    const data = await this.userReferences(userId);
-    const pairDeletes = [
-      ...data.outgoing.map((action) => () => this.scylla.execute(`
-        DELETE FROM swipes_by_target_bucket WHERE target_id = ? AND bucket = ? AND actor_id = ?
-      `, [action.target_id, uuidBucket(userId), userId], { isIdempotent: true })),
-      ...data.incoming.map((action) => () => this.scylla.execute(`
-        DELETE FROM swipes_by_actor_bucket WHERE actor_id = ? AND bucket = ? AND target_id = ?
-      `, [action.actor_id, uuidBucket(userId), userId], { isIdempotent: true })),
-    ];
-    await runLimited(pairDeletes);
-    await Promise.all(Array.from({ length: BUCKET_COUNT }, async (_, bucket) => Promise.all([
-      this.scylla.execute('DELETE FROM swipes_by_actor_bucket WHERE actor_id = ? AND bucket = ?', [userId, bucket], { isIdempotent: true }),
-      this.scylla.execute('DELETE FROM swipes_by_target_bucket WHERE target_id = ? AND bucket = ?', [userId, bucket], { isIdempotent: true }),
-    ])));
+  /** The erasure worker holds the exclusive account activity lock. */
+  async deleteUserDataBatch(userId: string, partition: number): Promise<boolean> {
+    if (!this.available) throw new ScyllaUnavailableError('ScyllaDB is disabled');
+    if (!Number.isInteger(partition) || partition < 0 || partition >= BUCKET_COUNT * 2) throw new Error('invalid_erasure_partition');
+    const outgoing = partition < BUCKET_COUNT;
+    const table = outgoing ? 'swipes_by_actor_bucket' : 'swipes_by_target_bucket';
+    const ownerColumn = outgoing ? 'actor_id' : 'target_id';
+    const peerColumn = outgoing ? 'target_id' : 'actor_id';
+    const mirrorTable = outgoing ? 'swipes_by_target_bucket' : 'swipes_by_actor_bucket';
+    const bucket = partition % BUCKET_COUNT;
+    const batchSize = 100;
+    const data = await this.scylla.execute(`SELECT ${peerColumn} FROM ${table}
+      WHERE ${ownerColumn} = ? AND bucket = ? LIMIT ${batchSize}`,
+    [userId, bucket], { isIdempotent: true, fetchSize: batchSize });
+    await runLimited(data.rows.map((row) => async () => {
+      const peer = String(row.get(peerColumn));
+      // Keep the source reference until its counterpart is confirmed deleted.
+      await this.scylla.execute(`DELETE FROM ${mirrorTable}
+        WHERE ${peerColumn} = ? AND bucket = ? AND ${ownerColumn} = ?`,
+      [peer, uuidBucket(userId), userId], { isIdempotent: true });
+      await this.scylla.execute(`DELETE FROM ${table}
+        WHERE ${ownerColumn} = ? AND bucket = ? AND ${peerColumn} = ?`,
+      [userId, bucket, peer], { isIdempotent: true });
+    }));
+    return data.rows.length < batchSize;
   }
 
   private async writeTargetMirror(
@@ -160,17 +169,10 @@ function actorRow(row: types.Row): DiscoveryAction {
   };
 }
 
-function targetRow(row: types.Row): DiscoveryAction {
-  return {
-    actor_id: String(row.get('actor_id')),
-    target_id: String(row.get('target_id')),
-    decision: parseDecision(row.get('decision')),
-    swiped_at: asDate(row.get('swiped_at')),
-  };
-}
-
 async function runLimited(tasks: Array<() => Promise<unknown>>): Promise<void> {
   for (let index = 0; index < tasks.length; index += MAX_PARALLEL_QUERIES) {
-    await Promise.all(tasks.slice(index, index + MAX_PARALLEL_QUERIES).map((task) => task()));
+    const outcomes = await Promise.allSettled(tasks.slice(index, index + MAX_PARALLEL_QUERIES).map((task) => task()));
+    const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 }

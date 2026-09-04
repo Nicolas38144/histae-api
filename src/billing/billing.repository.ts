@@ -43,6 +43,9 @@ export class BillingMappingError extends Error {
   }
 }
 
+export class BillingAccountInactiveError extends Error {}
+export type CustomerCreation = { id: string; customer_creation_started_at: Date; created_customer_id: string | null; customer_erased_at: Date | null };
+
 @Injectable()
 export class BillingRepository {
   constructor(private readonly database: DatabaseService) {}
@@ -151,6 +154,30 @@ export class BillingRepository {
     `, [userId, stripeCustomerId])).rowCount === 1;
   }
 
+  async beginCustomerCreation(attemptId: string): Promise<CustomerCreation> {
+    const row = (await this.database.query<CustomerCreation>(`UPDATE billing_checkout_session
+      SET customer_creation_started_at = COALESCE(customer_creation_started_at, clock_timestamp())
+      WHERE id = $1 RETURNING id, customer_creation_started_at, created_customer_id, customer_erased_at`, [attemptId])).rows[0];
+    if (!row) throw new Error('checkout_attempt_missing');
+    return row;
+  }
+
+  async recordCreatedCustomer(attemptId: string, customerId: string): Promise<void> {
+    const result = await this.database.query(`UPDATE billing_checkout_session SET created_customer_id = $2
+      WHERE id = $1 AND (created_customer_id IS NULL OR created_customer_id = $2)`, [attemptId, customerId]);
+    if (result.rowCount !== 1) throw new Error('checkout_customer_conflict');
+  }
+
+  async customerCreationsForErasure(userId: string): Promise<CustomerCreation[]> {
+    return (await this.database.query<CustomerCreation>(`SELECT id, customer_creation_started_at, created_customer_id, customer_erased_at
+      FROM billing_checkout_session WHERE user_id = $1 AND customer_creation_started_at IS NOT NULL
+        AND customer_erased_at IS NULL ORDER BY id LIMIT 50`, [userId])).rows;
+  }
+
+  async markCreatedCustomerErased(attemptId: string): Promise<void> {
+    await this.database.query('UPDATE billing_checkout_session SET customer_erased_at = clock_timestamp() WHERE id = $1', [attemptId]);
+  }
+
   async markCheckoutOpen(attemptId: string, session: CheckoutSessionView): Promise<boolean> {
     return (await this.database.query(`
       UPDATE billing_checkout_session
@@ -194,10 +221,13 @@ export class BillingRepository {
     database: Queryable,
   ): Promise<string | undefined> {
     const mapped = (await database.query<{ user_id: string }>(`
-      SELECT user_id FROM billing_customer WHERE stripe_customer_id = $1 FOR UPDATE
+      SELECT user_id FROM billing_customer WHERE stripe_customer_id = $1
     `, [stripeCustomerId])).rows[0]?.user_id;
+    const owner = mapped ?? metadataUserId;
+    if (owner) await this.requireActiveBillingAccount(owner, database);
     if (mapped) {
       if (metadataUserId && metadataUserId !== mapped) throw new BillingMappingError('Stripe customer metadata conflicts with its Histae owner');
+      await this.lockCustomerMapping(stripeCustomerId, mapped, database);
       return mapped;
     }
     if (!metadataUserId) return undefined;
@@ -330,9 +360,11 @@ export class BillingRepository {
 
   async markCustomerDeleted(stripeCustomerId: string, eventCreatedAt: Date, database: Queryable): Promise<string | undefined> {
     const userId = (await database.query<{ user_id: string }>(`
-      SELECT user_id FROM billing_customer WHERE stripe_customer_id = $1 FOR UPDATE
+      SELECT user_id FROM billing_customer WHERE stripe_customer_id = $1
     `, [stripeCustomerId])).rows[0]?.user_id;
     if (!userId) return undefined;
+    await this.requireActiveBillingAccount(userId, database);
+    await this.lockCustomerMapping(stripeCustomerId, userId, database);
     await database.query(`
       UPDATE user_subscription
       SET status = 'canceled', cancel_at_period_end = false,
@@ -371,6 +403,20 @@ export class BillingRepository {
       trialDays: row.trial_days,
       trialUsed: row.trial_used_at !== null,
     } : undefined;
+  }
+
+  private async requireActiveBillingAccount(userId: string, database: Queryable): Promise<void> {
+    const account = (await database.query<{ deleted_at: Date | null }>(
+      'SELECT deleted_at FROM user_account WHERE user_id = $1 FOR SHARE', [userId],
+    )).rows[0];
+    if (account?.deleted_at) throw new BillingAccountInactiveError();
+    if (!account) throw new BillingMappingError('Stripe customer account does not exist');
+  }
+
+  private async lockCustomerMapping(customerId: string, userId: string, database: Queryable): Promise<void> {
+    const locked = await database.query(`SELECT user_id FROM billing_customer
+      WHERE stripe_customer_id = $1 AND user_id = $2 FOR UPDATE`, [customerId, userId]);
+    if (!locked.rows[0]) throw new BillingMappingError('Stripe customer mapping changed concurrently');
   }
 
   private async hasActiveSubscription(userId: string, now: Date, database: Queryable): Promise<boolean> {

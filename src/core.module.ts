@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { applicationConfig, ConfigService } from './config/config.service';
 import { DatabaseService } from './database/database.service';
+import { AccountActivityService } from './database/account-activity.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 import { HealthController } from './health.controller';
 import { ScyllaService } from './scylla/scylla.service';
@@ -25,6 +26,7 @@ import { OperationalStatusService } from './operations/operational-status.servic
   providers: [
     { provide: ConfigService, useFactory: applicationConfig },
     DatabaseService,
+    AccountActivityService,
     ScyllaService,
     RedisService,
     RateLimitService,
@@ -43,7 +45,7 @@ import { OperationalStatusService } from './operations/operational-status.servic
     OperationalStatusService,
   ],
   exports: [
-    ConfigService, DatabaseService, ScyllaService, RedisService, RateLimitService,
+    ConfigService, DatabaseService, AccountActivityService, ScyllaService, RedisService, RateLimitService,
     ObjectStorageService, PhotoProcessorService, PhotosRepository, PhotosService,
     PhotosMaintenanceService,
     OutboxRepository, OutboxWorkerService,

@@ -1,6 +1,6 @@
 # Politique de conservation technique
 
-Mise à jour : 3 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
+Mise à jour : 4 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
 
@@ -26,6 +26,7 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 | Matchs et messages | Mise en relation et conversation | Match actif pendant sa vie métier ; match expiré ou bloqué purgé sous 30 jours | Les messages émis sont masqués immédiatement à l’effacement ; suppression en cascade avec le match |
 | Signalements résolus | Sécurité, modération, défense des droits | 3 ans après résolution | Suppression par lots |
 | Demandes d’exercice des droits | Traitement et preuve de la demande | 5 ans après clôture ou rejet | Suppression par lots |
+| Progression d’effacement (`account_erasure`) | Reprise et preuve de terminaison | Même rétention que la DSR associée : suppression en cascade, 5 ans après clôture | Étape, progression et dates uniquement ; aucune réponse fournisseur. Une demande inachevée n’est pas purgée comme terminée. `account.erase` suit la rétention outbox et ne peut jamais être abandonné |
 | Journal des accès et actions RGPD/modération | Traçabilité et sécurité | 1 an glissant | Suppression par lots |
 | Empreinte d’un compte banni effacé | Empêcher le contournement immédiat d’une mesure de sécurité | 3 ans après effacement, seulement si le compte était banni | Empreinte HMAC isolée dans `account_tombstone`, puis suppression par lots |
 | Compte technique anonymisé | Intégrité référentielle pendant les délais ci-dessus | Sans téléphone, profil, préférences, position, tokens ni appareil ; les relations résiduelles sont purgées selon leur propre durée | UUID pseudonyme conservé tant qu’une relation légitime le référence |
@@ -34,6 +35,18 @@ La durée d’un an des swipes est une valeur produit et technique initiale : el
 d’un profil déjà évalué et laisse le temps de détecter un like réciproque. Elle doit être incluse dans la
 validation juridique/DPO. Le code échoue en mode fermé : si ScyllaDB n’est pas joignable, un export complet ou
 un effacement complet n’est pas déclaré réussi.
+
+Depuis R02, l’acceptation de l’effacement désactive immédiatement le compte, mais répond `202`, pas « terminé ».
+Les nouvelles mutations et projections publiques sont bloquées ; les suppressions Stripe, photos, Scylla puis
+PostgreSQL se poursuivent avec checkpoints et reprises. Les positions peuvent toujours être rendues inactives
+ou purgées par la maintenance. Les règles de conservation du tableau restent inchangées : « effacement du
+compte » désigne le workflow complet, pas un délai garanti de réponse HTTP. Les anciennes URL photo déjà
+signées restent limitées par leur expiration de 300 secondes ou la suppression de l’objet ; les copies déjà
+téléchargées ne sont pas révocables par l’API.
+
+Les intentions de création Customer Stripe sont conservées avec leurs tentatives Checkout jusqu’à
+l’anonymisation, afin qu’une réponse perdue ne fasse pas disparaître une référence à nettoyer. Une issue trop
+ancienne pour un rejeu idempotent sûr reste à réconcilier et bloque la clôture. Voir [le protocole R02](account-erasure.md).
 
 La vue Scylla orientée cible conserve les références entrantes afin de détecter la réciprocité et de supprimer
 toutes les références croisées lors d’un effacement. Elle reste strictement interne : l’export utilisateur ne

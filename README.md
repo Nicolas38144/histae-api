@@ -138,6 +138,15 @@ automatiquement. Le dashboard possède une file centrale : la liste ne contient
 du détail exige un motif audité et la décision exige un motif. Une photo refusée passe immédiatement à `deleting`
 et sa suppression objet est confiée à l’outbox.
 
+## Effacement de compte
+
+`DELETE /api/users/me` accepte le jeton dédié et répond **202** avec `request_id` et `status: in_progress`.
+Le compte est immédiatement désactivé ; l’outbox reprend Stripe, les photos, Scylla puis l’anonymisation
+PostgreSQL. Le dashboard suit les étapes et propose une reprise auditée en cas de dead letter. La migration
+`013_resumable_account_erasure` et le code API/worker doivent être déployés ensemble, après arrêt des anciens
+écrivains. Aucun nouveau service externe n’est nécessaire ; prévoir jusqu’à quatre connexions PostgreSQL
+supplémentaires par processus. Voir [le protocole, les limites et l’exploitation](docs/account-erasure.md).
+
 ## Authentification
 
 L’application mobile combine inscription et connexion : après validation du code OTP, l’API reconnecte le compte

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Queryable } from '../database/database.service';
 import { DatabaseService } from '../database/database.service';
+import { enqueueAccountErasure } from './erasure-enqueue';
 import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData, PrivacyMaintenanceResult } from './privacy.models';
 
 const ENDED_MATCH_RETENTION_DAYS = 30;
@@ -29,10 +30,17 @@ export class PrivacyRepository {
 
   async requestsForAdmin(status: DataRequestStatus | undefined): Promise<DataSubjectRequestRow[]> {
     return (await this.database.query<DataSubjectRequestRow>(`
-      SELECT id, user_id, type, status, requested_at, completed_at, handled_by, notes
-      FROM data_subject_request
-      WHERE ($1::text IS NULL OR status = $1)
-      ORDER BY requested_at, id
+      SELECT request.id, request.user_id, request.type, request.status, request.requested_at,
+        request.completed_at, request.handled_by, request.notes,
+        CASE WHEN erasure.request_id IS NOT NULL THEN jsonb_build_object(
+          'step', erasure.step, 'scylla_partition', erasure.scylla_partition, 'updated_at', erasure.updated_at,
+          'event_id', event.id, 'status', event.status, 'attempts', COALESCE(event.attempts, 0),
+          'last_error_code', event.last_error_code) END AS erasure
+      FROM data_subject_request request
+      LEFT JOIN account_erasure erasure ON erasure.request_id = request.id
+      LEFT JOIN outbox_event event ON event.aggregate_id = request.id AND event.event_type = 'account.erase'
+      WHERE ($1::text IS NULL OR request.status = $1)
+      ORDER BY request.requested_at, request.id
       LIMIT 500
     `, [status ?? null])).rows;
   }
@@ -43,33 +51,42 @@ export class PrivacyRepository {
     adminId: string,
     adminRole: string,
     notes: string | null,
-    beforeErasure: (userId: string) => Promise<void>,
-  ): Promise<'updated' | 'not_found' | 'invalid_transition'> {
+  ): Promise<'updated' | 'erasure_scheduled' | 'not_found' | 'invalid_transition'> {
     return this.database.transaction(async (client) => {
+      const owner = (await client.query<{ user_id: string }>(
+        'SELECT user_id FROM data_subject_request WHERE id = $1', [requestId],
+      )).rows[0];
+      if (!owner) return 'not_found';
+      // Same lock order as self-service acceptance and final anonymization.
+      await client.query('SELECT user_id FROM user_account WHERE user_id = $1 FOR UPDATE', [owner.user_id]);
       const locked = await client.query<DataSubjectRequestRow>(`
         SELECT id, user_id, type, status, requested_at, completed_at, handled_by, notes
         FROM data_subject_request WHERE id = $1 FOR UPDATE
       `, [requestId]);
       const request = locked.rows[0];
       if (!request) return 'not_found';
+      const workflow = (await client.query('SELECT request_id FROM account_erasure WHERE request_id = $1', [requestId])).rows[0];
+      if (workflow) return request.status === 'in_progress' && status === 'completed'
+        ? 'erasure_scheduled' : 'invalid_transition';
       const allowed = request.status === 'pending'
         ? status === 'in_progress' || status === 'rejected'
         : request.status === 'in_progress' && (status === 'completed' || status === 'rejected');
       if (!allowed) return 'invalid_transition';
+      const scheduling = request.type === 'erasure' && status === 'completed';
+      const storedStatus = scheduling ? 'in_progress' : status;
       await client.query(`
         UPDATE data_subject_request
         SET status = $2, handled_by = $3, notes = $4,
           completed_at = CASE WHEN $2 IN ('completed', 'rejected') THEN clock_timestamp() ELSE NULL END
         WHERE id = $1
-      `, [requestId, status, adminId, notes]);
+      `, [requestId, storedStatus, adminId, notes]);
       await client.query(`
         INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
         VALUES ($1, $2, $3, 'admin_review_dsr', $4)
-      `, [request.user_id, adminId, adminRole, `DSR ${request.type} moved to ${status}`]);
-      if (request.type === 'erasure' && status === 'completed') {
-        await beforeErasure(request.user_id);
-        await client.query('DELETE FROM account_deletion_token WHERE user_id = $1', [request.user_id]);
-        await client.query('SELECT fct_anonymize_user($1)', [request.user_id]);
+      `, [request.user_id, adminId, adminRole, scheduling ? 'DSR erasure scheduled' : `DSR ${request.type} moved to ${status}`]);
+      if (scheduling) {
+        await enqueueAccountErasure(client, request.user_id, requestId);
+        return 'erasure_scheduled';
       }
       return 'updated';
     });
@@ -173,6 +190,7 @@ export class PrivacyRepository {
       SELECT block.blocked_id AS user_id, profile.firstname, NULL::text AS photo, block.created_at AS blocked_at
       FROM user_block AS block
       LEFT JOIN user_profile AS profile ON profile.user_id = block.blocked_id
+        AND EXISTS (SELECT 1 FROM user_account WHERE user_id = block.blocked_id AND deleted_at IS NULL)
       WHERE block.blocker_id = $1
       ORDER BY block.created_at DESC
     `, [blockerId])).rows;

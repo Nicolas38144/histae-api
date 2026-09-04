@@ -26,6 +26,7 @@ const MATCH_PAGE_CTE = `
         COALESCE(match_record.last_message_at, match_record.created_at) AS activity_at
       FROM match_init AS match_record
       WHERE match_record.user1_id = $1 AND match_record.status <> 'ended'
+        AND EXISTS (SELECT 1 FROM user_account WHERE user_id = match_record.user2_id AND deleted_at IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM user_block
           WHERE (blocker_id = $1 AND blocked_id = match_record.user2_id)
@@ -45,6 +46,7 @@ const MATCH_PAGE_CTE = `
         COALESCE(match_record.last_message_at, match_record.created_at) AS activity_at
       FROM match_init AS match_record
       WHERE match_record.user2_id = $1 AND match_record.status <> 'ended'
+        AND EXISTS (SELECT 1 FROM user_account WHERE user_id = match_record.user1_id AND deleted_at IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM user_block
           WHERE (blocker_id = $1 AND blocked_id = match_record.user1_id)

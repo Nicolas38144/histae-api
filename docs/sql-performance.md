@@ -1,6 +1,6 @@
 # Performance SQL PostgreSQL
 
-Mise à jour : 3 septembre 2026.
+Mise à jour : 4 septembre 2026. Mesures historiques conservées ; les ajouts R02 sont décrits sans nouveau benchmark.
 
 ## Portée et méthode
 
@@ -75,8 +75,9 @@ Les lectures par clé primaire ou contrainte unique, les écritures `ON CONFLICT
 transitions Stripe et photo, ainsi que les agrégats sur les catalogues très petits étaient déjà sur un chemin borné.
 Elles n’ont pas été condensées au prix d’une perte d’atomicité ou d’un index supplémentaire à chaque écriture.
 
-Les exports RGPD restent séquentiels sur un même client PostgreSQL afin de partager exactement le snapshot de la
-transaction et de ne pas construire un énorme document JSON dans la mémoire du serveur. Les tableaux d’un seul
+Les exports RGPD restent séquentiels sur un même client PostgreSQL et ne construisent pas un énorme document
+JSON dans la mémoire du serveur. L’isolation actuelle ne garantit pas un snapshot commun à toutes les requêtes ;
+leur cohérence et leur assemblage en mémoire côté API restent à traiter dans R06. Les tableaux d’un seul
 utilisateur dont la cardinalité métier est faible — trois réponses de profil, quelques traits, quatre types de
 consentement, quelques appareils et passkeys — conservent leurs requêtes simples.
 
@@ -97,6 +98,14 @@ La migration 012 ajoute le contexte Stripe interne, sans nouvel index : les cont
 la programmation et à l’envoi accèdent aux clés primaires existantes de `billing_invoice` et `user_subscription`.
 Le nettoyage final à la désactivation utilise l’index de notifications par utilisateur. Les tests réels valident
 les comportements et verrous ; ils ne constituent pas une mesure de performance sous charge.
+
+Complément R02 : la migration 013 indexe les intentions Customer restant à effacer par `(user_id, id)` avec
+un prédicat partiel. Les checkpoints accèdent à la clé primaire de la demande et à l’unicité outbox
+`(event_type, aggregate_id)`. Les photos/Customers sont bornés à 50 par passage. Les listes de matchs vérifient
+l’activité du partenaire avant le `LIMIT`, pour ne pas créer de pages incomplètes à cause du filtrage ultérieur.
+Les guards d’écriture ajoutent un accès verrouillé à la clé primaire du compte ; ces nouveaux chemins sont
+testés sur PostgreSQL réel, mais leur coût sous charge n’a pas été mesuré. Le suivi admin conserve sa limite
+historique de 500 demandes, sans nouveau curseur (R06).
 
 - Exécuter `ANALYZE` après un import important ou laisser autovacuum mettre les statistiques à jour.
 - Observer en production les temps cumulés, lignes lues et blocs via `pg_stat_statements` si cette extension est

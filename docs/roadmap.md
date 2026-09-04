@@ -1,6 +1,6 @@
 # Histae — travaux restants, améliorations et défauts
 
-État consolidé au 3 septembre 2026. Ce document centralise les travaux ouverts identifiés dans le code et la documentation ; il ne constitue ni un audit exhaustif de sécurité ni une garantie d’absence d’autres défauts.
+État consolidé au 4 septembre 2026. Ce document centralise les travaux ouverts identifiés dans le code et la documentation ; il ne constitue ni un audit exhaustif de sécurité ni une garantie d’absence d’autres défauts.
 
 Le périmètre principal est l’API. Les extensions du dashboard proposées ci-dessous devront être confrontées à son état réel avant réalisation : elles ne sont pas toutes des absences vérifiées. Le client mobile n’est pas audité ici. Le développement sur une seule machine reste adapté ; les exigences de disponibilité concernent la future production.
 
@@ -16,14 +16,14 @@ Ne pas refaire ce qui existe déjà :
 - métriques HTTP/dépendances, suivi persistant des maintenances et récupération auditée des dead letters ;
 - optimisation SQL documentée et séparation récente des responsabilités matchs, administration et Stripe.
 
-Après la revue et les corrections de R01 du 3 septembre, **76 suites et 556 tests passent**, ainsi que lint, typecheck et build. Les deux défauts reproduits lors de la contre-vérification sont corrigés et couverts par des régressions ; R01 est terminé. Voir [test.md](../test.md) pour les résultats et leur portée.
+R01 et R02 sont livrés. La validation R02 comprend **79 suites et 599 tests**, dont 127 intégrations réelles PostgreSQL/Scylla/Redis. Voir [test.md](../test.md) pour les contrôles, leurs résultats et leur portée.
 
 Priorités : **P1** = prochain lot ou exigence importante avant production ; **P2** = consolidation, à avancer selon les volumes et l’exposition. Une limite constatée n’implique pas qu’un incident se soit déjà produit. Un manque de tests n’est pas une vulnérabilité démontrée.
 
 | Référence | Travail | Priorité | Périmètre principal |
 | --- | --- | --- | --- |
 | R01 | Livraison durable des notifications — terminé après revue | Livré le 03/09/2026 | API |
-| R02 | Effacement de compte reprenable par étapes | P1 | API, suivi admin éventuel |
+| R02 | Effacement de compte reprenable par étapes — terminé | Livré le 04/09/2026 | API et dashboard |
 | R03 | Concurrence, pannes et régressions métier | P1 | Tests API |
 | R04 | Suivi de livraison et issues incertaines Sweego | P1 | API, fournisseur existant |
 | R05 | Réconciliation Stripe et échecs persistants | P1 | API, dashboard éventuel |
@@ -57,18 +57,20 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 
 **Limite conservée :** FCM peut produire un doublon après une réponse perdue ; le mobile doit dédupliquer le `notification_id` et resynchroniser les ressources, SSE n’offrant pas de replay hors ligne. Aucun nouvel écran dashboard ni broker n’a été ajouté. Le débit de purge outbox reste à traiter dans R06.
 
-### R02 — Rendre l’effacement de compte durablement reprenable
+### R02 — Rendre l’effacement de compte durablement reprenable — terminé
 
-**Limite constatée.** Le flux de [privacy.service.ts](../src/privacy/privacy.service.ts) et [privacy.repository.ts](../src/privacy/privacy.repository.ts) peut effectuer les suppressions externes pendant une transaction PostgreSQL verrouillée. Une panne prolonge la transaction ; son rollback ne restaure pas les données déjà supprimées ailleurs.
+**Livré.** Le jeton de suppression et la programmation outbox sont atomiques. Le compte est désactivé dès l’acceptation ; `DELETE /api/users/me` répond maintenant **202** avec `request_id` et `status: in_progress`. Le worker reprend l’ordre Stripe → photos → Scylla → PostgreSQL sans appel réseau sous transaction SQL. Voir [le protocole et son exploitation](account-erasure.md).
 
-- [ ] Persister les étapes, leur progression et les reprises avec des erreurs normalisées.
-- [ ] Séparer les appels réseau des longues transactions tout en conservant l’ordre documenté Stripe/photos/Scylla/PostgreSQL et les invariants de blocage du compte.
-- [ ] Rendre chaque étape idempotente, y compris après une réponse réseau perdue.
-- [ ] Bloquer les nouvelles mutations pendant l’effacement et vérifier qu’aucune autre ressource métier ne se recrée après son nettoyage ; R01 sécurise les notifications, pas tout le protocole d’effacement.
-- [ ] Ne déclarer la demande terminée qu’après les étapes requises ; conserver les traces nécessaires à la reprise, sans contenu personnel inutile.
-- [ ] Prévoir une action de reprise administrative auditée si une intervention est nécessaire.
+- [x] Persister les étapes et la partition Scylla avec des erreurs normalisées ; lots de 50 Customers/photos et 100 références Scylla.
+- [x] Sérialiser les écritures externes par des verrous de session, sans transaction longue ; refuser les écritures locales tardives par des guards PostgreSQL.
+- [x] Reprendre les suppressions et checkpoints après réponse perdue, conserver les références techniques jusqu’à confirmation et refuser les checkpoints d’un worker ayant perdu sa revendication.
+- [x] Masquer le compte dans le feed, les matchs et la messagerie dès sa désactivation ; acquitter les webhooks Stripe tardifs sans recréer ses projections.
+- [x] Terminer atomiquement la DSR et le checkpoint après anonymisation PostgreSQL ; préserver les rétentions existantes.
+- [x] Afficher la progression dans le dashboard et relancer les dead letters avec motif, authentification récente et audit ; aucun abandon d’effacement autorisé.
 
-**Terminé lorsque :** un arrêt ou timeout à chaque étape permet une reprise après redémarrage, sans réexposer le compte ni laisser une demande faussement achevée. Les durées de rétention ne sont pas modifiées sans décision explicite.
+**Validation exécutée :** migration 013 appliquée sur `localhost/histae-dev`, second passage idempotent, sans reset. Les 26 scénarios PostgreSQL dédiés couvrent notamment les checkpoints perdus, l’upload S3 en cours, les écritures tardives, les verrous concurrents, les dead letters et leur reprise. Dix tests billing vérifient les issues Stripe incertaines ; le Scylla réel vérifie une partition de 120 références en deux lots. Les suites complètes restent vertes ; voir `test.md`.
+
+**Limites explicites :** une création Customer dont la réponse reste inconnue après 23 heures est bloquée avec `erasure_stripe_reconciliation_required`, sans déclarer l’effacement terminé. La résolution contrôlée et le diagnostic des anciennes créations sans intention persistée relèvent de R05. Les coupures complètes de processus/infrastructure et les validations sur la cible S3 de production restent R03/R10 ; ce protocole ne constitue pas une transaction distribuée.
 
 ### R03 — Compléter les tests de concurrence et de panne
 
@@ -80,7 +82,7 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 - [ ] Pagination des matchs et signalements : stabilité, frontières et absence de doublons.
 - [ ] Maintenance sur jeux de données réellement expirées, avec plusieurs workers.
 - [ ] Pannes transitoires et reprises Redis, Scylla et S3 dans un environnement local isolé et jetable.
-- [ ] Scénarios de panne des futures étapes R02, plus Sweego et Stripe détaillés ci-dessous. Conserver les 34 scénarios notifications validés dans R01, dont les régressions d’effacement concurrent et de facturation obsolète.
+- [ ] Compléter les 26 scénarios R02 par des arrêts réels de processus/connexions dans un environnement jetable, puis les cas Sweego et Stripe détaillés ci-dessous. Conserver les 34 scénarios notifications R01 et leurs régressions.
 
 **Terminé lorsque :** les scénarios sont reproductibles et testent les invariants en base, pas seulement les réponses mockées. Ne pas couper ou réinitialiser une infrastructure partagée sans autorisation.
 
@@ -101,6 +103,7 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 **Amélioration restante.** Le traitement idempotent des webhooks existe ; il ne remplace pas une vérification périodique de convergence avec `user_subscription`.
 
 - [ ] Ajouter une réconciliation planifiée, bornée et reprenable.
+- [ ] Résoudre de manière contrôlée les créations Customer incertaines dépassant la fenêtre de rejeu de R02 et diagnostiquer celles antérieures à la migration 013 ; ne jamais forcer un effacement à `completed`.
 - [ ] Empêcher qu’un événement ancien ou une réconciliation concurrente écrase un état plus récent.
 - [ ] Conserver un suivi exploitable des échecs persistants sans enregistrer les erreurs brutes sensibles du fournisseur.
 - [ ] Prévoir, si nécessaire dans le dashboard, une vue d’anomalies et des reprises protégées par authentification récente, motif et audit.
@@ -201,23 +204,23 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 
 ## 5. Frontières API, dashboard et mobile
 
-R01 est livré côté API après correction des deux défauts reproduits en revue. R02, R03, R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R04/R05 concernent des fournisseurs déjà utilisés. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
+R01 et R02 sont livrés, avec suivi des effacements dans le dashboard pour R02. R03, R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R04/R05 concernent des fournisseurs déjà utilisés. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
 
-Pour le dashboard, vérifier avant ajout les besoins de suivi des effacements, anomalies de livraison/facturation et recours de modération. Réutiliser les protections existantes : listes minimales, détail autorisé, motif/audit et authentification récente pour les opérations sensibles. Ne pas recréer les écrans de modération ou de réconciliation photo déjà livrés.
+Pour le dashboard, vérifier avant ajout les besoins de suivi des anomalies de livraison/facturation et des recours de modération. Réutiliser les protections existantes : listes minimales, détail autorisé, motif/audit et authentification récente pour les opérations sensibles. Ne pas recréer les écrans de modération, de réconciliation photo ou de suivi des effacements déjà livrés.
 
 Côté mobile, restent à **vérifier dans son propre dépôt**, sans les déclarer manquants ici :
 
 - rafraîchissement des tokens en single-flight, stockage atomique de la paire et retour à l’OTP après une réponse de rotation perdue ; voir [sessions mobiles](mobile-sessions.md) ;
+- prise en charge du nouveau `202` de suppression : fermer la session dès acceptation, sans afficher prématurément que tous les stockages sont nettoyés ;
 - intégration du catalogue et des trois réponses de profil, de leur ordre, de leur sauvegarde et de leur affichage ;
 - présentation des statuts de modération, erreurs et éventuels recours.
 
 ## 6. Ordre conseillé et entretien du document
 
-1. R02 : effacement reprenable, avec tests de reprise à chaque étape.
-2. R03 : compléter les autres scénarios métier et de concurrence prioritaires.
-3. R04/R05 : suivi Sweego et réconciliation Stripe.
-4. R06/R07 : débit de purge outbox, volumes, cohérence des exports et revue des logs restante.
-5. Avant production : terminer R08 à R13 ; commencer tôt les décisions et procédures qui nécessitent des intervenants externes.
+1. R03 : compléter les autres scénarios métier et de concurrence prioritaires.
+2. R04/R05 : suivi Sweego et réconciliation Stripe.
+3. R06/R07 : débit de purge outbox, volumes, cohérence des exports et revue des logs restante.
+4. Avant production : terminer R08 à R13 ; commencer tôt les décisions et procédures qui nécessitent des intervenants externes.
 
 Pas de besoin démontré à ce stade de microservices, de Kafka, d’un remplacement général des stockages ou d’une nouvelle réécriture. Les extractions de responsabilités déjà réalisées sont décrites dans [module-responsibilities.md](module-responsibilities.md) ; poursuivre seulement là où un changement concret le justifie.
 

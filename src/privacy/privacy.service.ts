@@ -5,7 +5,6 @@ import { ScyllaUnavailableError } from '../scylla/scylla.service';
 import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
-import { BillingService } from '../billing/billing.service';
 import { PhotosService } from '../photos/photos.service';
 
 @Injectable()
@@ -13,7 +12,6 @@ export class PrivacyService {
   constructor(
     private readonly privacy: PrivacyRepository,
     private readonly discovery: DiscoveryStore,
-    private readonly billing: BillingService,
     private readonly photos: PhotosService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
@@ -38,29 +36,11 @@ export class PrivacyService {
     adminId: string,
     adminRole: string,
     notes: string | null,
-  ): Promise<void> {
-    let result: Awaited<ReturnType<PrivacyRepository['updateRequest']>>;
-    try {
-      result = await this.privacy.updateRequest(
-        requestId,
-        status,
-        adminId,
-        adminRole,
-        notes,
-        async (userId) => {
-          await this.billing.deleteCustomerForAccount(userId);
-          await this.photos.deleteForAccount(userId);
-          await this.discovery.deleteUserData(userId);
-        },
-      );
-    } catch (error) {
-      if (error instanceof ScyllaUnavailableError) {
-        throw apiError(503, 'data_erasure_unavailable', 'Complete account erasure is temporarily unavailable.', error);
-      }
-      throw error;
-    }
+  ): Promise<'updated' | 'erasure_scheduled'> {
+    const result = await this.privacy.updateRequest(requestId, status, adminId, adminRole, notes);
     if (result === 'not_found') throw apiError(404, 'data_request_not_found', 'The data subject request was not found.');
     if (result === 'invalid_transition') throw apiError(409, 'invalid_data_request_transition', 'This data subject request transition is not allowed.');
+    return result;
   }
 
   async exportUserData(userId: string): Promise<PortableUserData> {

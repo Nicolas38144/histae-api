@@ -1,6 +1,6 @@
 # Tests de Histae API
 
-Mise à jour : 3 septembre 2026.
+Mise à jour : 4 septembre 2026.
 
 ## Organisation et règles
 
@@ -15,17 +15,18 @@ test/
 
 Jest ne découvre que les fichiers `test/**/*.spec.ts`, grâce à `testRegex` dans `package.json`. Le test `test/unit/common/test-layout.spec.ts` parcourt en plus le dépôt et échoue si un fichier `.spec.*` ou `.test.*` est créé hors de `test`. Les dossiers générés ou externes `.git`, `dist` et `node_modules` sont ignorés.
 
-Inventaire actuel : **76 fichiers de test, 76 suites Jest et 556 cas** avec toutes les intégrations :
+Inventaire actuel : **79 fichiers de test, 79 suites Jest et 599 cas** avec toutes les intégrations :
 
-- 373 tests unitaires ;
-- 83 tests e2e ;
+- 384 tests unitaires ;
+- 88 tests e2e ;
 - 35 tests d’intégration PostgreSQL et démarrage applicatif ;
 - 19 tests d’intégration PostgreSQL des sessions mobiles ;
 - 34 tests d’intégration PostgreSQL des notifications durables ;
-- 10 tests d’intégration hybride ScyllaDB/PostgreSQL ;
+- 26 tests d’intégration PostgreSQL de l’effacement reprenable ;
+- 11 tests d’intégration hybride ScyllaDB/PostgreSQL ;
 - 2 tests d’intégration Redis.
 
-Jest affiche 58 suites unitaires, 13 suites e2e et 5 suites d’intégration. `pnpm test` exécute les 71 suites autonomes et leurs 456 cas ; `pnpm run test:integration` exécute directement les 5 suites réelles et leurs 100 cas, sans flag d’activation.
+Jest affiche 59 suites unitaires, 14 suites e2e et 6 suites d’intégration. `pnpm test` exécute les 73 suites autonomes et leurs 472 cas ; `pnpm run test:integration` exécute directement les 6 suites réelles et leurs 127 cas, sans flag d’activation.
 
 Avant R01, le 3 septembre 2026, après extraction des responsabilités métier, TypeScript, ESLint, le build, les **70 suites
 et 438 cas autonomes** ainsi que les **4 suites et 66 cas d’intégration réels** PostgreSQL, ScyllaDB et Redis
@@ -50,6 +51,18 @@ Validation finale exécutée : lint, typecheck, build, **456 tests autonomes et 
 la relance complète des intégrations seules passe sans changement de timeout. Migration
 `012_notification_eligibility` appliquée localement sans reset, second passage sans changement.
 
+**Validation R02 du 4 septembre 2026 :** build API et dashboard, lint/typecheck, **472 tests autonomes et
+127 intégrations réussis**. Migration `013_resumable_account_erasure` appliquée sur `localhost/histae-dev`
+sans reset, second passage idempotent. Les 26 scénarios dédiés utilisent un schéma temporaire, de vrais verrous
+PostgreSQL et des fournisseurs simulés ; Scylla et Redis sont réellement locaux dans leurs suites respectives.
+La première exécution a reproduit une écriture de présence tardive avec `is_location_fresh=false` : le guard a
+été corrigé avant application de 013, puis les tests ciblés et complets passent. Les deux anciennes assertions
+d’effacement synchrone ont été remplacées par la couverture du workflow. Le nettoyage de la suite historique
+retire désormais ses propres événements `account.erase` avant les comptes temporaires ; ses 35 tests ont été
+rejoués après correction. Le dashboard est validé par `pnpm run check` ; le parcours visuel avec une vraie
+passkey n’a pas été rejoué. Vite signale un chunk principal de 504 ko non compressé. Aucun appel réel Stripe/S3
+n’a été réalisé pour R02 ; les tests de panne n’attestent pas une transaction distribuée.
+
 ```powershell
 # Tous les tests autonomes, sans infrastructure externe.
 pnpm test
@@ -60,14 +73,14 @@ pnpm run test:unit
 # Contrats HTTP Fastify avec providers simulés.
 pnpm run test:e2e
 
-# Les 100 intégrations PostgreSQL, ScyllaDB et Redis réelles.
+# Les 127 intégrations PostgreSQL, ScyllaDB et Redis réelles.
 pnpm run test:integration
 
 # Tests PostgreSQL et démarrage applicatif réels uniquement.
 # Redis Docker doit être démarré car le graphe Nest complet vérifie sa connexion.
 pnpm run test:integration:postgres
 
-# Les 10 scénarios Scylla réels, avec PostgreSQL de développement.
+# Les 11 scénarios Scylla réels, avec PostgreSQL de développement.
 pnpm run test:integration:scylla
 
 # Redis réel, exclusivement dans la base logique 15.
@@ -423,16 +436,19 @@ Suite `PostgreSQL reset safety` :
 
 ### `test/unit/scripts/migration-catalog.spec.ts` — 2 tests
 
-1. Vérifie que la baseline est composée du schéma et des catalogues canoniques, puis que toutes les migrations de `002_user_photo_lifecycle` à `012_notification_eligibility` sont cataloguées, avec un checksum SHA-256 pour chaque version.
+1. Vérifie que la baseline est composée du schéma et des catalogues canoniques, puis que toutes les migrations de `002_user_photo_lifecycle` à `013_resumable_account_erasure` sont cataloguées, avec un checksum SHA-256 pour chaque version.
 2. Distingue une base neuve, une historique complète des 15 anciennes versions et une historique partielle refusée.
 
-### `test/unit/discovery/discovery.store.spec.ts` — 3 tests
+### `test/unit/discovery/discovery.store.spec.ts` — 6 tests
 
 Suite `DiscoveryStore` avec un client Scylla simulé :
 
 1. Vérifie qu’un nouveau swipe utilise le TTL fixe du schéma, que les deux vues sont écrites et que chaque table utilise TWCS avec une fenêtre de 14 jours.
 2. Vérifie qu’une réparation du miroir conserve l’échéance initiale au lieu de redonner un an de rétention.
 3. Vérifie le bucketing déterministe des UUID dans 32 partitions et le refus d’une valeur invalide.
+4. Ne déclare pas une partition terminée lorsque son lot de 100 références est plein.
+5. Conserve la référence source si la suppression de la contrepartie échoue.
+6. Refuse de déclarer un nettoyage réussi lorsque Scylla est désactivé.
 
 ### `test/unit/matches/matches.repository.spec.ts` — 3 tests
 
@@ -483,8 +499,8 @@ Suite `PrivacyRepository maintenance` : vérifie les dix-sept opérations de ré
 Suite `PrivacyService cross-database privacy operations` :
 
 1. Vérifie que l’export portable combine PostgreSQL et uniquement les actions Scylla propres à l’utilisateur, sans exposer les décisions entrantes de tiers.
-2. Vérifie que le traitement d’une demande d’effacement reçoit et exécute l’étape de suppression Scylla.
-3. Vérifie l’ordre Stripe, stockage photo puis Scylla pour une demande d’effacement terminée par l’administration.
+2. Vérifie la programmation administrative durable, sans callback réseau dans la transaction.
+3. Refuse d’annuler un effacement déjà programmé.
 4. Garantit que la liste des comptes bloqués ne signe aucune photo privée.
 
 ### `test/unit/profile-questions/profile-questions.service.spec.ts` — 6 tests
@@ -510,7 +526,7 @@ Suite `UsersRepository legal-choice ordering` :
 1. Vérifie que les horodatages viennent de PostgreSQL, que le retrait utilise `clock_timestamp()` et que l’état courant est ordonné par `event_sequence`.
 2. Vérifie l’idempotence d’un retry mobile identique : aucun nouvel événement n’est ajouté si le choix et la version sont déjà actifs.
 
-### `test/unit/users/users.service.spec.ts` — 18 tests
+### `test/unit/users/users.service.spec.ts` — 16 tests
 
 Suite `UsersService consent enforcement` :
 
@@ -522,13 +538,23 @@ Suite `UsersService consent enforcement` :
 6. Ne déclare l’onboarding terminé qu’avec les versions courantes des deux documents obligatoires.
 7 à 12. Refuse six dates calendaires invalides : jour inexistant, mois 13, mois 0, jour 0, format sans zéro initial et date-heure RFC3339 à la place de `YYYY-MM-DD`.
 13. Garantit que le payload JSON du profil ne persiste jamais la photo, gérée uniquement par le domaine dédié.
-14. Vérifie que l’effacement des données de découverte Scylla précède l’anonymisation PostgreSQL.
-15. Vérifie l’ordre Stripe supprimé → photo supprimée → Scylla effacée → PostgreSQL anonymisé.
-16. Vérifie le format, l’échéance et le hashage d’un jeton de suppression nouvellement émis.
-17. Vérifie l’ordre jeton consommé → Scylla effacée → PostgreSQL anonymisé.
-18. Refuse un jeton mal formé sans toucher aux données du compte.
+14. Vérifie le format, l’échéance et le hashage d’un jeton de suppression nouvellement émis.
+15. Confie atomiquement au repository la consommation du jeton et la programmation de l’effacement.
+16. Refuse un jeton mal formé sans toucher aux données du compte.
+
+### `test/unit/billing/billing-erasure.spec.ts` — 10 tests
+
+Couvre l’intention persistée avant création Customer, la réponse de création perdue et son rejeu exact, la
+fenêtre maximale de reprise, la conservation des références après DELETE incertain, le fournisseur désactivé,
+les lots de 50 et le marqueur de suppression vérifié par GET. Une erreur générique, un Customer actif ou un
+identifiant différent ne valent jamais confirmation de suppression.
 
 ## Tests e2e
+
+### `test/e2e/admin-privacy.contract.spec.ts` — 4 tests
+
+Vérifie la réponse de programmation, l’authentification récente réellement exécutée par le guard, le suivi
+administratif sans contenu sensible et le refus des champs inconnus.
 
 ### `test/e2e/admin-auth.contract.spec.ts` — 7 tests
 
@@ -631,7 +657,7 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 2. Normalise les champs facultatifs absents en `null`.
 3. Refuse cible, motif et champs supplémentaires invalides avant le rate limit.
 
-### `test/e2e/users.contract.spec.ts` — 14 tests
+### `test/e2e/users.contract.spec.ts` — 15 tests
 
 1. Renvoie le profil et les préférences de découverte de l’utilisateur authentifié.
 2. Renvoie et met à jour les choix juridiques avec IP et User-Agent d’audit.
@@ -642,11 +668,12 @@ Cette suite démarre Fastify avec le contrôleur mobile :
 7. Refuse une clé d’idempotence absente avant rate limit, lecture multipart et service.
 8. Refuse l’injection d’un champ de privilège dans le profil.
 9. Met à jour les préférences et la présence géographique.
-10. Émet puis consomme le jeton dédié de suppression du compte.
+10. Émet puis consomme le jeton dédié ; l’effacement retourne `202` avec `request_id` et `in_progress`.
 11. Refuse un jeton de suppression mal formé avant effacement.
 12. Liste, ajoute et retire les traits du compte authentifié.
 13. Refuse un identifiant de trait invalide avant mutation.
 14. Expose les plans publics sans session mobile.
+15. Traduit le guard PostgreSQL `P0E01` en `409 account_unavailable`, sans détail SQL.
 
 ## Tests d’intégration réels
 
@@ -684,7 +711,7 @@ La suite utilise un vrai pool PostgreSQL et le schéma effectivement migré :
 28. **Idempotence photo et émission outbox** — crée et active une photo, la rejoue sans doublon, refuse une empreinte différente, remplace la photo et vérifie l’événement transactionnel ainsi que la consommation de l’ancienne clé.
 29. **Réconciliation photo admin** — liste et mesure un upload ancien, le passe à `deleting`, crée ou réinitialise `photo.delete` et vérifie l’audit opérateur dans la même transaction.
 30. **Concurrence et dead-letter outbox** — vérifie la propriété exclusive d’un événement, sa reprise puis son passage en dead-letter au budget configuré.
-31. **Base neuve** — applique la baseline et les migrations `002` à `010` dans un schéma isolé vide, vérifie les tables finales, les deux plans et les quinze questions initiales, puis annule toute la transaction.
+31. **Base neuve** — applique la baseline et les migrations `002` à `013` dans un schéma isolé vide, vérifie les tables finales, les deux plans et les quinze questions initiales, puis annule toute la transaction.
 32. **Questions de profil** — remplace réellement les réponses, vérifie leur projection dans le profil puis confirme que la suppression administrative de la question les efface par cascade.
 33. **Modération photo** — crée un cas approuvé séparé du cycle technique, audite l’ouverture du détail, le rejette avec checklist/version, puis vérifie la transition `deleting`, l’outbox et l’audit transactionnels.
 34. **Révocation WebAuthn** — révoque une passkey en base puis confirme immédiatement que la session administrateur qui en dépend n’est plus utilisable.
@@ -729,7 +756,19 @@ activation/prolongation/expiration avant envoi, échec de paiement ancien après
 payée/annulée/irrécouvrable/soldée/réaffectée ou notification historique sans référence vérifiable.
 Les deux régressions initiales ont échoué avant correction, puis passent avec la migration 012.
 
-### `test/integration/scylla.discovery.integration.spec.ts` — 10 tests
+### `test/integration/postgres.erasure.integration.spec.ts` — 26 tests
+
+Schéma isolé supprimé après la suite, sans consommer les jobs de développement. Couvre acceptation atomique,
+double consommation du jeton et rollback ; parcours complet des 67 passages avec nouvelles instances de worker ;
+réponses et checkpoints Stripe/photos/Scylla perdus ; suppression S3 incertaine conservant sa trace ; attente
+d’un écrivain sans consommer le budget de reprise ; exclusion entre écrivains et effacement, dont UUID en
+majuscules ; upload S3 en cours au moment de l’acceptation ; maintien de la purge de présence mais refus des
+nouvelles positions ; écrivain SQL en vol et sept variantes d’écriture tardive ; invisibilité des matchs et
+blocage des messages ; programmation admin idempotente sans annulation ; ancien worker sans droit de checkpoint ;
+finalisation refusée tant qu’une photo subsiste ; acquittement final perdu sans second audit ; dead letter après
+dix échecs, abandon interdit et reprise auditée ; projections Stripe non réactivées.
+
+### `test/integration/scylla.discovery.integration.spec.ts` — 11 tests
 
 Cette suite contacte le Scylla local réellement migré et `histae-dev`. Elle vérifie au démarrage l’existence des deux tables et leur TTL de production de 31 536 000 secondes :
 
@@ -743,6 +782,7 @@ Cette suite contacte le Scylla local réellement migré et `histae-dev`. Elle v�
 8. confirme que l’export portable contient les propres décisions sortantes, jamais les décisions entrantes de tiers ;
 9. écrit deux lignes de test avec un TTL de deux secondes et attend leur expiration effective sans modifier le TTL des tables ;
 10. confirme que `DiscoveryService` transforme une indisponibilité Scylla en `503 discovery_unavailable`.
+11. nettoie une partition réelle de 120 décisions en lots de 100 puis 20 et vérifie la disparition de tous les miroirs.
 
 La suite ne coupe pas le conteneur Docker pendant l’exécution : le mapping HTTP du `503` est couvert séparément en e2e, afin de ne pas perturber le Scylla de développement.
 
@@ -761,8 +801,8 @@ Les validations sont déclenchées manuellement. Avant une livraison :
 2. migrer `histae-dev` et Scylla ;
 3. exécuter `pnpm run lint`, `pnpm run typecheck` et `pnpm run build` ;
 4. exécuter `pnpm run test:unit` et `pnpm run test:e2e` ;
-5. exécuter `pnpm test` pour les 456 cas autonomes ;
-6. exécuter `pnpm run test:integration` pour les 100 cas réels et vérifier que les 556 cas passent au total.
+5. exécuter `pnpm test` pour les 472 cas autonomes ;
+6. exécuter `pnpm run test:integration` pour les 127 cas réels et vérifier que les 599 cas passent au total.
 
 Voir le bilan exécuté en tête de document. La validation des sessions mobiles couvre PostgreSQL, ScyllaDB et Redis,
 mais ne rejoue pas l'analyse WebP réelle ni le smoke test du bucket S3-compatible précédemment validés.

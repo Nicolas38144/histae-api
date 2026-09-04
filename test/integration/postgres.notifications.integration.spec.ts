@@ -275,8 +275,7 @@ describe('PostgreSQL durable notifications', () => {
 
   function worker(send = jest.fn().mockResolvedValue(undefined), repository = outbox) {
     const notifications = new NotificationPushService(deliveries, { sendToDevice: send } as never);
-    return new OutboxWorkerService(repository, {} as never, {} as never,
-      { maintenanceMode: 'disabled' } as never, {} as never, notifications);
+    return new OutboxWorkerService(repository, {} as never, {} as never, { maintenanceMode: 'disabled' } as never, {} as never, notifications, {} as never);
   }
 
   it('rolls back intent and jobs together and exposes neither before commit', async () => {

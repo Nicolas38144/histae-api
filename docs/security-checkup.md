@@ -7,6 +7,19 @@ le stockage photo et les dépendances. Il combine revue statique, tests automati
 configuration et audits pnpm complets/de production. Il ne remplace ni un pentest externe, ni une revue de l’infrastructure de
 production, ni une analyse juridique.
 
+## Complément ciblé R02 — 4 septembre 2026
+
+L’effacement utilise désormais des checkpoints outbox et désactive le compte dès l’acceptation atomique.
+Les écrivains externes partagent des verrous de session et les guards PostgreSQL refusent les écritures locales
+tardives. Le suivi admin ne contient aucun payload, clé S3 ou identifiant Stripe ; les reprises exigent motif,
+authentification récente et audit. L’abandon est interdit. Les erreurs sont normalisées et une ancienne création
+Stripe incertaine reste bloquée, sans faux succès. Voir [le protocole et ses limites](account-erasure.md).
+
+Les 599 tests, lint/typecheck et builds API/dashboard passent ; migration 013 appliquée localement sans reset.
+Cette revue ciblée ne renouvelle pas l’audit des dépendances ni le contrôle de l’infrastructure : aucun paquet
+n’a changé et aucun test fournisseur Stripe/S3 réel n’a été effectué. Le bilan historique ci-dessous reste daté
+du 3 septembre ; les validations courantes sont détaillées dans [test.md](../test.md).
+
 ## Résultat synthétique
 
 Aucune vulnérabilité critique connue n’a été trouvée dans les dépendances de production et aucune injection SQL

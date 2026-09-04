@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(12);
+    expect(migrations).toHaveLength(13);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');
@@ -76,6 +76,10 @@ describe('PostgreSQL migration catalog', () => {
     expect(eligibility.sql).toContain('chk_notification_billing_context');
     expect(eligibility.sql).toContain('CREATE TRIGGER trg_erase_notifications');
     expect(eligibility.checksum).toMatch(/^[0-9a-f]{64}$/);
+    const erasure = await loadMigration(migrations[12]);
+    expect(erasure.sql).toContain('CREATE TABLE account_erasure');
+    expect(erasure.sql).toContain('customer_creation_started_at');
+    expect(erasure.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('distinguishes fresh, complete and unsafe partial legacy histories', () => {

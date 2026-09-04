@@ -1,6 +1,6 @@
 # Histae API — résumé du projet
 
-Mise à jour : 3 septembre 2026.
+Mise à jour : 4 septembre 2026.
 
 Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
 de test : consulter respectivement `routes.md` et `test.md` pour ces inventaires détaillés.
@@ -17,7 +17,7 @@ Le socle fonctionnel principal est implémenté :
 - blocage, signalement, modération et audit des accès administratifs ;
 - appareils, push sans contenu privé et événements SSE ;
 - abonnement Premium et projection Stripe ;
-- demandes RGPD, export, effacement et maintenance de rétention ;
+- demandes RGPD, export, effacement durable par étapes et maintenance de rétention ;
 - photos privées normalisées en WebP dans un stockage objet compatible S3 ;
 - qualité et modération des photos, bios et réponses libres avec file de revue auditée ;
 - health checks, migrations contrôlées et tests réels des stockages.
@@ -78,8 +78,9 @@ ou store pour SQL/CQL et mapper/model pour les représentations publiques.
 
 Les messages et la maintenance des matchs ont leurs repositories dédiés, tout comme les métriques et la
 réconciliation photo administratives. `StripeWebhookService` sépare l'ingestion Stripe des parcours Checkout/portail
-de `BillingService`. Les helpers transactionnels partagés préservent verrous, audits et atomicité ; aucun contrat
-HTTP ni schéma n'est modifié. Voir `docs/module-responsibilities.md` pour les frontières à maintenir.
+de `BillingService`. `ErasureService` orchestre les effets externes, `ErasureRepository` conserve les checkpoints
+et finalise l’anonymisation locale ; `AccountActivityService` coordonne les écrivains externes par des verrous
+de session. Voir `docs/module-responsibilities.md` pour les frontières à maintenir.
 
 ## 3. Contrat HTTP et sécurité
 
@@ -293,6 +294,15 @@ doivent être déployés ensemble ; les anciennes instances ne connaissent pas `
 compte et contexte Stripe interne pour filtrer les alertes obsolètes à la programmation comme à l’envoi.
 Les anciennes notifications sans ce contexte ne sont pas poussées ; aucune durée de conservation ne change.
 
+`013_resumable_account_erasure` ajoute les checkpoints RGPD, les intentions de création Customer et les
+guards SQL contre les écritures tardives. Le compte est désactivé dans la transaction d’acceptation, puis
+l’outbox reprend Stripe → photos → Scylla → PostgreSQL sans appel réseau sous transaction SQL. La route de
+suppression répond désormais **202** ; seul le dernier checkpoint termine la DSR. Le dashboard suit les étapes
+et permet une relance auditée. Un pool dédié ajoute au plus quatre connexions PostgreSQL par processus.
+Arrêter les anciens écrivains puis déployer migration, API et workers compatibles ensemble. Une création
+Stripe incertaine trop ancienne requiert une réconciliation contrôlée, pas un rejeu aveugle. Voir
+[docs/account-erasure.md](docs/account-erasure.md) pour les invariants et limites.
+
 La compatibilité est sans perte :
 
 - une base neuve applique la baseline puis toutes les migrations incrémentales ;
@@ -371,14 +381,13 @@ améliorations, tests manquants, périmètres API/dashboard et critères de fin.
 
 Ordre conseillé côté API :
 
-1. Rendre l’effacement de compte reprenable par étapes, sans longs appels réseau sous transaction (R02).
-2. Compléter les tests de concurrence métier et de panne/reprise.
-3. Finaliser le suivi Sweego et la réconciliation Stripe.
-4. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
+1. Compléter les tests de concurrence métier et de panne/reprise (R03).
+2. Finaliser le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines (R04/R05).
+3. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
 
-R01 est terminé après contre-vérification et correction de l’effacement concurrent des notifications et des
-alertes Stripe obsolètes. Les migrations 011 et 012 sont appliquées localement sans reset ; les notifications
-historiques ne sont pas rejouées. Les 556 tests et les contrôles statiques passent ; détails dans `test.md`.
+R01 et R02 sont terminés. Les migrations jusqu’à 013 sont appliquées localement sans reset ; les notifications
+historiques ne sont pas rejouées. La validation R02 couvre 599 tests, dont 127 intégrations réelles ; détails
+et portée des contrôles dans `test.md`.
 
 Avant production : calibration et recours de modération, alertes et supervision des workers,
 sauvegardes/restaurations éprouvées, exploitation WebAuthn, tests de charge et audit indépendant.

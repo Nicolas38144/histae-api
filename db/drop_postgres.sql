@@ -2,6 +2,9 @@
 -- CLEAN RESET — DROP EXISTING OBJECTS
 -- =========================================
 DROP FUNCTION IF EXISTS fct_anonymize_user(UUID);
+DROP FUNCTION IF EXISTS fct_require_live_account() CASCADE;
+DROP FUNCTION IF EXISTS fct_require_live_match() CASCADE;
+DROP TABLE IF EXISTS account_erasure;
 DROP FUNCTION IF EXISTS fct_cleanup_billing_identity();
 
 DROP TABLE IF EXISTS stripe_webhook_event CASCADE;

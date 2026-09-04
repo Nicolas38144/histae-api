@@ -1,6 +1,6 @@
 import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtActiveGuard, userId } from '../auth/auth.guard';
-import { AdminSessionGuard } from '../admin-auth/admin-auth.guard';
+import { AdminSessionGuard, RecentAdminAuthenticationGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { AllowIncompleteOnboarding } from '../auth/onboarding.decorator';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
@@ -86,13 +86,14 @@ export class AdminPrivacyController {
   }
 
   @Patch('data-subject-requests/:id')
+  @UseGuards(RecentAdminAuthenticationGuard)
   async updateRequest(
     @ValidatedParams({ code: 'invalid_data_request_id', message: 'The data subject request ID is invalid.' }) params: PrivacyRequestIdParamDto,
     @ValidatedBody({ code: 'invalid_data_request', message: 'The data subject request is invalid.' }) body: UpdateDataSubjectRequestDto,
     @Req() request: AuthenticatedRequest,
   ): Promise<{ message: string }> {
-    await this.privacy.updateRequest(params.id, body.status, userId(request), request.auth!.account.role, body.notes ?? null);
-    return { message: 'data subject request updated' };
+    const result = await this.privacy.updateRequest(params.id, body.status, userId(request), request.auth!.account.role, body.notes ?? null);
+    return { message: result === 'erasure_scheduled' ? 'account erasure scheduled' : 'data subject request updated' };
   }
 
   @Get('data-access-logs')

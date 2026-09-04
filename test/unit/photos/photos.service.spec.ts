@@ -1,3 +1,4 @@
+import { accountActivityStub } from "../../account-activity.stub";
 import { InvalidPhotoError } from '../../../src/photos/photo-processor.service';
 import { PhotosService } from '../../../src/photos/photos.service';
 import { ObjectStorageUnavailableError } from '../../../src/storage/object-storage.service';
@@ -29,11 +30,7 @@ describe('PhotosService', () => {
     const repository = repositoryMock();
     const processor = { toWebp: jest.fn().mockResolvedValue(PROCESSED) };
     const storage = storageMock();
-    const service = new PhotosService(
-      repository as never,
-      processor as never,
-      storage as never,
-    );
+    const service = new PhotosService(repository as never, processor as never, storage as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toEqual({
       photo: 'https://storage.test/signed',
@@ -89,11 +86,7 @@ describe('PhotosService', () => {
     });
     const processor = { toWebp: jest.fn() };
     const storage = storageMock();
-    const service = new PhotosService(
-      repository as never,
-      processor as never,
-      storage as never,
-    );
+    const service = new PhotosService(repository as never, processor as never, storage as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).resolves.toEqual({
       photo: 'https://storage.test/signed',
@@ -109,11 +102,7 @@ describe('PhotosService', () => {
     const repository = repositoryMock();
     repository.beginDelete.mockResolvedValue(true);
     const storage = storageMock();
-    const service = new PhotosService(
-      repository as never,
-      {} as never,
-      storage as never,
-    );
+    const service = new PhotosService(repository as never, {} as never, storage as never, accountActivityStub);
 
     await expect(service.delete(USER_ID)).resolves.toBeUndefined();
     expect(storage.delete).not.toHaveBeenCalled();
@@ -125,11 +114,7 @@ describe('PhotosService', () => {
     const processor = {
       toWebp: jest.fn().mockRejectedValue(new InvalidPhotoError()),
     };
-    const service = new PhotosService(
-      repository as never,
-      processor as never,
-      storageMock() as never,
-    );
+    const service = new PhotosService(repository as never, processor as never, storageMock() as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).rejects.toEqual(
       expect.objectContaining({ status: 400, code: 'invalid_photo' }),
@@ -145,11 +130,7 @@ describe('PhotosService', () => {
     storage.put.mockRejectedValue(
       new ObjectStorageUnavailableError(new Error('offline')),
     );
-    const service = new PhotosService(
-      repository as never,
-      processor as never,
-      storage as never,
-    );
+    const service = new PhotosService(repository as never, processor as never, storage as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY)).rejects.toEqual(
       expect.objectContaining({
@@ -163,7 +144,7 @@ describe('PhotosService', () => {
 
   it('refuses to sign a key outside the versioned profile-photo namespace', async () => {
     const storage = storageMock();
-    const service = new PhotosService({} as never, {} as never, storage as never);
+    const service = new PhotosService({} as never, {} as never, storage as never, accountActivityStub);
 
     await expect(service.urlForKey('../public/photo.webp')).resolves.toBeNull();
     expect(storage.signedGetUrl).not.toHaveBeenCalled();
@@ -171,11 +152,7 @@ describe('PhotosService', () => {
 
   it('requires a UUID v4 idempotency key before creating upload state', async () => {
     const repository = repositoryMock();
-    const service = new PhotosService(
-      repository as never,
-      {} as never,
-      storageMock() as never,
-    );
+    const service = new PhotosService(repository as never, {} as never, storageMock() as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, undefined)).rejects.toEqual(
       expect.objectContaining({ status: 400, code: 'invalid_idempotency_key' }),
@@ -190,11 +167,7 @@ describe('PhotosService', () => {
   ] as const)('maps %s to the stable %s conflict', async (state, code) => {
     const repository = repositoryMock();
     repository.createProcessing.mockResolvedValue({ state });
-    const service = new PhotosService(
-      repository as never,
-      {} as never,
-      storageMock() as never,
-    );
+    const service = new PhotosService(repository as never, {} as never, storageMock() as never, accountActivityStub);
 
     await expect(service.upload(USER_ID, UPLOAD, IDEMPOTENCY_KEY))
       .rejects.toEqual(expect.objectContaining({ status: 409, code }));
@@ -217,11 +190,7 @@ describe('PhotosService', () => {
       .mockRejectedValueOnce(
         new ObjectStorageUnavailableError(new Error('offline')),
       );
-    const service = new PhotosService(
-      repository as never,
-      {} as never,
-      storage as never,
-    );
+    const service = new PhotosService(repository as never, {} as never, storage as never, accountActivityStub);
 
     await expect(service.deleteForAccount(USER_ID)).rejects.toEqual(
       expect.objectContaining({

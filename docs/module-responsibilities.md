@@ -1,7 +1,7 @@
 # Frontières de responsabilités
 
-Mise à jour : 3 septembre 2026. Ce refactoring conserve les routes, DTO, erreurs, règles métier et schéma SQL.
-Il n'ajoute ni dépendance ni service à déployer.
+Mise à jour : 4 septembre 2026. Ces frontières incluent R01 (notifications durables) et R02 (effacement
+reprenable), sans nouvelle dépendance ni service à déployer. Le contrat de suppression R02 est détaillé séparément.
 
 ## Composants spécialisés
 
@@ -15,13 +15,17 @@ Il n'ajoute ni dépendance ni service à déployer.
 | Administration | `AdminPhotoRepository` | Liste et remise en file des photos réconciliables, sans accès S3 ni signature d'URL. |
 | Facturation | `BillingService` | Projection utilisateur, Checkout, portail et suppression du Customer pour l'effacement. |
 | Facturation | `StripeWebhookService` | Vérification du webhook, mapping fournisseur, projection et notifications transactionnelles ; SSE après commit. |
+| RGPD | `erasure-enqueue.ts` | Acceptation durable et désactivation dans la transaction de l’appelant, sans réseau. |
+| RGPD | `ErasureRepository` / `ErasureService` | Checkpoints/finalisation transactionnels / enchaînement Stripe, photos, Scylla, PostgreSQL via l’outbox. |
+| Concurrence | `AccountActivityService` | Verrous de session sur les écrivains externes et l’effacement, dans un pool dédié borné ; aucune transaction longue. |
 | Mobile | `notification-outbox.ts` | Notifications et tâches par appareil dans la transaction métier de l’appelant. |
 | Mobile | `NotificationPushRepository` / `NotificationPushService` | Éligibilité courante et métadonnées minimales avant envoi FCM. |
 | Mobile | `MobileDeliveryService` / `PushService` | Signaux SSE best-effort / envoi vers un seul appareil avec erreurs normalisées. |
 
 Les modules Nest injectent directement ces composants. Il n'existe pas de façade de repository qui recrée ses
 dépendances avec `new` ou conserve une copie des anciennes méthodes. Les contrôleurs gardent leurs guards,
-validations et limites de débit existants ; le dashboard n'a aucune adaptation à faire.
+validations et limites de débit. R02 ajoute l’authentification récente aux transitions RGPD ; le dashboard suit
+leur progression et les reprises, sans piloter directement les étapes internes.
 
 ## Frontières transactionnelles à conserver
 
@@ -35,6 +39,10 @@ validations et limites de débit existants ; le dashboard n'a aucune adaptation 
   aussi partie de cette transaction ; seul le réseau est différé au worker. Un doublon ne recrée pas de tâche.
   `notification-billing.ts` partage le prédicat de pertinence Stripe entre programmation et envoi ; le contexte
   reste interne. Voir [notifications durables](durable-notifications.md) pour les migrations 011/012 et les limites d’acquittement.
+- L’effacement ne fournit plus de callback réseau à `PrivacyRepository`. Le worker prend un verrou de session,
+  effectue un lot externe, puis enregistre sa progression avec contrôle du propriétaire outbox. Les écrivains
+  locaux sont coordonnés par les triggers de la migration 013 ; les webhooks ignorent un compte désactivé en
+  conservant la sérialisation de la relation Customer. Voir [effacement reprenable](account-erasure.md).
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.
 
@@ -45,7 +53,6 @@ isolé dans `jwt-keys.ts`. Sa longueur seule ne justifie pas de disperser les va
 environnement et fournisseurs. Les services métier restent des orchestrateurs ; l'objectif n'est pas de créer
 une classe par méthode ou d'imposer une architecture distribuée.
 
-Les tests de contrat HTTP sont inchangés fonctionnellement. Les intégrations exercent les nouveaux repositories
-réels, et les tests unitaires couvrent en plus l'ordre fetch/transaction/notification du webhook, les doublons,
-les transactions échouées et le refus de lancer une maintenance sans son verrou. Voir [`test.md`](../test.md)
+Les tests HTTP suivent les contrats documentés. Les intégrations exercent les repositories réels, les reprises
+et la concurrence ; les tests unitaires isolent notamment les échecs fournisseur. Voir [`test.md`](../test.md)
 pour les résultats réellement exécutés.

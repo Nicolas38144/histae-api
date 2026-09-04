@@ -58,6 +58,9 @@ export const migrations = [{
 }, {
   version: '012_notification_eligibility',
   filenames: ['012_notification_eligibility.sql'],
+}, {
+  version: '013_resumable_account_erasure',
+  filenames: ['013_resumable_account_erasure.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

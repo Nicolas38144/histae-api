@@ -13,6 +13,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const reply = http.getResponse<FastifyReply>();
     const request = http.getRequest<FastifyRequest>();
     if (reply.sent) return;
+    if (typeof exception === 'object' && exception !== null && 'code' in exception && exception.code === 'P0E01') {
+      reply.status(409).send({ error: { code: 'account_unavailable', message: 'An account is no longer available.' } });
+      return;
+    }
 
     if (exception instanceof ApiError) {
       if (exception.status >= 500) this.logException(exception, request);

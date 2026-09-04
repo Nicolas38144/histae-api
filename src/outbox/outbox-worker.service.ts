@@ -15,6 +15,7 @@ import { OutboxRepository } from './outbox.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
 import { NotificationPushService } from '../mobile/notification-push.service';
 import { PushDeliveryError } from '../mobile/push.service';
+import { ErasureService, ErasureStepError } from '../privacy/erasure.service';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -41,6 +42,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly tracker: MaintenanceTrackerService,
     private readonly notifications: NotificationPushService,
+    private readonly erasures: ErasureService,
   ) {}
 
   onModuleInit(): void {
@@ -64,6 +66,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const result: OutboxWorkerResult = {
       claimed: events.length,
       completed: 0,
+      deferred: 0,
       retried: 0,
       deadLettered: 0,
       purged: 0,
@@ -99,7 +102,10 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     try {
       // A claimed batch can wait behind slow handlers. Recheck ownership before each send.
       if (!await this.outbox.renewClaim(event.id, this.workerId)) return;
-      await this.dispatch(event);
+      if (!await this.dispatch(event)) {
+        result.deferred += 1;
+        return;
+      }
       if (await this.outbox.complete(event.id, this.workerId, new Date())) {
         result.completed += 1;
       }
@@ -121,17 +127,18 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async dispatch(event: OutboxEvent): Promise<void> {
+  private async dispatch(event: OutboxEvent): Promise<boolean> {
+    if (event.eventType === 'account.erase') return this.erasures.process(event.id, this.workerId);
     if (event.eventType === 'notification.push') {
       await this.notifications.deliver(event.aggregateId);
-      return;
+      return true;
     }
     if (event.eventType === 'photo.delete') {
       const photo = await this.photos.findDeleting(event.aggregateId);
-      if (!photo) return;
+      if (!photo) return true;
       await this.storage.delete(photo.objectKey);
       await this.photos.completeDeletion(photo.id);
-      return;
+      return true;
     }
     throw new Error('Unsupported outbox event type');
   }
@@ -171,6 +178,7 @@ function retryDelayMillis(attempts: number): number {
 }
 
 function outboxErrorCode(error: unknown): string {
+  if (error instanceof ErasureStepError) return error.code;
   if (error instanceof PushDeliveryError) return 'push_delivery_unavailable';
   return error instanceof ObjectStorageUnavailableError
     ? 'object_storage_unavailable'

@@ -13,6 +13,15 @@ export type DataSubjectRequestRow = {
   completed_at: Date | null;
   handled_by: string | null;
   notes?: string | null;
+  erasure?: {
+    step: import('./erasure.repository').ErasureStep;
+    scylla_partition: number;
+    updated_at: string;
+    event_id: string | null;
+    status: import('../outbox/outbox.models').OutboxStatus | null;
+    attempts: number;
+    last_error_code: string | null;
+  } | null;
 };
 
 type DataAccessAction = 'view_profile' | 'view_messages' | 'view_matches' | 'export_data'

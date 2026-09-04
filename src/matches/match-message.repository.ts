@@ -133,6 +133,8 @@ export class MatchMessageRepository {
       FROM chat_message AS message
       JOIN match_init AS match_record ON match_record.id = message.match_id
       WHERE message.sender_id = $1 AND message.idempotency_key = $2
+        AND NOT EXISTS (SELECT 1 FROM user_account
+          WHERE user_id IN (match_record.user1_id, match_record.user2_id) AND deleted_at IS NOT NULL)
     `, [senderId, idempotencyKey])).rows[0];
     if (!row) return undefined;
     return {

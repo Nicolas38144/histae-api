@@ -10,6 +10,8 @@ export async function lockMessagingMatch(client: PoolClient, matchId: string, us
       clock_timestamp() AS database_now
     FROM match_init
     WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
+      AND NOT EXISTS (SELECT 1 FROM user_account
+        WHERE user_id IN (match_init.user1_id, match_init.user2_id) AND deleted_at IS NOT NULL)
     FOR UPDATE
   `, [matchId, userId]);
   const initial = locked.rows[0];

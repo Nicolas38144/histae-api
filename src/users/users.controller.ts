@@ -149,14 +149,14 @@ export class UsersController {
   }
 
   @Delete()
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.ACCEPTED)
   @AllowIncompleteOnboarding()
 
   async deleteAccount(
     @ValidatedBody({ code: 'invalid_account_deletion_payload', message: 'The account deletion request body is invalid.' }) body: ConfirmAccountDeletionDto,
     @Req() request: AuthenticatedRequest,
-  ): Promise<void> {
-    await this.users.confirmAnonymize(userId(request), body.confirmation_token);
+  ): Promise<{ request_id: string; status: 'in_progress' }> {
+    return this.users.confirmAnonymize(userId(request), body.confirmation_token);
   }
 
   @Post('deletion-token')

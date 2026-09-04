@@ -16,6 +16,7 @@ import type { MatchRow } from '../../src/matches/matches.models';
 import { MatchesService } from '../../src/matches/matches.service';
 import { PrivacyRepository } from '../../src/privacy/privacy.repository';
 import { UsersRepository } from '../../src/users/users.repository';
+import { ErasureRepository } from '../../src/privacy/erasure.repository';
 import { BillingRepository } from '../../src/billing/billing.repository';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
 import { PhotosRepository } from '../../src/photos/photos.repository';
@@ -62,7 +63,7 @@ describe('PostgreSQL schema contract', () => {
       'profile_question', 'user_profile_answer', 'content_moderation_case',
       'admin_webauthn_bootstrap', 'admin_webauthn_credential',
       'admin_webauthn_challenge', 'admin_session', 'admin_auth_event',
-      'outbox_operator_action', 'maintenance_job_status', 'refresh_token_family',
+      'outbox_operator_action', 'maintenance_job_status', 'refresh_token_family', 'account_erasure',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -1444,8 +1445,17 @@ describe('PostgreSQL schema contract', () => {
     try {
       const request = await privacy.createRequest(userId, 'erasure');
       expect(request).toBeDefined();
-      await expect(privacy.updateRequest(request!.id, 'in_progress', adminId, 'admin', null, async () => undefined)).resolves.toBe('updated');
-      await expect(privacy.updateRequest(request!.id, 'completed', adminId, 'admin', 'Identity verified.', async () => undefined)).resolves.toBe('updated');
+      await expect(privacy.updateRequest(request!.id, 'in_progress', adminId, 'admin', null)).resolves.toBe('updated');
+      await expect(privacy.updateRequest(request!.id, 'completed', adminId, 'admin', 'Identity verified.')).resolves.toBe('erasure_scheduled');
+      // This case validates final SQL redaction; the isolated erasure suite tests
+      // external stages and their checkpoints. This fixture has no real S3 object.
+      await pool.query('DELETE FROM user_photo WHERE id = $1', [photoId]);
+      await pool.query("UPDATE account_erasure SET step = 'postgres', scylla_partition = 64 WHERE request_id = $1", [request!.id]);
+      const event = (await pool.query(`UPDATE outbox_event SET status = 'processing', locked_at = now(), locked_by = $2
+        WHERE event_type = 'account.erase' AND aggregate_id = $1 RETURNING id`, [request!.id, randomUUID()])).rows[0];
+      const erasures = new ErasureRepository(databaseFor(pool) as never);
+      const workerId = (await pool.query('SELECT locked_by FROM outbox_event WHERE id = $1', [event.id])).rows[0].locked_by;
+      await erasures.advance(event.id, workerId, (await erasures.claimed(event.id, workerId))!, 'completed');
 
       const [account, removed, consent, match, message, accessLog] = await Promise.all([
         pool.query<{ phone_number_hash: string; phone_number_encrypted: Buffer; deleted_at: Date | null; anonymized_at: Date | null }>(
@@ -1680,9 +1690,9 @@ describe('PostgreSQL schema contract', () => {
       await expect(repository.replaceDeletionToken(
         userId, tokenId, 'token-hash', new Date(Date.now() + 600_000),
       )).resolves.toBe(true);
-      await expect(repository.consumeDeletionToken(userId, tokenId, 'wrong-hash', new Date())).resolves.toBe(false);
-      await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(true);
-      await expect(repository.consumeDeletionToken(userId, tokenId, 'token-hash', new Date())).resolves.toBe(false);
+      await expect(repository.acceptErasure(userId, tokenId, 'wrong-hash', new Date())).resolves.toBeUndefined();
+      await expect(repository.acceptErasure(userId, tokenId, 'token-hash', new Date())).resolves.toMatchObject({ status: 'in_progress' });
+      await expect(repository.acceptErasure(userId, tokenId, 'token-hash', new Date())).resolves.toBeUndefined();
     } finally {
       await deleteAccounts(pool, userId, otherId);
     }
@@ -1771,6 +1781,10 @@ async function insertAccounts(database: Pick<Pool, 'query'> | Pick<PoolClient, '
 }
 
 async function deleteAccounts(pool: Pool, ...userIds: string[]): Promise<void> {
+  // Generic outbox aggregates deliberately have no FK to their domain. Remove
+  // only this fixture's jobs before deleting the requests that identify them.
+  await pool.query(`DELETE FROM outbox_event WHERE event_type = 'account.erase'
+    AND aggregate_id IN (SELECT id FROM data_subject_request WHERE user_id = ANY($1::uuid[]))`, [userIds]);
   await pool.query(`
     DELETE FROM data_access_log
     WHERE accessed_user_id = ANY($1::uuid[]) OR accessor_id = ANY($1::uuid[])

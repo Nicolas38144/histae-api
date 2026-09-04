@@ -9,7 +9,7 @@ import { enqueueNotification } from '../mobile/notification-outbox';
 import type { BillingNotificationIntent } from '../mobile/notification-billing';
 import type { BillingPeriod, InvoiceProjection, StripeSubscriptionStatus, SubscriptionProjection, WebhookMetadata } from './billing.models';
 import { STRIPE_SUBSCRIPTION_STATUSES } from './billing.models';
-import { BillingMappingError, BillingRepository } from './billing.repository';
+import { BillingAccountInactiveError, BillingMappingError, BillingRepository } from './billing.repository';
 import { StripeGateway } from './stripe.gateway';
 
 const SUBSCRIPTION_EVENT_TYPES = new Set<string>([
@@ -56,7 +56,13 @@ export class StripeWebhookService {
       processed = await this.billing.processWebhook(
         metadata,
         async (database) => {
-          const effect = await this.processEvent(event, metadata, invoice, prefetchedSubscription, database);
+          let effect: WebhookEffect | undefined;
+          try { effect = await this.processEvent(event, metadata, invoice, prefetchedSubscription, database); }
+          catch (error) {
+            // Commit the webhook receipt, without recreating data for an erased account.
+            if (error instanceof BillingAccountInactiveError) return undefined;
+            throw error;
+          }
           if (effect?.notification) {
             await enqueueNotification(database, effect.userId, event.id, effect.notification);
           }

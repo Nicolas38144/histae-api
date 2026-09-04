@@ -1,3 +1,4 @@
+import { accountActivityStub } from "../account-activity.stub";
 import { randomUUID } from 'node:crypto';
 import * as dotenv from 'dotenv';
 import type { ArrayOrObject, Client, QueryOptions, types } from 'cassandra-driver';
@@ -69,7 +70,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
 
     pool = new Pool(postgresConfig);
     await pool.query('SELECT 1');
-    store = new DiscoveryStore(scyllaFor(client) as never);
+    store = new DiscoveryStore(scyllaFor(client) as never, accountActivityStub);
     const database = databaseFor(pool);
     discovery = new DiscoveryService(
       new DiscoveryRepository(database as never),
@@ -77,12 +78,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
       new MatchesService(new MatchesRepository(database as never), new MatchMessageRepository(database as never), photos as never),
       legalConfig() as never,
     );
-    privacy = new PrivacyService(
-      new PrivacyRepository(database as never),
-      store,
-      { deleteCustomerForAccount: jest.fn().mockResolvedValue(undefined) } as never,
-      photos as never,
-    );
+    privacy = new PrivacyService(new PrivacyRepository(database as never), store, photos as never);
   });
 
   beforeEach(async () => {
@@ -183,7 +179,7 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
         }
         return executeScylla(client, query, params, options);
       },
-    } as never);
+    } as never, accountActivityStub);
 
     await expect(failingStore.recordSwipe(actorId, targetId, 'like')).rejects.toBeInstanceOf(ScyllaUnavailableError);
     expect(await targetDecision(client, targetId, actorId)).toBeUndefined();
@@ -219,9 +215,26 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     expect(JSON.stringify(actions)).not.toContain(incomingActorId);
   });
 
+  it('drains a full erasure partition in bounded batches without losing mirror references', async () => {
+    const [owner] = await readyUsers(1);
+    // Temporary peer UUIDs share bucket zero; no real account data is touched.
+    const peers = Array.from({ length: 120 }, () => `00000000-${randomUUID().slice(9)}`);
+    for (let offset = 0; offset < peers.length; offset += 20) {
+      await Promise.all(peers.slice(offset, offset + 20).map((peer) => store.recordSwipe(owner!, peer, 'pass')));
+    }
+    await expect(store.deleteUserDataBatch(owner!, 0)).resolves.toBe(false);
+    expect(await store.exportOwnActions(owner!)).toHaveLength(20);
+    await expect(store.deleteUserDataBatch(owner!, 0)).resolves.toBe(true);
+    await expect(store.exportOwnActions(owner!)).resolves.toEqual([]);
+    for (let offset = 0; offset < peers.length; offset += 20) {
+      const mirrors = await Promise.all(peers.slice(offset, offset + 20).map((peer) => targetDecision(client, peer, owner!)));
+      expect(mirrors.every((decision) => decision === undefined)).toBe(true);
+    }
+  });
+
   it('expires both test rows with a short per-write TTL in the shared development keyspace', async () => {
     const [actorId, targetId] = await readyUsers(2);
-    const shortTtlStore = new DiscoveryStore(shortTtlScylla(client, 2) as never);
+    const shortTtlStore = new DiscoveryStore(shortTtlScylla(client, 2) as never, accountActivityStub);
     await shortTtlStore.recordSwipe(actorId, targetId, 'like');
 
     await expect(eventually(async () => {

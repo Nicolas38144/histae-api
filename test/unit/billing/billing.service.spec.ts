@@ -1,3 +1,4 @@
+import { accountActivityStub } from "../../account-activity.stub";
 import { BillingService } from '../../../src/billing/billing.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -27,7 +28,7 @@ describe('BillingService', () => {
         id: 'cs_test_HistaeSession', url: 'https://checkout.stripe.test/session', expires_at: 1_900_000_000,
       }),
     };
-    const service = new BillingService(repository as never, stripe as never, config as never);
+    const service = new BillingService(repository as never, stripe as never, config as never, accountActivityStub);
 
     await expect(service.createCheckout(USER_ID, 'monthly', '33333333-3333-4333-8333-333333333333')).resolves.toEqual({
       session_id: 'cs_test_HistaeSession',
@@ -53,7 +54,7 @@ describe('BillingService', () => {
     };
     const repository = { beginCheckout: jest.fn().mockResolvedValue({ state: 'replay', session }) };
     const stripe = { createCheckoutSession: jest.fn() };
-    const service = new BillingService(repository as never, stripe as never, config as never);
+    const service = new BillingService(repository as never, stripe as never, config as never, accountActivityStub);
 
     await expect(service.createCheckout(USER_ID, 'monthly', '33333333-3333-4333-8333-333333333333')).resolves.toBe(session);
     expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
@@ -66,13 +67,16 @@ describe('BillingService', () => {
         state: 'created', attemptId, stripeCustomerId: null, trialDays: 30, trialUsed: false,
       }),
       saveCustomer: jest.fn().mockResolvedValue(false),
+      beginCustomerCreation: jest.fn().mockResolvedValue({ id: attemptId, customer_creation_started_at: new Date(), created_customer_id: null, customer_erased_at: null }),
+      recordCreatedCustomer: jest.fn(),
+      markCreatedCustomerErased: jest.fn(),
       markCheckoutFailed: jest.fn().mockResolvedValue(undefined),
     };
     const stripe = {
       createCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER_ID }),
       deleteCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER_ID, deleted: true }),
     };
-    const service = new BillingService(repository as never, stripe as never, config as never);
+    const service = new BillingService(repository as never, stripe as never, config as never, accountActivityStub);
 
     await expect(service.createCheckout(USER_ID, 'monthly', '33333333-3333-4333-8333-333333333333'))
       .rejects.toEqual(expect.objectContaining({ status: 409, code: 'billing_customer_conflict' }));
@@ -81,9 +85,9 @@ describe('BillingService', () => {
   });
 
   it('deletes the Stripe customer as part of account erasure', async () => {
-    const repository = { customerForUser: jest.fn().mockResolvedValue(CUSTOMER_ID) };
+    const repository = { customerForUser: jest.fn().mockResolvedValue(CUSTOMER_ID), customerCreationsForErasure: jest.fn().mockResolvedValue([]) };
     const stripe = { deleteCustomer: jest.fn().mockResolvedValue({ id: CUSTOMER_ID, deleted: true }) };
-    const service = new BillingService(repository as never, stripe as never, config as never);
+    const service = new BillingService(repository as never, stripe as never, config as never, accountActivityStub);
 
     await service.deleteCustomerForAccount(USER_ID);
 

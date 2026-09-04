@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { enqueueAccountErasure, type AcceptedErasure } from '../privacy/erasure-enqueue';
 import { DatabaseService } from '../database/database.service';
 import type { ConsentChange, ConsentEvent, ConsentType, ModeratedProfileInput, PreferencesInput, PreferencesRow, PresenceInput, ProfileRow } from './users.models';
 
@@ -114,13 +115,6 @@ export class UsersRepository {
     return result.rowCount !== 0;
   }
 
-  async anonymize(userId: string): Promise<void> {
-    await this.database.transaction(async (client) => {
-      await client.query('DELETE FROM account_deletion_token WHERE user_id = $1', [userId]);
-      await client.query('SELECT fct_anonymize_user($1)', [userId]);
-    });
-  }
-
   async replaceDeletionToken(userId: string, id: string, tokenHash: string, expiresAt: Date): Promise<boolean> {
     return this.database.transaction(async (client) => {
       const account = await client.query<{ user_id: string }>(`
@@ -136,11 +130,16 @@ export class UsersRepository {
     });
   }
 
-  async consumeDeletionToken(userId: string, id: string, tokenHash: string, now: Date): Promise<boolean> {
-    return (await this.database.query(`
-      DELETE FROM account_deletion_token
-      WHERE id = $1 AND user_id = $2 AND token_hash = $3 AND expires_at > $4
-    `, [id, userId, tokenHash, now])).rowCount === 1;
+  async acceptErasure(userId: string, id: string, tokenHash: string, now: Date): Promise<AcceptedErasure | undefined> {
+    return this.database.transaction(async (client) => {
+      const account = await client.query(`SELECT user_id FROM user_account
+        WHERE user_id = $1 AND deleted_at IS NULL FOR UPDATE`, [userId]);
+      if (!account.rows[0]) return undefined;
+      const consumed = await client.query(`DELETE FROM account_deletion_token
+        WHERE id = $1 AND user_id = $2 AND token_hash = $3 AND expires_at > $4`, [id, userId, tokenHash, now]);
+      if (consumed.rowCount !== 1) return undefined;
+      return enqueueAccountErasure(client, userId);
+    });
   }
 
   async activeLegalChoices(userId: string, consentTypes: ConsentType[]): Promise<Array<{ consent_type: ConsentType; document_version: string }>> {

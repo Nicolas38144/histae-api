@@ -11,6 +11,8 @@ import type {
 } from './billing.models';
 import { BillingRepository } from './billing.repository';
 import { StripeGateway } from './stripe.gateway';
+import { AccountActivityService, type AssertActivity } from '../database/account-activity.service';
+import type { CustomerCreation } from './billing.repository';
 
 const CHECKOUT_TTL_MILLIS = 30 * 60_000;
 const CHECKOUT_CREATION_STALE_MILLIS = 60_000;
@@ -23,6 +25,7 @@ export class BillingService {
     private readonly billing: BillingRepository,
     private readonly stripe: StripeGateway,
     private readonly config: ConfigService,
+    private readonly activity: AccountActivityService,
   ) {}
 
   async subscription(userId: string): Promise<SubscriptionView> {
@@ -63,6 +66,10 @@ export class BillingService {
   }
 
   async createCheckout(userId: string, billingPeriod: BillingPeriod, suppliedKey: string | undefined): Promise<CheckoutSessionView> {
+    return this.activity.run([userId], (assertHeld) => this.createCheckoutWhileActive(userId, billingPeriod, suppliedKey, assertHeld));
+  }
+
+  private async createCheckoutWhileActive(userId: string, billingPeriod: BillingPeriod, suppliedKey: string | undefined, assertHeld: AssertActivity): Promise<CheckoutSessionView> {
     this.requireEnabled();
     const idempotencyKey = normalizeIdempotencyKey(suppliedKey);
     const now = new Date();
@@ -88,14 +95,16 @@ export class BillingService {
     try {
       let customerId = attempt.stripeCustomerId;
       if (!customerId) {
-        const customer = await this.stripe.createCustomer(userId, `histae-customer-${attempt.attemptId}`);
-        customerId = customer.id;
-        unattachedCustomerId = customer.id;
+        const creation = await this.billing.beginCustomerCreation(attempt.attemptId);
+        assertHeld();
+        customerId = await this.resolveCustomerCreation(userId, creation);
+        unattachedCustomerId = customerId;
         if (!await this.billing.saveCustomer(userId, customerId)) {
           throw apiError(409, 'billing_customer_conflict', 'The Stripe customer could not be attached to this account.');
         }
         unattachedCustomerId = undefined;
       }
+      assertHeld();
       const session = await this.stripe.createCheckoutSession({
         userId,
         customerId,
@@ -136,30 +145,67 @@ export class BillingService {
     }
   }
 
-  async deleteCustomerForAccount(userId: string): Promise<void> {
+  async deleteCustomerForAccount(userId: string): Promise<boolean> {
+    const creations = await this.billing.customerCreationsForErasure(userId);
     const customerId = await this.billing.customerForUser(userId);
-    if (!customerId) return;
+    if (!customerId && creations.length === 0) return true;
     this.requireEnabled('Complete account erasure is temporarily unavailable because Stripe billing is disabled.');
     try {
-      await this.stripe.deleteCustomer(customerId, `histae-delete-customer-${userId}`);
+      for (const creation of creations) {
+        const createdId = await this.resolveCustomerCreation(userId, creation);
+        await this.deleteCustomerConfirmed(createdId, `histae-delete-orphan-${creation.id}`);
+        await this.billing.markCreatedCustomerErased(creation.id);
+      }
+      if (creations.length === 50) return false;
+      if (customerId) await this.deleteCustomerConfirmed(customerId, `histae-delete-customer-${userId}`);
+      return true;
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'erasure_stripe_reconciliation_required') throw error;
       throw apiError(503, 'data_erasure_unavailable', 'The Stripe customer could not be erased at this time.', error);
     }
+  }
+
+  private async resolveCustomerCreation(userId: string, creation: CustomerCreation): Promise<string> {
+    if (creation.customer_erased_at) throw apiError(409, 'idempotency_key_consumed', 'This customer creation has already been erased.');
+    if (creation.created_customer_id) return creation.created_customer_id;
+    // Stripe retains POST idempotency for at least 24h. Keep a safety margin;
+    // beyond this window, replay could create a second customer. Fail closed.
+    if (Date.now() - creation.customer_creation_started_at.getTime() >= 23 * 60 * 60_000) {
+      throw apiError(503, 'erasure_stripe_reconciliation_required', 'The Stripe customer creation requires reconciliation.');
+    }
+    const customer = await this.stripe.createCustomer(userId, `histae-customer-${creation.id}`);
+    await this.billing.recordCreatedCustomer(creation.id, customer.id);
+    return customer.id;
   }
 
   private async expireBestEffort(sessionId: string): Promise<void> {
     try {
       await this.stripe.expireCheckoutSession(sessionId);
-    } catch (error) {
-      this.logger.warn(`Could not expire an orphaned Stripe Checkout session: ${error instanceof Error ? error.message : 'unknown error'}`);
+    } catch {
+      this.logger.warn('stripe_orphan_checkout_expiry_failed');
     }
   }
 
   private async deleteCustomerBestEffort(customerId: string, attemptId: string): Promise<void> {
     try {
-      await this.stripe.deleteCustomer(customerId, `histae-delete-orphan-${attemptId}`);
+      await this.deleteCustomerConfirmed(customerId, `histae-delete-orphan-${attemptId}`);
+      await this.billing.markCreatedCustomerErased(attemptId);
+    } catch {
+      this.logger.warn('stripe_orphan_customer_deletion_failed');
+    }
+  }
+
+  private async deleteCustomerConfirmed(customerId: string, key: string): Promise<void> {
+    try {
+      await this.stripe.deleteCustomer(customerId, key);
     } catch (error) {
-      this.logger.warn(`Could not delete an orphaned Stripe Customer: ${error instanceof Error ? error.message : 'unknown error'}`);
+      // A generic 404 or network error is not proof. Stripe retains a retrievable
+      // deleted-customer marker: verify its identity and deletion explicitly.
+      try {
+        const customer = await this.stripe.retrieveCustomer(customerId);
+        if (customer.id === customerId && customer.deleted === true) return;
+      } catch { /* Keep the original failed deletion retryable. */ }
+      throw error;
     }
   }
 

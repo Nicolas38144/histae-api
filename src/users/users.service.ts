@@ -2,8 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { apiError } from '../common/api-error';
 import { ConfigService } from '../config/config.service';
-import { DiscoveryStore } from '../discovery/discovery.store';
-import { ScyllaUnavailableError } from '../scylla/scylla.service';
+import type { AcceptedErasure } from '../privacy/erasure-enqueue';
 import type { PublicProfile} from './users.mapper';
 import { toPublicProfile } from './users.mapper';
 import type {
@@ -24,7 +23,6 @@ import {
   legalDocumentVersion,
 } from './users.models';
 import { UsersRepository } from './users.repository';
-import { BillingService } from '../billing/billing.service';
 import { PhotosService } from '../photos/photos.service';
 import type { UploadedPhoto } from '../photos/photo-processor.service';
 import { TextModerationService } from '../moderation/text-moderation.service';
@@ -37,8 +35,6 @@ export class UsersService {
   constructor(
     private readonly users: UsersRepository,
     private readonly config: ConfigService,
-    private readonly discovery: DiscoveryStore,
-    private readonly billing: BillingService,
     private readonly photos: PhotosService,
     private readonly moderation: TextModerationService = new TextModerationService(),
   ) {}
@@ -123,20 +119,6 @@ export class UsersService {
     }
   }
 
-  async anonymize(userId: string): Promise<void> {
-    try {
-      await this.billing.deleteCustomerForAccount(userId);
-      await this.photos.deleteForAccount(userId);
-      await this.discovery.deleteUserData(userId);
-    } catch (error) {
-      if (error instanceof ScyllaUnavailableError) {
-        throw apiError(503, 'data_erasure_unavailable', 'Complete account erasure is temporarily unavailable.', error);
-      }
-      throw error;
-    }
-    await this.users.anonymize(userId);
-  }
-
   async issueDeletionToken(userId: string): Promise<{ confirmation_token: string; expires_at: Date }> {
     const id = randomUUID();
     const confirmationToken = `${id}:${randomBytes(32).toString('base64url')}`;
@@ -147,12 +129,13 @@ export class UsersService {
     return { confirmation_token: confirmationToken, expires_at: expiresAt };
   }
 
-  async confirmAnonymize(userId: string, confirmationToken: string): Promise<void> {
+  async confirmAnonymize(userId: string, confirmationToken: string): Promise<AcceptedErasure> {
     const parsed = parseDeletionToken(confirmationToken);
-    if (!parsed || !await this.users.consumeDeletionToken(userId, parsed.id, sha256(confirmationToken), new Date())) {
+    const accepted = parsed && await this.users.acceptErasure(userId, parsed.id, sha256(confirmationToken), new Date());
+    if (!accepted) {
       throw apiError(401, 'invalid_or_expired_deletion_token', 'The account deletion confirmation token is invalid or expired.');
     }
-    await this.anonymize(userId);
+    return accepted;
   }
 
   async getConsents(userId: string): Promise<ConsentState> {

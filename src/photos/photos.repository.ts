@@ -223,13 +223,13 @@ export class PhotosRepository {
     });
   }
 
-  async beginAccountDeletion(userId: string): Promise<PhotoObject[]> {
+  async beginAccountDeletion(userId: string, limit = 50): Promise<PhotoObject[]> {
     return (await this.database.query<PhotoObject>(`
       UPDATE user_photo
       SET status = 'deleting', updated_at = clock_timestamp()
-      WHERE user_id = $1
+      WHERE id IN (SELECT id FROM user_photo WHERE user_id = $1 ORDER BY id LIMIT $2)
       RETURNING id, user_id AS "userId", object_key AS "objectKey", status
-    `, [userId])).rows;
+    `, [userId, limit])).rows;
   }
 
   async completeDeletion(photoId: string): Promise<void> {

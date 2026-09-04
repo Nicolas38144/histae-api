@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { apiError } from '../common/api-error';
+import { AccountActivityService, type AssertActivity } from '../database/account-activity.service';
 import { normalizeIdempotencyKey } from '../common/idempotency';
 import {
   ObjectStorageService,
@@ -40,6 +41,7 @@ export class PhotosService {
     private readonly photosRepository: PhotosRepository,
     private readonly photoProcessor: PhotoProcessorService,
     private readonly objectStorage: ObjectStorageService,
+    private readonly activity: AccountActivityService,
     @Optional() private readonly moderation?: PhotoModerationService,
   ) {}
 
@@ -48,6 +50,10 @@ export class PhotosService {
     upload: UploadedPhoto,
     idempotencyInput: string | undefined,
   ): Promise<UploadedPhotoResult> {
+    return this.activity.run([userId], (assertHeld) => this.uploadWhileActive(userId, upload, idempotencyInput, assertHeld));
+  }
+
+  private async uploadWhileActive(userId: string, upload: UploadedPhoto, idempotencyInput: string | undefined, assertHeld: AssertActivity): Promise<UploadedPhotoResult> {
     const idempotencyKey = normalizeIdempotencyKey(idempotencyInput);
     const photoId = randomUUID();
     const objectKey = this.profilePhotoKey(userId, photoId);
@@ -148,6 +154,7 @@ export class PhotosService {
     }
 
     try {
+      assertHeld();
       await this.objectStorage.put({
         key: objectKey,
         body: processed.body,
@@ -181,8 +188,9 @@ export class PhotosService {
     }
   }
 
-  async deleteForAccount(userId: string): Promise<void> {
-    const photos = await this.photosRepository.beginAccountDeletion(userId);
+  async deleteForAccount(userId: string): Promise<boolean> {
+    const batchSize = 50;
+    const photos = await this.photosRepository.beginAccountDeletion(userId, batchSize);
     let failures = 0;
 
     for (const photo of photos) {
@@ -201,6 +209,7 @@ export class PhotosService {
         'The account data could not be completely erased',
       );
     }
+    return photos.length < batchSize;
   }
 
   async urlForKey(objectKey: string | null): Promise<string | null> {

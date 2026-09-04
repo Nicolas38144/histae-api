@@ -1,3 +1,4 @@
+import { accountActivityStub } from "../../account-activity.stub";
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DiscoveryStore, uuidBucket } from '../../../src/discovery/discovery.store';
@@ -9,7 +10,7 @@ describe('DiscoveryStore', () => {
   it('relies on the fixed table TTL for a new swipe and writes both query views', async () => {
     const appliedResult = { wasApplied: () => true, first: () => undefined };
     const scylla = { enabled: true, execute: jest.fn().mockResolvedValue(appliedResult) };
-    const store = new DiscoveryStore(scylla as never);
+    const store = new DiscoveryStore(scylla as never, accountActivityStub);
 
     await expect(store.recordSwipe(ACTOR_ID, TARGET_ID, 'like')).resolves.toEqual({ created: true, decision: 'like' });
 
@@ -41,7 +42,7 @@ describe('DiscoveryStore', () => {
       .mockResolvedValueOnce(lwtResult)
       .mockResolvedValueOnce(readResult)
       .mockResolvedValueOnce(mirrorResult) };
-    const store = new DiscoveryStore(scylla as never);
+    const store = new DiscoveryStore(scylla as never, accountActivityStub);
 
     await expect(store.recordSwipe(ACTOR_ID, TARGET_ID, 'like')).resolves.toEqual({ created: false, decision: 'like' });
     expect(scylla.execute.mock.calls[1][0]).toContain('TTL(decision) AS remaining_ttl');
@@ -56,5 +57,31 @@ describe('DiscoveryStore', () => {
     expect(uuidBucket(ACTOR_ID)).toBeLessThan(32);
     expect(uuidBucket(ACTOR_ID)).toBe(uuidBucket(ACTOR_ID));
     expect(() => uuidBucket('not-a-uuid')).toThrow('invalid UUID');
+  });
+
+  it('keeps the source reference until its counterpart deletion is confirmed', async () => {
+    const scylla = { enabled: true, execute: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ get: () => TARGET_ID }] })
+      .mockRejectedValueOnce(new Error('lost mirror deletion response')) };
+    const store = new DiscoveryStore(scylla as never, accountActivityStub);
+    await expect(store.deleteUserDataBatch(ACTOR_ID, uuidBucket(TARGET_ID))).rejects.toThrow('lost mirror');
+    expect(scylla.execute).toHaveBeenCalledTimes(2);
+    expect(scylla.execute.mock.calls[0][0]).toContain('LIMIT 100');
+    expect(scylla.execute.mock.calls[1][0]).toContain('DELETE FROM swipes_by_target_bucket');
+  });
+
+  it('does not mistake a full page for the end of a Scylla partition', async () => {
+    const scylla = { enabled: true, execute: jest.fn().mockResolvedValue({ rows: [] }) };
+    scylla.execute.mockResolvedValueOnce({ rows: Array.from({ length: 100 }, () => ({ get: () => TARGET_ID })) });
+    const store = new DiscoveryStore(scylla as never, accountActivityStub);
+    await expect(store.deleteUserDataBatch(ACTOR_ID, uuidBucket(TARGET_ID))).resolves.toBe(false);
+    expect(scylla.execute).toHaveBeenCalledTimes(201);
+    await expect(store.deleteUserDataBatch(ACTOR_ID, uuidBucket(TARGET_ID))).resolves.toBe(true);
+  });
+
+  it('fails closed when Scylla is disabled during erasure', async () => {
+    const scylla = { enabled: false, execute: jest.fn() };
+    await expect(new DiscoveryStore(scylla as never, accountActivityStub).deleteUserDataBatch(ACTOR_ID, 0)).rejects.toThrow('disabled');
+    expect(scylla.execute).not.toHaveBeenCalled();
   });
 });
