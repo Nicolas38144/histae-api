@@ -1,8 +1,7 @@
 # Frontières de responsabilités
 
-Mise à jour : 4 septembre 2026. Ces frontières incluent R01 (notifications durables), R02 (effacement
-reprenable), R03 (concurrence/reprises) et R04 (suivi OTP/Sweego), sans nouveau service à déployer. R03 applique un correctif versionné
-au pilote Scylla existant ; le contrat de suppression R02 est détaillé séparément.
+Ce document fixe les frontières internes à préserver lors d’un refactor. Il complète la vue d’ensemble de
+[resume.md](../resume.md) sans recopier le contrat HTTP ni le backlog.
 
 ## Composants spécialisés
 
@@ -27,7 +26,7 @@ au pilote Scylla existant ; le contrat de suppression R02 est détaillé sépar�
 
 Les modules Nest injectent directement ces composants. Il n'existe pas de façade de repository qui recrée ses
 dépendances avec `new` ou conserve une copie des anciennes méthodes. Les contrôleurs gardent leurs guards,
-validations et limites de débit. R02 ajoute l’authentification récente aux transitions RGPD ; le dashboard suit
+validations et limites de débit. Les transitions RGPD exigent une authentification récente ; le dashboard suit
 leur progression et les reprises, sans piloter directement les étapes internes.
 
 ## Frontières transactionnelles à conserver
@@ -47,7 +46,7 @@ leur progression et les reprises, sans piloter directement les étapes internes.
 - `admin-audit.ts` reçoit la transaction de la consultation ou mutation protégée. La réconciliation photo
   conserve dans ce même commit le passage à `deleting`, la remise en file outbox et l'audit motivé.
 - Le webhook facture récupère la souscription Stripe avant d'ouvrir la transaction PostgreSQL. La projection
-  et la marque d'idempotence restent atomiques. Depuis R01, les notifications et intentions par appareil font
+  et la marque d'idempotence restent atomiques. Les notifications et intentions par appareil font
   aussi partie de cette transaction ; seul le réseau est différé au worker. Un doublon ne recrée pas de tâche.
   `notification-billing.ts` partage le prédicat de pertinence Stripe entre programmation et envoi ; le contexte
   reste interne. Voir [notifications durables](durable-notifications.md) pour le schéma et les limites d’acquittement.

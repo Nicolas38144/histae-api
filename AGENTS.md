@@ -8,7 +8,7 @@ Histae API est le backend TypeScript de l'application mobile de rencontres Hista
 
 Les sources de référence à consulter avant une modification importante sont :
 
-- `resume.md` pour l'architecture, les règles métier, les risques ouverts et la feuille de route ;
+- `resume.md` pour l'architecture, les capacités livrées et les principaux invariants ;
 - `docs/roadmap.md` pour le backlog détaillé, les limites constatées, les priorités et les critères de fin ;
 - `routes.md` pour le contrat HTTP existant ;
 - `test.md` pour les commandes, prérequis, règles d’isolation et limites de validation ; les scénarios détaillés restent dans les tests, les bilans de lots dans la roadmap ;
@@ -30,7 +30,7 @@ Ne dupliquer ni profils ni autres données personnelles de référence dans Scyl
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `operations`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
@@ -89,7 +89,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
 - Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers.
 - La suppression de compte est protégée par un jeton dédié à usage unique et doit nettoyer Stripe/Scylla/PostgreSQL dans l'ordre documenté.
-- L’effacement R02 est asynchrone : consommer le jeton, créer DSR/checkpoint/outbox `account.erase` et désactiver le compte dans une seule transaction, puis répondre `202`. `ErasureService` reprend Stripe → photos → Scylla → PostgreSQL hors transaction réseau. Ne terminer la DSR qu’avec l’anonymisation locale ; ne jamais autoriser l’abandon d’un `account.erase`.
+- L’effacement est asynchrone : consommer le jeton, créer DSR/checkpoint/outbox `account.erase` et désactiver le compte dans une seule transaction, puis répondre `202`. `ErasureService` reprend Stripe → photos → Scylla → PostgreSQL hors transaction réseau. Ne terminer la DSR qu’avec l’anonymisation locale ; ne jamais autoriser l’abandon d’un `account.erase`.
 - Préserver les guards SQL contre les écritures tardives et les verrous de session `AccountActivityService` des uploads, Checkout et swipes. Normaliser/trier les UUID ; ce pool dédié ajoute quatre connexions maximum et exige un pooling de session. Les lots d’effacement sont bornés et les checkpoints vérifient la propriété du worker. Les intentions Stripe inconnues de plus de 23 heures exigent une réconciliation, jamais un nouveau POST aveugle. Voir `docs/account-erasure.md`.
 - Ne pas modifier les durées de rétention sans mettre à jour la politique, les migrations, la maintenance et les tests correspondants.
 - Ne pas exposer de secret, `.env`, clé fournisseur, token FCM, téléphone ou justification sensible dans les logs ou les réponses.
@@ -102,7 +102,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - La baseline définit ses contraintes et colonnes auto-incrémentées dans les `CREATE TABLE`, parents avant dépendants ; les index suivent leur table, les fonctions/triggers terminent le fichier. Ne pas y concaténer de nouveaux `ALTER TABLE` : les évolutions déployées vont dans une migration incrémentale.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
-- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local, Redis local (base logique 15) et le bucket S3 local. Les tests R03 créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
+- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local, Redis local (base logique 15) et le bucket S3 local. Les tests de résilience créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
 - Conserver `patches/cassandra-driver@4.9.0.patch`, `pnpm-workspace.yaml` et `pnpm-lock.yaml` ensemble : le correctif ferme le pool d’un hôte remplacé après coupure. Rejouer le test réseau et vérifier l’arrêt naturel du processus lors d’une évolution du pilote ; ne pas masquer une fuite par `forceExit`.
 
 ## Commandes de travail
@@ -134,19 +134,18 @@ pnpm run test:integration
 
 Des commandes ciblées existent : `test:integration:postgres`, `test:integration:scylla` et `test:integration:redis`. Commencer par les tests les plus proches du changement, puis élargir selon le risque. Ne pas annoncer que la suite est verte sans l'avoir exécutée dans l'état courant du dépôt.
 
-## État connu et priorités
+## État de référence
 
-Au 4 septembre 2026, la baseline `001_baseline_20260904` consolide la chaîne locale précédemment appliquée jusqu’à `014_sweego_delivery_tracking` ; consulter `docs/roadmap.md` pour les bilans validés et `test.md` pour les procédures. L’intégration PostgreSQL couvre notamment le rejeu/conflit/consommation photo, les reprises/dead letters de l’outbox, les notifications transactionnelles et reprises par appareil, l’effacement concurrent des notifications et les alertes Stripe obsolètes, les décisions opérateur auditées, la suppression en cascade des réponses, la revue photo et l’invalidation d’une session quand sa passkey est révoquée. R02 ajoute 26 scénarios d’effacement avec checkpoints perdus, écritures tardives, upload en cours, verrouillage et reprise auditée. `docs/sql-performance.md` décrit l’audit des requêtes et les plans mesurés.
+La baseline PostgreSQL courante est `001_baseline_20260904`; toute nouvelle évolution persistante commence à
+`015_<description>`. Les capacités livrées et la dernière validation connue sont résumées dans `resume.md`. Les
+travaux ouverts, leur ordre et leurs critères de fin vivent uniquement dans `docs/roadmap.md`.
 
-Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
+SeaweedFS `weed mini` reste une cible de développement mono-machine. Avant la production, éprouver une cible
+S3-compatible durable, hautement disponible, sauvegardée et supervisée. Valider également les fournisseurs réels,
+les restaurations, l’exploitation WebAuthn, la charge et la sécurité indépendante selon la roadmap.
 
-Le backlog détaillé et ses critères de validation sont centralisés dans `docs/roadmap.md`. R01 (notifications durables), R02 (effacement reprenable et suivi dashboard) et R03 (concurrence/pannes) sont livrés. R04 ajoute le suivi Sweego, les callbacks signés et les reprises sans renvoi ; son bilan reste dans la roadmap. Le prochain lot API conseillé est la réconciliation Stripe, dont les créations Customer incertaines trop anciennes. Le bornage des traitements, les exports et les logs restent à consolider. Avant production, terminer également calibration/recours de modération, alertes/supervision, sauvegardes/restaurations, exploitation WebAuthn, charge et audit indépendant. Mettre à jour la feuille de route après chaque lot validé plutôt que dupliquer son inventaire ici.
-
-La baseline contient les familles de refresh, les notifications durables, l’effacement reprenable et le suivi Sweego. Toute nouvelle évolution persistante exige une migration 015 ou ultérieure. Arrêter les anciens écrivains et déployer API et workers compatibles ensemble : un ancien worker ne connaît pas ces événements ou ignore leurs contrôles. Les références sont effacées avec notification/appareil/événement purgé ; ne pas copier les tokens FCM dans l’outbox ni prolonger les rétentions existantes.
-
-R03 couvre continuation/quota Free, tombstones, retrait concurrent des consentements, pagination matchs/signalements, maintenances sur données expirées, coupures Redis/Scylla/S3 et arrêts réels du worker d’effacement. R04 vérifie aussi les issues SMS, les callbacks et les pertes de réponse avec PostgreSQL et un serveur HTTP local. Restent à éprouver la destination Sweego réelle et ses retries, un parcours Stripe sandbox complet, les volumes, les pannes de l’hôte et les restaurations sur la cible de production ; les tests locaux ne remplacent pas ces validations.
-
-Les validations juridiques/DPO, l'AIPD, les comptes inactifs, les sous-traitants/transferts et les règles de sauvegarde ne sont pas des décisions à inventer dans le code. Les signaler comme dépendances lorsqu'une tâche les touche.
+Les validations juridiques/DPO, l'AIPD, les comptes inactifs, les sous-traitants/transferts et les règles de
+sauvegarde ne sont pas des décisions à inventer dans le code. Les signaler comme dépendances lorsqu'une tâche les touche.
 
 ## Discipline de modification
 

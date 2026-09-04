@@ -1,6 +1,9 @@
 # Histae API — contrat HTTP
 
-Ce guide décrit les routes destinées au mobile, au dashboard et aux intégrations. Il ne décrit pas les mécanismes SQL ou les workers internes. Aucun document OpenAPI ni Swagger n’est exposé.
+Ce guide est la référence manuelle du contrat destiné au mobile, au dashboard et aux intégrations. Il ne décrit
+pas les mécanismes SQL ou les workers internes. Aucun document OpenAPI ni Swagger n’est exposé. L’inventaire
+méthode/chemin est comparé automatiquement au graphe Nest/Fastify ; les corps et autorisations restent couverts
+par leurs tests de contrat dédiés.
 
 ## Sommaire
 
@@ -349,7 +352,7 @@ Ces quatre routes d’entrée ne demandent pas de session existante. La preuve W
 
 En développement, ouvrir **`http://localhost:5173`**, RP ID `localhost`, via le proxy même-origine `/api` du dashboard ; pas `127.0.0.1`. En production : origine HTTPS exacte, cookie `Secure` préfixé `__Host-`. Le RP ID doit correspondre au domaine configuré.
 
-Transmettre les options à l’API WebAuthn du navigateur et renvoyer le credential sérialisé. Passkey découvrable et vérification utilisateur obligatoires. Challenge valable cinq minutes, à usage unique. La session publique expose `user_id, role, authenticated_at, expires_at`, jamais son secret. Bootstrap, créé hors bande, expire après quinze minutes par défaut. Procédure d’enrôlement : [README](README.md#authentification).
+Transmettre les options à l’API WebAuthn du navigateur et renvoyer le credential sérialisé. Passkey découvrable et vérification utilisateur obligatoires. Challenge valable cinq minutes, à usage unique. La session publique expose `user_id, role, authenticated_at, expires_at`, jamais son secret. Bootstrap, créé hors bande, expire après quinze minutes par défaut. Procédure d’enrôlement : [README](README.md#dashboard-administrateur).
 
 ### Sessions et passkeys
 

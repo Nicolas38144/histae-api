@@ -1,348 +1,161 @@
-# Histae API — résumé du projet
+# Histae API — état du projet
 
-Mise à jour : 4 septembre 2026.
+Mise à jour : 4 septembre 2026.
 
-Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
-de test : consulter `routes.md` pour le contrat HTTP, `test.md` pour le guide de validation et `test/` pour les scénarios détaillés.
-
-## 1. État actuel
-
-Histae API est un backend NestJS 11/Fastify 5 en TypeScript strict pour l’application mobile de rencontres Histae.
-Le socle fonctionnel principal est implémenté :
-
-- authentification mobile par OTP SMS/JWT et authentification administrateur WebAuthn native ;
-- onboarding, profil, questions/réponses guidées, préférences, traits et consentements ;
-- découverte distribuée, swipes et création de match par like réciproque ;
-- cycle de vie des matchs, révélation mutuelle, continuation et messagerie ;
-- blocage, signalement, modération et audit des accès administratifs ;
-- appareils, push sans contenu privé et événements SSE ;
-- abonnement Premium et projection Stripe ;
-- demandes RGPD, export, effacement durable par étapes et maintenance de rétention ;
-- photos privées normalisées en WebP dans un stockage objet compatible S3 ;
-- qualité et modération des photos, bios et réponses libres avec file de revue auditée ;
-- health checks, migrations contrôlées et tests réels des stockages.
-- observabilité interne, suivi persistant des maintenances et récupération auditée des dead letters.
-
-Les consolidations successives ont isolé les responsabilités HTTP, métier et stockage, puis renforcé les
-cycles photo/outbox, l’authentification et les workflows RGPD. L’état PostgreSQL final jusqu’au suivi Sweego R04
-est désormais défini dans une seule baseline. Les invariants sont dans `AGENTS.md`, les risques restants dans
-`docs/roadmap.md`, qui conserve aussi la portée et les limites des contrôles de sécurité.
-
-## 2. Architecture
-
-### Stack
-
-- Node.js 22+, pnpm 11.22.0, TypeScript strict ;
-- NestJS 11 sur Fastify 5 ;
-- SimpleWebAuthn côté serveur pour le standard WebAuthn administrateur ;
-- PostgreSQL via `pg` ;
-- ScyllaDB via `cassandra-driver` ;
-- Redis pour le rate limiting et le relais Pub/Sub SSE ;
-- SDK AWS v3 pour un stockage objet S3-compatible ;
-- Sharp et `heic-decode` pour les photos ;
-- un service local optionnel FastAPI/OpenCV/ONNX pour la détection de visage, la netteté et le score NSFW ;
-- Sweego pour les OTP, FCM pour le push, Stripe pour la facturation ;
-- Jest pour les tests unitaires, e2e et d’intégration.
-
-### Responsabilité des stockages
-
-PostgreSQL est l’autorité transactionnelle pour les comptes, profils, questions/réponses, consentements, préférences, traits,
-abonnements, matchs, messages, signalements, cas de modération, appareils, notifications, audit et workflows RGPD.
-
-ScyllaDB ne stocke que les décisions de découverte, dans deux tables orientées requêtes : actions sortantes et
-décisions reçues. Les profils ne sont jamais dupliqués dans Scylla. Un TTL limite naturellement la rétention.
-
-Redis porte les compteurs de débit partagés et le bus d’événements temps réel inter-instances. En production, son
-indisponibilité fait échouer fermement la protection avec `503`, au lieu de laisser passer les requêtes.
-
-Le stockage objet ne contient que les photos privées. SeaweedFS `weed mini` est le choix local pour une machine,
-pas une dépendance applicative : changer de fournisseur revient à modifier les six variables `OBJECT_STORAGE_*`.
-
-### Organisation des sources
-
-Les domaines sont dans `src/admin`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `outbox`, `photos`, `plans`,
-`privacy`, `profile-questions`, `reports`, `traits` et `users`. Les briques transverses sont dans `common`, `config`, `crypto`,
-`database`, `operations`, `ratelimit`, `redis`, `scylla` et `storage`.
-
-La convention est : contrôleur pour HTTP, DTO pour la validation stricte des entrées, service pour les règles métier, repository
-ou store pour SQL/CQL et mapper/model pour les représentations publiques.
-
-Les messages et la maintenance des matchs ont leurs repositories dédiés, tout comme les métriques et la
-réconciliation photo administratives. `StripeWebhookService` sépare l'ingestion Stripe des parcours Checkout/portail
-de `BillingService`. `ErasureService` orchestre les effets externes, `ErasureRepository` conserve les checkpoints
-et finalise l’anonymisation locale ; `AccountActivityService` coordonne les écrivains externes par des verrous
-de session. Voir `docs/module-responsibilities.md` pour les frontières à maintenir.
-
-## 3. Contrat HTTP et sécurité
-
-Les routes métier sont sous `/api`. Les seules exceptions sont `/health/live` et `/health/ready`. L’API
-n’embarque ni OpenAPI ni Swagger ; le contrat HTTP est maintenu dans `routes.md`.
-
-Les corps JSON sont limités à 1 Mio. Les DTO utilisent une whitelist stricte et rejettent les champs inconnus.
-Les erreurs publiques suivent toujours :
-
-```json
-{
-  "error": {
-    "code": "stable_code",
-    "message": "Human-readable message"
-  }
-}
-```
-
-Les réponses portent un `X-Request-ID`, `Cache-Control: no-store` et des en-têtes défensifs centralisés. Un UUID
-client n’est conservé que s’il est v4. HSTS est ajouté en production. Les logs HTTP enregistrent méthode, chemin
-sans query string, statut, identifiant et durée, jamais les recherches ou motifs présents dans l’URL.
-
-`TRUST_PROXY=false` est le défaut. En production, `true` est interdit : il faut lister exactement les IP/CIDR des
-proxies autorisés, sinon une adresse transmise par le client pourrait fausser les journaux et limites par IP.
-
-### Authentification et autorisation
-
-- Access token JWT HS256, typé `access`, avec issuer `histae-api` et audience `histae-app`.
-- Le rôle, le bannissement, la suppression et l’état juridique sont relus dans PostgreSQL à chaque requête ;
-  aucune autorité n’est accordée à un rôle fourni par le client ou resté dans un ancien token.
-- Refresh token au format `UUIDv4:secret-base64url`, secret aléatoire de 256 bits, hash SHA-256 en base, rotation
-  et révocation transactionnelles par famille. Un ancêtre authentique rejoué avant son expiration révoque toute
-  sa famille. Les JWT sont liés à celle-ci par `sid`, avec relecture à chaque requête et sélection locale de clé par `kid`.
-  Les sessions peuvent être listées/révoquées, toutes déconnectées et reliées aux appareils push. Le mobile doit
-  sérialiser les refresh ; une réponse perdue peut imposer un nouvel OTP. Voir `docs/mobile-sessions.md`.
-- OTP à six chiffres stocké sous forme de HMAC, à usage unique, activé seulement après acceptation du SMS par le
-  fournisseur ou callback d’envoi signé, et protégé par idempotence. Les réponses perdues restent `unknown`,
-  sans renvoi automatique ; les callbacks tardifs ne réactivent aucun code consommé/remplacé/expiré.
-  `sms_sent` ne prouve pas une réception au téléphone. Voir [suivi Sweego](docs/sweego-delivery.md).
-- Numéro limité actuellement au format français E.164. Le clair n’est ni persisté ni journalisé : HMAC-SHA-256
-  pour l’index et AES-256-GCM avec nonce/tag pour la valeur récupérable.
-- Les administrateurs ont des contrôles de rôle en base. Les accès aux détails personnels et conversations
-  exigent un motif et créent une trace dans `data_access_log`.
-- Les routes admin refusent les JWT mobiles et exigent une passkey WebAuthn avec vérification utilisateur. Les clés
-  privées ne quittent jamais l’authenticator ; seuls la clé publique, le compteur, les secrets opaques hashés et les
-  événements d’authentification sont stockés.
-- Les sessions admin vivent dans un cookie `HttpOnly; SameSite=Strict`, expirent après 30 minutes d’inactivité et
-  8 heures au maximum, sont relues dans PostgreSQL à chaque requête et deviennent invalides avec le compte ou la
-  passkey. Les mutations vérifient l’origine exacte contre les requêtes intersites.
-- En développement, WebAuthn utilise `http://localhost:5173` et le RP ID `localhost` derrière le proxy Vite `/api`.
-  La production exige une origine HTTPS et un cookie `__Host-…; Secure`.
-- Le dashboard peut renommer les passkeys, lister/révoquer une session active et consulter un historique paginé.
-  Ces représentations excluent systématiquement secrets, hashes et clés publiques.
-
-Le rate limiting est global par IP et renforcé sur WebAuthn admin, OTP, refresh, feed, swipe, message, export,
-signalement, photo, facturation et webhook Stripe. Les clés de compteurs sont HMACées. Le fallback mémoire non-production purge ses
-entrées expirées.
-
-### Consentements et confidentialité
-
-Les quatre choix juridiques sont :
-
-- acceptation des CGU ;
-- accusé de présentation de la notice de confidentialité ;
-- consentement aux données sensibles ;
-- consentement de localisation.
-
-Il n’existe pas de consentement marketing. Les deux premiers choix et leurs versions courantes conditionnent les
-routes utilisateur normales. Le sexe et les préférences nécessitent le consentement sensible ; la présence exige
-celui de localisation. Leur retrait efface immédiatement les données correspondantes.
-
-L’export RGPD contient les données de l’utilisateur dans PostgreSQL et uniquement ses décisions Scylla sortantes :
-les décisions entrantes de tiers restent secrètes. L’effacement supprime d’abord l’identité Stripe et la photo,
-efface les données Scylla, puis anonymise PostgreSQL. Les factures requises pour la comptabilité sont détachées du
-compte. Un tombstone temporaire n’est gardé que pour empêcher un compte banni de contourner la sûreté par effacement.
-
-## 4. Règles métier essentielles
-
-### Profil et onboarding
-
-La date de naissance est une date calendrier stricte `YYYY-MM-DD`; les dates impossibles sont refusées et le
-contrôle des 18 ans existe dans l’application comme dans PostgreSQL. Les valeurs de sexe/préférence viennent de
-types fermés et ne sont acceptées qu’avec le consentement requis.
-
-Le catalogue propose initialement quinze questions réparties en cinq catégories. Un utilisateur remplace
-atomiquement une sélection ordonnée de zéro à trois réponses, chacune liée à une question distincte et limitée à
-10–300 caractères. Le propriétaire et l’export RGPD conservent toutes les réponses ; le feed et les matchs ne
-projettent que celles dont la modération est `approved`. Le dashboard admin peut ajouter, modifier et supprimer les
-questions. Une suppression est physique et entraîne volontairement toutes les réponses liées par `ON DELETE
-CASCADE`, après avertissement sur leur nombre.
-
-### Découverte et matchs
-
-Le feed combine les candidats relationnels PostgreSQL avec les décisions Scylla déjà prises. Les écritures CQL
-sont immuables pendant leur TTL. Les likes réciproques créent un seul match grâce à la concurrence Scylla et à
-l’unicité/transaction PostgreSQL.
-
-Un match est actif pendant 24 heures, peut ensuite attendre la continuation, puis devient confirmé ou expiré.
-La continuation et le quota Free sont atomiques. Les messages exigent une participation valide, respectent l’état
-du match et utilisent un UUID v4 d’idempotence ; rejouer la même mutation retourne le même message.
-
-Le push ne contient jamais le texte d’un message. Il transporte uniquement des identifiants de resynchronisation.
-Le flux SSE annonce les créations/mises à jour de match, invalidations, messages, lectures et abonnements.
-
-Depuis R01, les notifications de match/message et les alertes Stripe sont persistées dans la transaction métier,
-avec une tâche outbox `notification.push` par appareil. Les reprises sont indépendantes, dédupliquées en base,
-et revérifient compte, session et contexte métier avant envoi. `notification_id` reste stable lors des retries ;
-FCM peut néanmoins livrer un doublon après une issue réseau incertaine. SSE reste best-effort.
-Voir [notifications durables](docs/durable-notifications.md) pour l’exploitation, les métriques et les limites.
-
-### Photos privées
-
-`PUT /api/users/me/photo` exige `Idempotency-Key: <UUID v4>` et accepte un unique champ multipart `photo`. Les
-extensions admises sont `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif` et `.webp`. L’entrée comme le WebP produit sont
-limitées à **500 000 octets**.
-
-Le processeur vérifie extension, MIME, signature binaire, pixels et dimensions, borne le décodage HEIC, applique
-l’orientation, réduit à 2 048 px maximum et retire les métadonnées. Chaque WebP final reçoit une clé immuable :
-
-```text
-profile-photos/<user_uuid>/<photo_uuid>.webp
-```
-
-La table `user_photo` conserve l’état `pending | processing | ready | deleting`, la clé privée, le MIME, la taille,
-les dimensions et le SHA-256. Les contraintes garantissent au plus une photo `ready` et une conversion en cours
-par utilisateur. `photo_upload_request` conserve pendant 24 heures la clé d’idempotence et un SHA-256 borné du
-nom, du MIME et du contenu source, jamais la photo. Un retry identique d’une demande terminée renvoie la photo
-courante sans nouvelle conversion ; un contenu différent ou un résultat déjà remplacé est refusé explicitement.
-
-L’activation rend la nouvelle version techniquement `ready`, passe l’ancienne à `deleting`, termine l’état d’idempotence et
-insère `photo.delete` dans `outbox_event`, le tout dans la même transaction. Le worker supprime ensuite l’objet et
-la ligne technique avec verrous `SKIP LOCKED`, concurrence bornée, backoff exponentiel, dix tentatives et état
-`dead_letter`. Une écriture S3 incertaine reste réconciliable par la maintenance horaire. La photo n’est publique
-qu’après approbation de son cas de modération associé.
-
-`GET /api/admin/metrics` agrège les états photo, les traitements anciens de plus de 30 minutes, les dead letters et
-les suppressions sans événement actif. `GET /api/admin/photo-reconciliation` expose une file technique paginée sans clé
-objet ni image. `POST /api/admin/photo-reconciliation/:id/retry` refuse les photos `ready` et les workers actifs,
-puis rend l’objet invisible, remet `photo.delete` en file et inscrit `admin_reconcile_photo` avec le motif dans une
-unique transaction PostgreSQL.
-
-La file `/api/admin/outbox/dead-letters` ne révèle ni payload ni agrégat. Relancer ou abandonner un événement
-exige une authentification récente et écrit `outbox_operator_action` sous le même verrou transactionnel. Un
-`photo.delete` ne peut être abandonné que si sa ligne `user_photo` a déjà disparu ; les événements résolus sont
-purgés après sept jours et leur audit opérateur après un an.
-
-PostgreSQL ne contient jamais d’URL publique ou signée. Les URL signées expirent après cinq minutes et ne sont
-générées que pour le propriétaire, un export du propriétaire, un match après révélation mutuelle ou un détail
-admin audité. Les collections admin et blocages renvoient toujours `photo: null`. Les appels S3 réseau sont bornés
-à dix secondes.
-
-### Qualité et modération des contenus
-
-`content_moderation_case` conserve un statut `pending | approved | rejected` indépendant du cycle technique et
-référence exactement une photo, une bio ou une réponse. Chaque modification remplace la décision précédente de ce
-contenu. Les contenus existant lors de la migration sont classés `pending/legacy_unreviewed` : ce choix fail-safe
-les masque du feed et des matchs jusqu’à leur revue, sans les supprimer ni les cacher à leur propriétaire.
-
-La bio et les réponses utilisent des règles locales explicables pour repérer spam, insultes, coordonnées
-personnelles et vocabulaire sexuel. Une photo WebP peut être transmise au service local optionnel
-`services/photo-moderation`, authentifié par token et borné par timeout : OpenCV compte les visages et mesure la
-netteté, tandis qu’un petit modèle ONNX calcule un score NSFW. Un contenu sans signal est automatiquement
-`approved`; un signal ou une analyse indisponible produit `pending`. L’automatisation ne rejette jamais seule.
-
-La liste `GET /api/admin/content-moderation` ne contient ni texte, ni clé objet, ni URL. Le détail exige un motif,
-audite `view_moderation_content`, puis seulement signe la photo éventuelle. Une décision est protégée par version
-optimiste et audite `admin_review_content`. Pour une photo, le reviewer doit attester visage détectable, netteté et
-contenu autorisé ; un rejet rend la photo invisible, la passe à `deleting` et écrit `photo.delete` dans l’outbox au
-sein de la même transaction.
-
-## 5. Facturation
-
-Stripe Checkout accepte uniquement la période mensuelle ou annuelle ; les Product/Price IDs et tarifs viennent de
-la configuration et du catalogue serveur. Les créations sont idempotentes et une seule session live est admise.
-
-Le webhook utilise le corps brut et la signature Stripe, une limite dédiée, une table de déduplication et l’ordre
-temporel des événements pour empêcher un événement ancien d’écraser un état plus récent. PostgreSQL garde la
-projection d’abonnement et le registre des factures, mais l’estimation admin ne doit pas être présentée comme une
-comptabilité de trésorerie.
-
-## 6. PostgreSQL et migrations
-
-`db/schema_postgres.sql` définit directement tout le schéma jusqu’à l’ancienne migration 014 ; les catalogues
-plans/traits/questions et le seed optionnel des 400 profils restent dans `db/insert_postgres.sql`. La baseline
-`001_baseline_20260904` remplace l’ancienne baseline et les treize fichiers incrémentaux supprimés.
-
-`pnpm run db:migrate` initialise un schéma vide, contrôle strictement les versions et checksums déjà
-enregistrés, puis applique les futures migrations cataloguées. Le moteur courant n’adopte plus les anciennes
-chaînes. Le [guide de migration](docs/postgres-migrations.md) décrit le reset local protégé et la stratégie
-requise pour toute base déjà déployée dans un autre environnement.
-
-Les migrations restent sérialisées par verrou consultatif et transactionnelles. Le checksum de la nouvelle
-baseline est indépendant des fins de ligne LF/CRLF et ne doit plus changer après son enregistrement.
-La prochaine évolution persistante utilisera `015_<description>`, sans réutiliser les anciens identifiants.
-
-`pnpm run db:reset` reste distinct, destructif et limité à `ENV=development`, PostgreSQL local et `histae-dev`.
-Il reconstruit les objets applicatifs et les utilisateurs factices, sans supprimer les extensions partagées.
-Le reset local a été choisi pour terminer cette consolidation. Scylla conserve son schéma, son historique et ses procédures.
-
-## 7. Exploitation
-
-`/health/live` indique que le processus répond. `/health/ready` vérifie PostgreSQL, Scylla quand activé, Redis quand
-activé et le bucket objet. La fermeture Nest libère les pools/clients.
-
-La maintenance peut fonctionner dans l’API, dans un worker séparé ou être désactivée. Elle expire notamment les
-présences, OTP, refresh tokens, notifications, consentements retirés, demandes RGPD closes, journaux d’accès,
-signalements, tombstones, jetons de suppression, matchs et messages selon `docs/retention-policy.md`. Elle réconcilie
-également les challenges/enrôlements WebAuthn consommés ou expirés, sessions admin obsolètes et audits de plus d’un
-an, ainsi que les actions opérateur outbox de plus d’un an. Elle réconcilie aussi les conversions photo abandonnées, les clés d’idempotence expirées et, comme filet de sécurité, les objets
-dont la suppression S3 doit être retentée.
-
-L’outbox est consommée chaque seconde par l’API lorsque `MAINTENANCE_MODE=api`. Pour séparer le trafic HTTP des
-effets externes, `MAINTENANCE_MODE=worker pnpm run outbox:work` lance un consommateur dédié et arrêtable proprement.
-Les événements terminés ou explicitement abandonnés sont purgés après sept jours ; les dead letters restent
-visibles jusqu’à une décision opérateur.
-
-Les métriques opérationnelles restent en mémoire avec une cardinalité de routes bornée. Elles agrègent latences,
-erreurs HTTP, `401`/`403`/`429`/`5xx`, dépendances, mémoire, event loop et pool PostgreSQL. Le snapshot admin les
-combine aux profondeurs outbox et aux derniers états persistants des jobs `matches`, `photos`, `privacy` et
-`outbox`, avec indicateurs `missing` et `overdue`.
-
-En local, les Compose sont séparés pour ScyllaDB, Redis, SeaweedFS et l’analyse photo. Le Compose objet lie l’API S3 à
-`127.0.0.1:8333`, crée le bucket privé et possède un healthcheck. Ce montage mono-machine n’est pas une cible de
-production. `docker-compose.photo-moderation.yml` lie le service CPU sur `127.0.0.1:8090`, l’exécute sans
-privilège, en lecture seule, avec ressources bornées et healthcheck. Il ne reçoit que le WebP déjà normalisé et ne
-le persiste pas.
-
-## 8. Validation et documents de référence
-
-Commandes autonomes :
-
-```powershell
-pnpm run lint
-pnpm run typecheck
-pnpm run build
-pnpm run test:unit
-pnpm run test:e2e
-pnpm test
-```
-
-Avec PostgreSQL, ScyllaDB, Redis et S3 locaux :
-
-```powershell
-pnpm run test:integration
-```
-
-Les commandes, prérequis et limites de validation se trouvent dans `test.md` ; les bilans des lots livrés sont dans la roadmap. Les autres références sont :
-
-- `routes.md` : contrat HTTP exhaustif ;
-- `.env.example` : variables et valeurs locales documentées ;
-- `docs/retention-policy.md` : durées et opérations de purge ;
-- `docs/legal-release-checklist.md` : décisions juridiques à obtenir avant mise en production ;
-- `AGENTS.md` : invariants de travail pour les futures modifications.
-
-## 9. Ce qu’il reste à faire
-
-Le backlog détaillé est centralisé dans [docs/roadmap.md](docs/roadmap.md) : limites constatées,
-améliorations, tests manquants, périmètres API/dashboard et critères de fin.
-
-Ordre conseillé côté API :
-
-1. Réconcilier Stripe, dont les créations Customer incertaines (R05). Le suivi Sweego R04 est implémenté ;
-   configurer et éprouver la destination réelle avant production.
-2. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
-
-R01 à R04 sont terminés ; leurs évolutions PostgreSQL sont réunies dans la baseline du 4 septembre. Les notifications
-historiques ne sont pas rejouées. Le pilote Scylla 4.9.0 conserve son correctif pnpm de fermeture des pools après
-coupure. R04 n’ajoute ni dépendance ni écran dashboard. Les bilans de validation sont dans la
-[roadmap](docs/roadmap.md), les règles d’isolation dans [les tests de résilience](docs/resilience-tests.md).
-
-Avant production : calibration et recours de modération, alertes et supervision des workers,
-sauvegardes/restaurations éprouvées, exploitation WebAuthn, tests de charge et audit indépendant.
-Les décisions DPO/juridiques et de rétention restent des dépendances explicites, pas des choix à inventer dans le code.
-Une nouvelle réécriture générale ou une migration vers des microservices n’est pas justifiée à ce stade.
+Ce document permet de reprendre rapidement le contexte technique et métier. Il ne duplique ni les routes
+([routes.md](routes.md)), ni les procédures de test ([test.md](test.md)), ni le backlog
+([docs/roadmap.md](docs/roadmap.md)).
+
+## Capacités livrées
+
+Histae API est un monolithe modulaire NestJS 11/Fastify 5 en TypeScript strict. Le socle courant comprend :
+
+- authentification mobile OTP/JWT, familles de refresh et gestion des appareils ;
+- authentification administrateur WebAuthn native et sessions serveur opaques ;
+- onboarding, consentements, profil, préférences, traits et trois réponses guidées au maximum ;
+- découverte ScyllaDB, swipes, match réciproque, continuation et messagerie ;
+- abonnements Premium et projection Stripe ;
+- blocages, signalements, modération des textes/photos et audit administratif ;
+- photo privée unique, conversion WebP, stockage S3-compatible et suppression par outbox ;
+- notifications durables par appareil, push optionnel et signaux SSE ;
+- export, demandes RGPD et effacement reprenable ;
+- healthchecks, métriques internes, maintenances et reprise auditée des dead letters.
+
+Les travaux encore ouverts et leur ordre sont centralisés dans la roadmap.
+
+## Architecture
+
+### Technologies
+
+| Zone | Choix |
+| --- | --- |
+| Runtime | Node.js 22+, pnpm 11.22.0, TypeScript strict |
+| HTTP | NestJS 11, Fastify 5 |
+| Données | PostgreSQL via `pg`, ScyllaDB via `cassandra-driver`, Redis |
+| Photos | SDK AWS v3, Sharp, `heic-decode` |
+| Admin | SimpleWebAuthn côté serveur |
+| Fournisseurs | Sweego, Firebase Cloud Messaging, Stripe |
+| Tests | Jest, contrats Fastify et intégrations réelles locales |
+
+Le service local optionnel `services/photo-moderation` combine FastAPI, OpenCV et ONNX. Il n’est pas une source
+de vérité et ne peut jamais rejeter automatiquement un contenu.
+
+### Stockages
+
+| Stockage | Données autorisées | À ne pas y placer |
+| --- | --- | --- |
+| PostgreSQL | Comptes, profils, consentements, abonnements, matchs, messages, audit, notifications et workflows | URL photo signée ou secret brut |
+| ScyllaDB | Décisions de découverte sortantes et vues orientées cible | Profil ou donnée personnelle de référence |
+| Redis | Compteurs de débit et relais SSE | État métier durable |
+| S3-compatible | WebP privés sans métadonnées | URL publique persistée |
+
+SeaweedFS `weed mini` est uniquement le choix local. Le code passe par `ObjectStorageService` et les six
+variables `OBJECT_STORAGE_*`.
+
+### Organisation du code
+
+Les domaines sont dans `src/admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`,
+`mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`,
+`traits` et `users`. Les briques partagées sont dans `common`, `config`, `crypto`, `database`,
+`operations`, `ratelimit`, `redis`, `scylla` et `storage`.
+
+La séparation attendue est : contrôleur pour HTTP, DTO pour l’entrée stricte, service pour le métier,
+repository/store pour les accès aux données et mapper/model pour les représentations. Les frontières détaillées
+sont dans [docs/module-responsibilities.md](docs/module-responsibilities.md).
+
+## Sécurité et identité
+
+### Mobile
+
+Le téléphone français E.164 n’est jamais persisté ni journalisé en clair. Il est indexé par HMAC et chiffré par
+AES-256-GCM. L’OTP est hashé, à usage unique et activé seulement après une confirmation Sweego exploitable.
+
+Les access tokens sont des JWT HS256 typés `access`, liés à une famille par `sid` et signés avec un `kid`
+local. Le rôle et l’état du compte sont relus dans PostgreSQL. Les refresh tokens sont rotatifs ; le rejeu d’un
+ancêtre authentique révoque sa famille, tandis qu’un mauvais secret ne révoque rien. Voir
+[docs/mobile-sessions.md](docs/mobile-sessions.md).
+
+### Administration
+
+Les JWT mobiles sont refusés sur toutes les routes administratives. Le dashboard utilise exclusivement WebAuthn :
+origine et RP ID exacts, vérification utilisateur, passkey découvrable, challenge à usage unique et compteur
+contrôlé. Les sessions sont opaques, hashées en base et transmises par cookie `HttpOnly; SameSite=Strict`.
+
+Toute mutation vérifie l’origine. Les opérations sensibles exigent une authentification récente. En développement,
+l’unique couple pris en charge est `http://localhost:5173` / `localhost` via le proxy Vite `/api`.
+La production impose HTTPS et un cookie `__Host-…; Secure`.
+
+### HTTP
+
+Les DTO rejettent les champs inconnus. Les erreurs suivent `{ "error": { "code", "message" } }` sans stack.
+Les réponses portent les en-têtes défensifs centralisés et un identifiant de requête. Les limites globales et
+sensibles utilisent Redis en production et échouent fermement si la protection distribuée est indisponible.
+
+## Règles métier structurantes
+
+### Consentements et profil
+
+Les CGU et la notice courantes conditionnent les routes normales. Sexe et préférences nécessitent le consentement
+aux données sensibles ; la présence exige celui de localisation. Les écritures verrouillent le compte et relisent
+le consentement dans la même transaction que la mutation. Un retrait efface immédiatement les données concernées.
+
+La date de naissance est un calendrier strict `YYYY-MM-DD` et l’utilisateur doit avoir au moins 18 ans.
+Un profil conserve zéro à trois réponses ordonnées sur des questions distinctes, entre 10 et 300 caractères.
+Supprimer une question efface ses réponses par cascade après confirmation dans le dashboard.
+
+### Photos et modération
+
+Une photo source doit être un JPG, JPEG, PNG, HEIC, HEIF ou WebP d’au plus 500 000 octets. Extension, MIME,
+signature et dimensions sont vérifiés. Le résultat est un WebP privé sans métadonnées, lui aussi limité à
+500 000 octets et stocké sous `profile-photos/<user_uuid>/<photo_uuid>.webp`.
+
+`PUT /api/users/me/photo` exige une clé d’idempotence UUID v4 conservée 24 heures sous forme d’empreinte.
+Le cycle inter-stockages reste réconciliable : PostgreSQL conserve les états, l’objet est écrit avant activation,
+l’ancienne photo passe à `deleting` et `photo.delete` est émis dans la transaction métier.
+
+Le statut technique et la modération sont indépendants. Seuls une photo `ready + approved`, une bio approuvée
+et des réponses approuvées peuvent apparaître publiquement. L’automatisation approuve uniquement un contenu
+clairement sûr ; tout signal ou échec passe en revue humaine. Les listes admin n’exposent ni contenu ni clé objet ;
+le détail et la décision sont motivés et audités.
+
+### Matchs et notifications
+
+Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques créent un seul match même en
+concurrence. Échéances, continuation, quotas et messages idempotents restent atomiques sous verrou.
+
+Notifications et tâches `notification.push` sont enregistrées dans la transaction métier. Le texte privé d’un
+message ne va jamais dans FCM. Le push est au moins une fois : une réponse externe perdue peut produire un doublon,
+dédupliqué par `notification_id`. SSE reste best-effort et sans replay.
+
+### Facturation et effacement
+
+Le client choisit uniquement une période mensuelle ou annuelle ; produits, prix, devise et essai viennent du
+serveur. Les webhooks Stripe sont signés, dédupliqués et ordonnés avant projection.
+
+L’effacement consomme un jeton dédié, désactive le compte et répond `202`. L’outbox reprend Stripe, photos,
+Scylla puis PostgreSQL. Les checkpoints ne progressent qu’après effets confirmés ; `account.erase` ne peut
+jamais être abandonné. Voir [docs/account-erasure.md](docs/account-erasure.md).
+
+## Base de données et exploitation
+
+`db/schema_postgres.sql` est la baseline PostgreSQL unique `001_baseline_20260904`. Les 44 tables définissent
+leurs contraintes sans `ALTER TABLE`. Les index suivent leur table ; fonctions et triggers terminent le fichier.
+La prochaine évolution persistante utilisera `015_<description>`. Voir
+[docs/postgres-migrations.md](docs/postgres-migrations.md).
+
+`/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. L’outbox et la
+maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
+dashboard sont agrégées, bornées et sans identifiant utilisateur.
+
+Dernière validation complète : lint, typecheck, build, 537 tests autonomes et 185 intégrations locales, soit
+722 tests dans 87 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+
+## Références
+
+- [README.md](README.md) : installation et commandes ;
+- [routes.md](routes.md) : contrat HTTP ;
+- [test.md](test.md) : validation et isolation ;
+- [AGENTS.md](AGENTS.md) : règles impératives de modification ;
+- [docs/roadmap.md](docs/roadmap.md) : travaux ouverts ;
+- [docs/retention-policy.md](docs/retention-policy.md) et
+  [docs/legal-release-checklist.md](docs/legal-release-checklist.md) : décisions à faire valider.

@@ -1,6 +1,7 @@
 # Performance SQL PostgreSQL
 
-Mise à jour : 4 septembre 2026. Mesures historiques conservées ; les ajouts R02/R03 sont décrits sans nouveau benchmark.
+Ce document consigne l’audit des chemins SQL, les plans mesurés et les choix d’indexation. Les chiffres sont des
+mesures locales datées, pas des objectifs de production ; les travaux de capacité restent dans la [roadmap](roadmap.md).
 
 ## Portée et méthode
 
@@ -64,7 +65,7 @@ les deux agrégats message seulement pour les 21 résultats demandés.
   notifications, tombstones, jetons de suppression, consentements retirés, demandes RGPD, signalements, sessions
   et audits administratifs.
 - Les nettoyages ayant deux états disjoints limitent chaque branche indexée avant leur fusion. Cela évite de trier
-  toute l’historique des événements outbox, challenges, bootstraps et sessions pour supprimer un petit lot.
+  tout l’historique des événements outbox, challenges, bootstraps et sessions pour supprimer un petit lot.
 - Les exports disposent d’index orientés utilisateur pour les messages envoyés et signalements soumis. Les listes
   de blocages et journaux d’accès suivent leur ordre de restitution.
 - L’estimation de revenu filtre les abonnements par plan et date via un index composite.
@@ -77,7 +78,8 @@ Elles n’ont pas été condensées au prix d’une perte d’atomicité ou d’
 
 Les exports RGPD restent séquentiels sur un même client PostgreSQL et ne construisent pas un énorme document
 JSON dans la mémoire du serveur. L’isolation actuelle ne garantit pas un snapshot commun à toutes les requêtes ;
-leur cohérence et leur assemblage en mémoire côté API restent à traiter dans R06. Les tableaux d’un seul
+leur cohérence et leur assemblage en mémoire côté API restent à traiter dans la
+[roadmap](roadmap.md#r06-volumes). Les tableaux d’un seul
 utilisateur dont la cardinalité métier est faible — trois réponses de profil, quelques traits, quatre types de
 consentement, quelques appareils et passkeys — conservent leurs requêtes simples.
 
@@ -85,34 +87,44 @@ L’index global historique `idx_match_init_activity` est conservé pour l’ins
 servent la route mobile, mais retirer un index déployé sans statistiques de production serait prématuré. Son usage
 devra être réévalué après une période représentative.
 
-## Exploitation
+## Garanties ajoutées après l’audit initial
 
-Complément R03 : les contrôles d’expiration des messages/continuations placent `clock_timestamp()` hors de la
+### Concurrence métier
+
+Les contrôles d’expiration des messages/continuations placent `clock_timestamp()` hors de la
 CTE matérialisée portant `FOR UPDATE`, pour mesurer l’heure après une éventuelle attente sans requête supplémentaire.
 La consommation initiale du quota exige aussi une limite positive. Les écritures profil/préférences/présence
 verrouillent d’abord la clé primaire du compte, puis relisent les consentements requis avant mutation ; les
 anciens tests d’existence du compte devenus redondants sont retirés. Aucune migration ni nouvel index.
 Les tests réels valident ces courses ; leur passage n’est pas une mesure de débit ou de latence sous charge.
 
-Complément R01 : la baseline garantit l’unicité de la clé de notification, l’unicité
+### Notifications durables
+
+La baseline garantit l’unicité de la clé de notification, l’unicité
 notification/appareil et l’index de cascade par appareil. La programmation utilise une instruction avec CTE et
 insertion ensembliste des tâches, sans boucle d’appels SQL par appareil. La livraison part de la clé primaire de
 la tâche et relit les références et autorisations courantes. Les compteurs push sont agrégés dans la requête
 outbox existante. Ces chemins sont exécutés par les tests PostgreSQL réels ; les mesures de plans historiques
-ci-dessus ne constituent pas un benchmark des nouvelles requêtes. Leur charge reste à mesurer avec R06/R12.
+ci-dessus ne constituent pas un benchmark des nouvelles requêtes. Leur charge reste à mesurer selon les lots
+capacité et sécurité de la [roadmap](roadmap.md).
 
 La baseline conserve le contexte Stripe interne, sans index supplémentaire : les contrôles d’éligibilité communs à
 la programmation et à l’envoi accèdent aux clés primaires existantes de `billing_invoice` et `user_subscription`.
 Le nettoyage final à la désactivation utilise l’index de notifications par utilisateur. Les tests réels valident
 les comportements et verrous ; ils ne constituent pas une mesure de performance sous charge.
 
-Complément R02 : la baseline indexe les intentions Customer restant à effacer par `(user_id, id)` avec
+### Effacement reprenable
+
+La baseline indexe les intentions Customer restant à effacer par `(user_id, id)` avec
 un prédicat partiel. Les checkpoints accèdent à la clé primaire de la demande et à l’unicité outbox
 `(event_type, aggregate_id)`. Les photos/Customers sont bornés à 50 par passage. Les listes de matchs vérifient
 l’activité du partenaire avant le `LIMIT`, pour ne pas créer de pages incomplètes à cause du filtrage ultérieur.
 Les guards d’écriture ajoutent un accès verrouillé à la clé primaire du compte ; ces nouveaux chemins sont
 testés sur PostgreSQL réel, mais leur coût sous charge n’a pas été mesuré. Le suivi admin conserve sa limite
-historique de 500 demandes, sans nouveau curseur (R06).
+actuelle de 500 demandes, sans nouveau curseur ; cette limite est suivie dans la
+[roadmap](roadmap.md#r06-volumes).
+
+## Recommandations d’exploitation
 
 - Exécuter `ANALYZE` après un import important ou laisser autovacuum mettre les statistiques à jour.
 - Observer en production les temps cumulés, lignes lues et blocs via `pg_stat_statements` si cette extension est
@@ -121,6 +133,5 @@ historique de 500 demandes, sans nouveau curseur (R06).
   tests ne représentent pas la production.
 - Comparer des paramètres réalistes avec `EXPLAIN (ANALYZE, BUFFERS)` sur une copie non sensible. Ne jamais analyser
   une écriture de production sans transaction annulée et procédure explicite.
-- Les index de l’ancienne migration `009_sql_performance_indexes` figurent maintenant dans la
-  [baseline](postgres-migrations.md). Ils ne sont pas recréés sur une base déjà migrée. Pour tout nouvel index
+- Les index issus de l’audit figurent dans la [baseline](postgres-migrations.md). Pour tout nouvel index
   sur une base volumineuse, prévoir une fenêtre de migration ou une stratégie `CREATE INDEX CONCURRENTLY` séparée.

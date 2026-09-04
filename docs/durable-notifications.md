@@ -1,10 +1,8 @@
 # Notifications durables
 
-Mise à jour : 4 septembre 2026. Lot R01, désormais intégré à la baseline PostgreSQL.
-
-La contre-vérification a révélé puis corrigé une notification résiduelle après effacement concurrent et un push
-de fin d’essai devenu obsolète. Les 34 scénarios PostgreSQL notifications couvrent désormais ces cas ; voir
-[la roadmap](roadmap.md) et [les validations](../test.md).
+Ce guide décrit la persistance des notifications, leurs intentions de push, les reprises et leurs limites.
+Le contrat HTTP reste dans [routes.md](../routes.md), les commandes de validation dans [test.md](../test.md)
+et les travaux ouverts dans la [roadmap](roadmap.md).
 
 ## Garanties et périmètre
 
@@ -40,7 +38,7 @@ partagée pendant la programmation, sans réseau. Le schéma ajoute un nettoyage
 la désactivation du compte, alors que son verrou exclusif est détenu : les écritures intercalées après le premier
 nettoyage de `fct_anonymize_user` disparaissent dans la même transaction. Un écrivain attendant la désactivation
 relit le compte et ne crée rien. Cela ne change pas l’ordre des verrous du flux d’effacement existant et ne prétend
-pas résoudre l’ensemble de R02, notamment les étapes externes et la concurrence des autres ressources métier.
+pas résoudre à lui seul les étapes externes de l’effacement ni la concurrence des autres ressources métier.
 
 Pour Stripe, `billing_reference` identifie en interne la facture ou l’abonnement ; `billing_trial_ends_at` fixe
 la fin d’essai visée. Ces champs suivent la rétention de la notification et ne sont jamais copiés dans son
@@ -67,7 +65,8 @@ au destinataire, être ouverte et présenter un solde restant ; l’abonnement S
 avec le même identifiant et la même fin d’essai future. Un paiement, une activation, une prolongation ou une
 expiration entre programmation et envoi rend la tâche inopérante. Une ancienne notification sans contexte
 vérifiable reste conservée selon sa rétention, mais ne provoque pas de push. Les vérifications utilisent les
-projections locales : elles ne compensent pas un webhook Stripe jamais reçu, couvert par le futur lot R05.
+projections locales : elles ne compensent pas un webhook Stripe jamais reçu. La réconciliation correspondante
+reste suivie dans la [roadmap](roadmap.md#r05-stripe).
 
 Une tâche inéligible est acquittée sans réseau. Un `UNREGISTERED` explicite supprime le token et termine la tâche ;
 un simple `404` ne suffit pas. Les autres erreurs FCM/OAuth/réseau remontent sous `push_delivery_unavailable`,
@@ -78,7 +77,7 @@ sans réseau. Réactiver FCM ne rejoue pas ces tâches. Sans worker actif, les t
 
 ## Exploitation et conservation
 
-Les routes administratives existantes suffisent, sans nouvel écran ajouté dans ce lot :
+Les routes administratives existantes suffisent :
 
 - `/api/admin/metrics` : `operations.outbox.notification_push` expose `pending`, `processing`, `completed`,
   `dead_letter`, `discarded`, `oldest_pending_at`, sans identifiant personnel. `completed` compte les tâches
@@ -93,14 +92,14 @@ l’événement purgé, la notification ou l’appareil. Une dead letter dont la
 reconstruire le contenu ; sa relance devient un no-op acquitté.
 
 Le nettoyage du worker continu est actuellement plafonné à 50 événements par heure. La rétention de 7 jours est
-le seuil d’éligibilité à la purge, pas une garantie de délai effectif si le stock croît plus vite ; R06 suit ce défaut de débit.
+le seuil d’éligibilité à la purge, pas une garantie de délai effectif si le stock croît plus vite. Le bornage est
+suivi dans la [roadmap](roadmap.md#r06-volumes).
 
 ## Déploiement et validation
 
-Arrêter les anciennes instances API/workers, appliquer `pnpm run db:migrate`, puis déployer le code API et worker
-compatible avec `notification.push` et les contrôles historiques de 012, intégrés à la
-[baseline consolidée](postgres-migrations.md). Ne pas laisser un ancien worker consommer ce type ou ignorer ses
-contrôles. Une migration ordinaire ne rejoue aucune notification historique.
+Appliquer la [baseline PostgreSQL courante](postgres-migrations.md), puis déployer ensemble des versions API et
+worker compatibles avec `notification.push`. Ne pas laisser une version incompatible consommer ce type ou ignorer
+ses contrôles. Une migration ordinaire ne rejoue aucune notification existante.
 
 En développement, `MAINTENANCE_MODE=api` lance le worker intégré. Sinon, garder un processus
 `MAINTENANCE_MODE=worker pnpm run outbox:work` actif. La configuration FCM doit être présente dans ce worker.
@@ -109,4 +108,5 @@ Les tests FCM simulent les réponses réseau : aucun push réel n’est envoyé.
 appliquent les migrations dans un schéma temporaire isolé, puis couvrent rollback, rejeu concurrent, reprise des
 claims, échecs par appareil, frontière envoi/acquittement, autorisations, effacement concurrent dans les deux
 ordres, alertes Stripe tardives ou devenues obsolètes, expiration, métriques et actions administratives.
-Les résultats exécutés sont consignés dans [test.md](../test.md).
+Les commandes et prérequis sont décrits dans [test.md](../test.md) ; le dernier bilan synthétique est dans la
+[roadmap](roadmap.md).

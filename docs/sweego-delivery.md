@@ -1,7 +1,8 @@
 # Suivi des OTP Sweego
 
-Contrat vérifié le 4 septembre 2026. Aucun nouveau composant ni dépendance : PostgreSQL, Sweego et les
-métriques administratives existantes suffisent. Ce suivi ne constitue pas une garantie de réception au téléphone.
+Contrat fournisseur vérifié le 4 septembre 2026. Ce guide décrit les états d’envoi, les callbacks signés et la
+reprise sûre. PostgreSQL, Sweego et les métriques administratives existantes suffisent ; ce suivi ne constitue
+pas une garantie de réception au téléphone.
 
 ## Contrat fournisseur et limites
 
@@ -23,10 +24,8 @@ La [signature officielle](https://learn.sweego.io/docs/webhooks/webhook_signatur
 
 ## Configuration locale et déploiement
 
-1. Arrêter les anciens écrivains OTP, exécuter `pnpm run db:migrate`, puis relancer API/workers compatibles.
-   Le schéma final est intégré à `001_baseline_20260904`. Une base antérieure à 014 doit d’abord appliquer cette
-   ancienne migration avec la version précédente : elle convertissait `sent` (acceptation HTTP) en `accepted`.
-   Voir [la transition sans reset](postgres-migrations.md). Ne pas redémarrer les anciens écrivains pré-014.
+1. Appliquer la [baseline PostgreSQL courante](postgres-migrations.md), puis déployer ensemble l’API et les workers
+   compatibles. Une installation issue d’une ancienne chaîne doit être recréée ou migrée explicitement avant ce déploiement.
 2. Conserver les paramètres d’envoi existants. Renseigner `SWEEGO_WEBHOOK_SECRET` avec le secret de la destination
    Sweego ; ce n’est **pas** `SWEEGO_API_KEY`. Une valeur vide désactive les callbacks (503), sans désactiver l’envoi.
 3. Configurer dans Sweego une destination vers `POST /api/auth/sweego/webhook`, abonnée à `sms_sent` et
@@ -102,11 +101,12 @@ Les métadonnées suivent la purge OTP existante à expiration, ainsi que l’ef
 
 Le compteur de dépendance `sweego` conserve la latence et les erreurs des POST ; le suivi HTTP donne celles du
 webhook. Les états SMS ne sont pas un historique ni des taux sur une fenêtre fixe : ils excluent les OTP expirés,
-y compris avant leur purge physique. Pour une alerte durable, collecter les agrégats régulièrement (R08).
+y compris avant leur purge physique. Pour une alerte durable, collecter les agrégats régulièrement ; ce travail
+reste suivi dans la [roadmap](roadmap.md#r08-alertes).
 Aucun identifiant de compte, de tentative, téléphone, OTP, clé ou payload n’est exposé. Aucun écran dashboard
 supplémentaire n’est imposé ; ces données enrichissent le contrat des métriques existantes.
 
 Les suites `sweego-webhook.service.spec.ts`, `sweego-sms.service.spec.ts`, `sweego-webhook.contract.spec.ts`
 et `postgres.otp-delivery.integration.spec.ts` exercent le protocole avec réponses et signatures contrôlées.
-La dernière rejoue toutes les migrations dans un schéma local isolé. Commandes et prérequis : [test.md](../test.md).
-Le bilan effectivement exécuté reste dans [la roadmap, lot R04](roadmap.md).
+La dernière initialise la baseline dans un schéma local isolé. Commandes et prérequis : [test.md](../test.md).
+Le dernier bilan synthétique reste dans la [roadmap](roadmap.md).

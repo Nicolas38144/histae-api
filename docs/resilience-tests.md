@@ -1,24 +1,25 @@
-# Concurrence et reprises après panne — R03
+# Concurrence et reprises après panne
 
-Mise à jour : 4 septembre 2026. Ce lot teste les invariants sur les stockages locaux existants ; il n’ajoute ni
-service à héberger ni migration. Le contrat HTTP reste inchangé. Les résultats consolidés sont dans [test.md](../test.md).
+Ce guide décrit les scénarios de concurrence et de coupure exécutés sur les stockages locaux existants. Il ne
+remplace ni une validation des fournisseurs réels ni un test de reprise après perte de machine. Les commandes
+générales sont dans [test.md](../test.md) et le dernier bilan synthétique dans la [roadmap](roadmap.md).
 
 ## Scénarios
 
-- `postgres.business-concurrency.integration.spec.ts` : 24 cas. Continuations simultanées, dernière place du quota
+- `postgres.business-concurrency.integration.spec.ts` : continuations simultanées, dernière place du quota
   Free, quota nul, expiration pendant l’attente du verrou, tombstones, comptes bannis/désactivés, retraits de
   consentement dans les deux ordres de concurrence, curseurs avec égalités/microsecondes et maintenances concurrentes.
   Les purges conservent des lignes encore valides pour vérifier qu’elles ne suppriment pas trop largement.
-- `postgres.crash-recovery.integration.spec.ts` : 6 cas. Un vrai processus worker est arrêté avant les checkpoints
+- `postgres.crash-recovery.integration.spec.ts` : un vrai processus worker est arrêté avant les checkpoints
   Stripe, photos, Scylla et PostgreSQL, puis après le commit final mais avant l’acquittement outbox. Le processus
   suivant termine la demande avec une seule trace d’anonymisation. Un autre cas coupe la connexion PostgreSQL qui
   porte le verrou de session et vérifie le refus de l’écriture externe suivante.
-- `network-recovery.integration.spec.ts` : 3 cas. Redis refuse le rate limiting pendant sa déconnexion et retrouve
+- `network-recovery.integration.spec.ts` : Redis refuse le rate limiting pendant sa déconnexion et retrouve
   le compteur après reprise ; Scylla conserve la décision immuable puis termine l’effacement croisé ; une réponse
   S3 DELETE perdue après suppression réelle conserve la trace PostgreSQL jusqu’au retry réussi.
 
-La création unique d’un match sur likes réciproques reste couverte par la suite Scylla historique. Les 34 cas
-notifications R01 et 26 cas effacement R02 sont conservés.
+La création unique d’un match sur likes réciproques, les notifications durables et l’effacement reprenable sont
+couverts par leurs suites d’intégration dédiées.
 
 ## Défauts corrigés
 
@@ -54,7 +55,7 @@ pas la reprise de toutes les topologies Scylla : le test est volontairement mono
 pnpm install --frozen-lockfile
 pnpm run test:integration
 
-# Seulement les trois nouvelles suites
+# Suites ciblées
 pnpm exec jest --runInBand --testPathPatterns='postgres.business-concurrency|postgres.crash-recovery|network-recovery'
 ```
 
@@ -62,7 +63,7 @@ Prérequis : PostgreSQL `histae-dev` en développement, Scylla activé et migré
 bucket S3 local accessible en HTTP. Les relais refusent une cible autre que `localhost`, `127.0.0.1` ou `::1`.
 Le scénario Scylla demande un seul nœud sans TLS et le scénario Redis utilise exclusivement la base logique 15.
 
-Les fixtures rejouent les migrations dans leurs schémas PostgreSQL aléatoires `r03_test_<uuid>`. Elles vérifient
+Les fixtures initialisent la baseline dans leurs schémas PostgreSQL aléatoires `r03_test_<uuid>`. Elles vérifient
 le schéma avant nettoyage et ne suppriment que celui qu’elles ont créé. Les données Scylla et l’objet S3 utilisent
 des UUID propres au test ; leur nettoyage est ciblé. Les compteurs Redis uniques expirent en 30 secondes.
 La fixture S3 teste le transport et le cycle de suppression, pas la validité du contenu WebP.
@@ -75,7 +76,7 @@ La date de revendication outbox est vieillie uniquement dans le schéma de test 
 ## Limites conservées
 
 Les étapes fournisseur du processus arrêté utilisent des réponses contrôlées ; les coupures réseau réelles sont
-testées séparément. Ni Stripe, Sweego ni FCM ne sont appelés. Les contrats et issues fournisseur relèvent de R04/R05.
-Ces tests ne simulent pas une panne électrique de l’hôte, une perte de disque ou une restauration de sauvegarde (R10),
-ni la charge et les budgets de performance (R06/R12). Ils ne garantissent pas une transaction distribuée ni
+testées séparément. Ni Stripe, Sweego ni FCM ne sont appelés ; leurs validations réelles restent dans la
+[roadmap](roadmap.md). Ces tests ne simulent pas une panne électrique de l’hôte, une perte de disque ou une
+restauration de sauvegarde, ni la charge et les budgets de performance. Ils ne garantissent pas une transaction distribuée ni
 l’absence d’une réponse arbitrairement tardive du fournisseur. Ils ne remplacent pas un audit de sécurité indépendant.

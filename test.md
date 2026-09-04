@@ -1,8 +1,8 @@
 # Histae API — guide de validation
 
-Ce guide explique **quoi exécuter, avec quels prérequis et quelles limites**. Les fichiers de test sont la référence
-pour les scénarios détaillés ; la sortie Jest fait foi pour les nombres de suites et de cas. Les bilans des lots
-livrés restent dans la [roadmap](docs/roadmap.md), sans recopier ici leur historique.
+Ce guide explique **quoi exécuter, avec quels prérequis et quelles limites**. Il ne sert ni de catalogue des
+scénarios ni de journal de livraison : les fichiers de test font foi pour les cas détaillés, la sortie Jest pour
+les nombres, et la [roadmap](docs/roadmap.md) pour le bilan synthétique.
 
 ## Choisir le bon niveau
 
@@ -74,13 +74,13 @@ pnpm exec jest --runInBand --testPathPatterns='postgres.business-concurrency|pos
 ```
 
 La suite PostgreSQL de démarrage initialise aussi le graphe Nest : Redis doit être disponible selon la
-configuration. La suite Scylla historique utilise aussi PostgreSQL. L’analyseur photo local n’est pas requis par
+configuration. La suite d’intégration Scylla utilise aussi PostgreSQL. L’analyseur photo local n’est pas requis par
 ces suites ; il est nécessaire pour un smoke test manuel du parcours photo avec analyse automatique activée.
 
 ### Isolation et nettoyage
 
 - Utiliser des UUID temporaires, transactions annulées ou schémas dédiés ; ne pas consommer les jobs du développeur.
-- Les fixtures R03 rejouent les migrations dans `r03_test_<uuid>`, vérifient leur schéma et ne suppriment que celui créé.
+- Les fixtures de résilience rejouent les migrations dans `r03_test_<uuid>`, vérifient leur schéma et ne suppriment que celui créé.
 - Ne jamais exécuter de nettoyage global du schéma public, de Redis, du keyspace Scylla ou du bucket.
 - Les compteurs Redis uniques expirent en deux secondes dans la suite dédiée, trente secondes dans la suite réseau.
 - Les scénarios Scylla/S3 nettoient leurs propres UUID et objets ; ne pas supprimer des références inconnues après un échec.
@@ -115,13 +115,14 @@ Pour un parcours Stripe manuel, utiliser uniquement une sandbox, ses clés de te
 Stripe CLI peut relayer vers `/api/billing/stripe/webhook` ; utiliser le secret de signature de cette session,
 ouvrir le Checkout créé par l’API puis vérifier l’abonnement et le portail. Un événement générique de
 `stripe trigger` ne garantit pas les métadonnées et prix requis par Histae. Ne jamais modifier une base partagée
-ou employer une clé live pour ce parcours. La validation complète reste suivie dans R05.
+ou employer une clé live pour ce parcours. La validation complète reste suivie dans la
+[section Stripe de la roadmap](docs/roadmap.md#r05-stripe).
 
 ## Avant livraison et limites
 
 1. Adapter les tests au changement : unitaire pour une règle, e2e pour un contrat, intégration pour un invariant en base.
 2. Exécuter les contrôles autonomes ; ajouter les intégrations dès qu’un stockage, verrou, migration ou reprise est touché.
-3. Vérifier le code de sortie et l’absence de ressource ouverte ; conserver les résultats réellement exécutés dans le bilan du lot.
+3. Vérifier le code de sortie et l’absence de ressource ouverte ; reporter le dernier bilan synthétique dans la roadmap.
 4. Mettre à jour `routes.md` si le contrat change, et les guides concernés si les prérequis ou garanties évoluent.
 
 Le passage des tests ne démontre pas un parcours mobile réel, la livraison effective d’un SMS/push, la
@@ -137,4 +138,4 @@ Guides spécialisés :
 - [Callbacks et reprises OTP Sweego](docs/sweego-delivery.md) : signatures/réponses synthétiques, PostgreSQL isolé, aucun SMS réel.
 - [Baseline PostgreSQL](docs/postgres-migrations.md) : initialisation, checksums, reset local protégé et évolutions suivantes.
 - [Politique de rétention](docs/retention-policy.md)
-- [Portée des contrôles de sécurité](docs/roadmap.md#r12--étendre-les-vérifications-de-sécurité-et-de-charge)
+- [Portée des contrôles de sécurité](docs/roadmap.md#r12-securite)

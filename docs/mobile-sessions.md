@@ -1,6 +1,7 @@
 # Sessions mobiles et rotation des clés JWT
 
-Mise à jour : 3 septembre 2026. Ces règles concernent le mobile, pas les sessions WebAuthn du dashboard.
+Ce guide concerne les sessions mobiles, pas les sessions WebAuthn du dashboard. Le contrat précis des routes
+reste dans [routes.md](../routes.md).
 
 ## Familles et rejeu
 
@@ -43,7 +44,7 @@ ou une impossibilité de vérifier la session ferme également le flux. Le mobil
   suppression d'une autre session encore référencée est idempotent (`204`) ; une session étrangère ou absente vaut `404`.
 - `POST /api/auth/logout-all` avec `{ "confirm": true }` : révoque toutes les familles non révoquées du compte,
   session courante comprise, et supprime tous ses enregistrements push. Une nouvelle connexion OTP reste possible.
-- `POST /api/auth/logout` garde son corps historique. Le refresh présenté doit appartenir à la même famille que
+- `POST /api/auth/logout` conserve son corps actuel. Le refresh présenté doit appartenir à la même famille que
   le Bearer ; un prédécesseur authentique encore non expiré suffit pour gérer un logout concurrent au refresh.
 
 Ces routes restent disponibles pendant l'onboarding et partagent un compteur dédié par utilisateur, avec les

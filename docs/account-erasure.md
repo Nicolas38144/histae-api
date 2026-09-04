@@ -1,4 +1,7 @@
-# Effacement de compte reprenable — R02
+# Effacement de compte reprenable
+
+Ce document décrit le protocole durable d’effacement, sa concurrence et son exploitation. Le contrat HTTP
+exhaustif reste dans [routes.md](../routes.md) et les travaux encore ouverts dans la [roadmap](roadmap.md).
 
 ## Acceptation et contrat
 
@@ -57,9 +60,9 @@ d’un compte désactivé sans recréer ses projections.
 
 Cela ne crée pas une transaction distribuée. Un fournisseur qui termine arbitrairement tard une opération après
 une perte de processus/connexion ne fournit pas, à lui seul, une preuve d’absence définitive. Les traces
-techniques conservées, les deadlines des clients et la réconciliation demeurent nécessaires. R03 teste des arrêts
-réels du worker aux checkpoints et la perte de sa connexion de verrouillage, ainsi que des coupures réseau locales
-Scylla/S3. Les interruptions de l’hôte complet, restaurations et la cible S3 de production restent R10.
+techniques conservées, les deadlines des clients et la réconciliation demeurent nécessaires. Les tests de résilience
+couvrent des arrêts réels du worker aux checkpoints, la perte de sa connexion de verrouillage et des coupures réseau
+locales Scylla/S3. Les interruptions de l’hôte complet, restaurations et la cible S3 de production restent à valider.
 Voir [les scénarios, leur isolation et leurs limites](resilience-tests.md).
 
 ## Issue incertaine Stripe
@@ -78,15 +81,13 @@ sont intrinsèquement idempotents ; la clé passée par l’adaptateur n’ajout
 ne sont pas assimilées aveuglément à « déjà supprimé » : après un DELETE en erreur, un GET doit confirmer le même
 identifiant et le marqueur `deleted: true` documenté par [Stripe](https://docs.stripe.com/api/customers/delete).
 
-Ce cas requiert un diagnostic fournisseur et une procédure de réconciliation contrôlée (R05), pas un changement
-manuel de l’étape vers `completed`. Les opérations historiques antérieures à 013 sans intention persistée
-doivent aussi être vérifiées lors du déploiement ; cette migration ne peut pas reconstruire une réponse perdue.
+Ce cas requiert un diagnostic fournisseur et la procédure de réconciliation Stripe suivie dans la
+[roadmap](roadmap.md#r05-stripe), pas un changement manuel de l’étape vers `completed`.
 
 ## Exploitation et suivi admin
 
-- Appliquer la [baseline courante](postgres-migrations.md), qui inclut les anciens changements de **013**,
-  puis déployer API et workers compatibles ensemble, après arrêt des anciens écrivains.
-  Ne pas laisser un ancien worker consommer `account.erase` ni un ancien écrivain contourner les verrous.
+- Appliquer la [baseline courante](postgres-migrations.md), puis déployer API et workers compatibles ensemble.
+  Ne pas laisser une version incompatible consommer `account.erase` ou contourner les verrous.
 - En développement, `MAINTENANCE_MODE=api` suffit. En mode séparé, conserver `pnpm run outbox:work` actif avec la
   même configuration PostgreSQL, Scylla, S3 et Stripe que l’API. Aucun composant supplémentaire n’est nécessaire.
 - `GET /api/admin/data-subject-requests` fournit un objet `erasure` nullable : étape, progression Scylla, dernier
@@ -95,7 +96,7 @@ doivent aussi être vérifiées lors du déploiement ; cette migration ne peut p
   de 3 à 500 caractères via `POST /api/admin/outbox/:id/retry` : authentification récente et audit transactionnel
   existants. L’abandon d’un `account.erase` est toujours interdit, même si une étape semble déjà réussie.
 - Les métriques outbox globales et le suivi de maintenance existants incluent ces tâches ; le raccordement aux
-  alertes de production reste R08. Après la purge normale de l’événement résolu, le checkpoint `completed` reste
+  alertes de production reste suivi dans la [roadmap](roadmap.md#r08-alertes). Après la purge normale de l’événement résolu, le checkpoint `completed` reste
   visible avec sa DSR et un `event_id` nul.
 
 Le checkpoint est supprimé par cascade avec la demande RGPD, selon sa rétention existante de cinq ans après
@@ -108,4 +109,4 @@ fournisseurs simulés. Les tests ciblent l’acceptation atomique, la reprise ap
 le parcours complet, la conservation des traces S3, le refus des écritures tardives, l’exclusion publique, le
 fencing des workers et la reprise administrative auditée. Les tests billing couvrent les réponses Stripe
 perdues et la fenêtre d’idempotence ; les tests Scylla couvrent l’ordre des suppressions et les lots pleins.
-Voir [test.md](../test.md) pour les validations réellement exécutées et les limites restantes.
+Voir [test.md](../test.md) pour les commandes et prérequis, et la [roadmap](roadmap.md) pour les limites restantes.

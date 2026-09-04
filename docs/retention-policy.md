@@ -1,6 +1,7 @@
 # Politique de conservation technique
 
-Mise à jour : 4 septembre 2026. Propriétaire pressenti : responsable de traitement Histae. Approbateur requis : juriste ou DPO mandaté.
+État technique vérifié le 4 septembre 2026. Propriétaire pressenti : responsable de traitement Histae.
+Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
 
@@ -14,7 +15,7 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 | Actions opérateur outbox | Traçabilité des reprises et abandons techniques | 1 an glissant | Identité/role au moment de l’action, type d’événement et motif, sans payload ni clé objet ; suppression bornée par `PrivacyMaintenanceService` |
 | Position précise | Découverte locale demandée par l’utilisateur | Fraîche pendant 1 h, supprimée après 24 h ; immédiatement supprimée au retrait du consentement de localisation | `PrivacyMaintenanceService` et transaction de retrait |
 | Décisions de swipe (`like`/`pass`) | Exclure les profils déjà évalués et détecter un intérêt réciproque | 1 an fixe (`default_time_to_live = 31536000`) ou effacement immédiat du compte | TTL uniforme sur les deux vues ScyllaDB, avec TWCS par fenêtres de 14 jours ; suppression croisée des partitions acteur/cible lors de l’effacement |
-| OTP et suivi SMS | Authentification et diagnostic des issues d’envoi | Jusqu’à `expires_at` ; un code consommé reste inutilisable, ses métadonnées suivent la même purge | Suppression par lots après expiration et à l’effacement du compte. HMAC, états, références fournisseur et dates locales seulement ; aucun payload webhook, téléphone ou code en clair. R04 n’ajoute aucune durée ni journal d’événements |
+| OTP et suivi SMS | Authentification et diagnostic des issues d’envoi | Jusqu’à `expires_at` ; un code consommé reste inutilisable, ses métadonnées suivent la même purge | Suppression par lots après expiration et à l’effacement du compte. HMAC, états, références fournisseur et dates locales seulement ; aucun payload webhook, téléphone, code en clair ni journal d’événements séparé |
 | Refresh tokens et familles mobiles | Session et détection du rejeu | Hash et filiation de chaque token conservés jusqu'à son `expires_at` initial, même après rotation/révocation ; famille jusqu'à l'expiration de son dernier token puis purge de ses tokens ; effacement immédiat du compte | Les ancêtres expirés sont purgés par lots sans effacer leurs enfants. Les familles expirées sont purgées seulement une fois vides. L'export contient les métadonnées de famille et le motif normalisé de révocation, jamais les hashes. Aucun secret brut, IP ou user-agent n'est ajouté |
 | Challenges et jetons d’enrôlement WebAuthn admin | Authentification forte du dashboard | Challenge : 5 minutes ; enrôlement initial : 15 minutes par défaut ; consommation unique | Seuls les hashes SHA-256 des secrets sont conservés. Suppression bornée dès consommation ou expiration |
 | Credentials WebAuthn admin | Authentification forte et récupération | Vie du compte administratif ou révocation explicite | Clé publique, compteur, transports et métadonnées minimales seulement ; les clés privées restent dans l’authenticator. La dernière passkey active et celle de la session courante ne sont pas révocables |
@@ -36,7 +37,7 @@ d’un profil déjà évalué et laisse le temps de détecter un like réciproqu
 validation juridique/DPO. Le code échoue en mode fermé : si ScyllaDB n’est pas joignable, un export complet ou
 un effacement complet n’est pas déclaré réussi.
 
-Depuis R02, l’acceptation de l’effacement désactive immédiatement le compte, mais répond `202`, pas « terminé ».
+L’acceptation de l’effacement désactive immédiatement le compte, mais répond `202`, pas « terminé ».
 Les nouvelles mutations et projections publiques sont bloquées ; les suppressions Stripe, photos, Scylla puis
 PostgreSQL se poursuivent avec checkpoints et reprises. Les positions peuvent toujours être rendues inactives
 ou purgées par la maintenance. Les règles de conservation du tableau restent inchangées : « effacement du
@@ -44,14 +45,15 @@ compte » désigne le workflow complet, pas un délai garanti de réponse HTTP. 
 signées restent limitées par leur expiration de 300 secondes ou la suppression de l’objet ; les copies déjà
 téléchargées ne sont pas révocables par l’API.
 
-Depuis R03, un retrait de consentement et les écritures du profil, des préférences ou de la présence utilisent
+Un retrait de consentement et les écritures du profil, des préférences ou de la présence utilisent
 le même verrou de compte. Les consentements courants sont relus dans la transaction d’écriture : une requête
 validée avant le retrait ne peut pas réintroduire les données ensuite. Les tests de rétention vérifient des lignes
 expirées et encore valides ; aucune durée ni décision juridique du présent document n’a été modifiée.
 
 Les intentions de création Customer Stripe sont conservées avec leurs tentatives Checkout jusqu’à
 l’anonymisation, afin qu’une réponse perdue ne fasse pas disparaître une référence à nettoyer. Une issue trop
-ancienne pour un rejeu idempotent sûr reste à réconcilier et bloque la clôture. Voir [le protocole R02](account-erasure.md).
+ancienne pour un rejeu idempotent sûr reste à réconcilier et bloque la clôture. Voir le
+[protocole d’effacement](account-erasure.md).
 
 La vue Scylla orientée cible conserve les références entrantes afin de détecter la réciprocité et de supprimer
 toutes les références croisées lors d’un effacement. Elle reste strictement interne : l’export utilisateur ne
@@ -78,7 +80,8 @@ communique que les décisions prises par cet utilisateur, jamais l’identité n
 ## Exécution
 
 Le seuil de purge de l’outbox résolue reste de 7 jours. Le worker continu ne purge actuellement que 50 événements
-par heure : le délai effectif peut dépasser ce seuil si le flux excède sa capacité. R06 dans `roadmap.md` suit
+par heure : le délai effectif peut dépasser ce seuil si le flux excède sa capacité. La
+[roadmap](roadmap.md#r06-volumes) suit
 ce défaut de débit, sans décision de prolonger la rétention.
 
 En développement, `MAINTENANCE_MODE=api` lance la maintenance et le consommateur outbox dans l’API. En production,
