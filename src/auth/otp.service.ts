@@ -4,8 +4,8 @@ import { apiError } from '../common/api-error';
 import { normalizeIdempotencyKey } from '../common/idempotency';
 import { ConfigService } from '../config/config.service';
 import { hmacSha256 } from '../crypto/phone-crypto';
-import { AuthRepository } from './auth.repository';
-import { SmsDelivery, SmsDeliveryError } from './sms-delivery';
+import { OtpRepository } from './otp.repository';
+import { SmsDelivery, SmsDeliveryError, type SmsDeliveryReceipt } from './sms-delivery';
 
 const DELIVERY_SETTLEMENT_GRACE_MILLIS = 5_000;
 
@@ -13,7 +13,7 @@ const DELIVERY_SETTLEMENT_GRACE_MILLIS = 5_000;
 export class OtpService {
   constructor(
     private readonly config: ConfigService,
-    private readonly authRepository: AuthRepository,
+    private readonly otpRepository: OtpRepository,
     private readonly smsDelivery: SmsDelivery,
   ) {}
 
@@ -23,38 +23,48 @@ export class OtpService {
     const code = generateOtp();
     const phoneHash = hmacSha256(phone, this.config.phone.hashKey);
     const deliveryId = randomUUID();
-    const delivery = await this.authRepository.beginOtpDelivery({
+    const delivery = await this.otpRepository.beginOtpDelivery({
       id: deliveryId,
       phoneHash,
       otpHash: hmacSha256(code, this.config.phone.hashKey),
       idempotencyKey,
-      expiresAt: new Date(Date.now() + this.config.sms.otpTtlMillis),
-      staleBefore: new Date(Date.now() - this.config.sms.timeoutMillis - DELIVERY_SETTLEMENT_GRACE_MILLIS),
+      ttlMillis: this.config.sms.otpTtlMillis,
+      settlementMillis: this.config.sms.timeoutMillis + DELIVERY_SETTLEMENT_GRACE_MILLIS,
     });
 
     if (delivery.state === 'conflict') {
       throw apiError(409, 'idempotency_key_conflict', 'The idempotency key was already used for another request.');
     }
-    if (delivery.state === 'sent' || delivery.state === 'pending') return accepted();
+    if (delivery.state === 'sent' || delivery.state === 'accepted' || delivery.state === 'pending') return accepted();
+    if (delivery.state === 'unknown') throw unknownDelivery();
     if (delivery.state === 'failed') {
       throw apiError(503, 'otp_delivery_unavailable', 'The verification code could not be delivered.');
     }
 
+    let receipt: SmsDeliveryReceipt;
     try {
-      const receipt = await this.smsDelivery.sendOtp({
+      receipt = await this.smsDelivery.sendOtp({
         phone,
         region: this.config.sms.region,
         code,
         deliveryId,
       });
-      if (!await this.authRepository.markOtpSent(deliveryId, phoneHash, receipt.transactionId, receipt.messageId)) {
-        throw new SmsDeliveryError('delivery_expired');
-      }
     } catch (error) {
-      const reason = error instanceof SmsDeliveryError ? error.reason : 'unexpected_provider_error';
-      await this.authRepository.markOtpFailed(deliveryId, reason);
-      throw apiError(503, 'otp_delivery_unavailable', 'The verification code could not be delivered.', error);
+      const failure = error instanceof SmsDeliveryError ? error : new SmsDeliveryError('delivery_unknown', 'unknown');
+      let state;
+      try {
+        state = await this.otpRepository.markOtpOutcome(deliveryId, phoneHash, failure.outcome, failure.reason);
+      } catch { throw unknownDelivery(); }
+      // A signed callback may already have settled this attempt while /send timed out.
+      if (state === 'sent' || state === 'accepted') return accepted();
+      if (state === 'unknown') throw unknownDelivery();
+      throw apiError(503, 'otp_delivery_unavailable', 'The verification code could not be delivered.');
     }
+    let confirmed;
+    try {
+      confirmed = await this.otpRepository.markOtpAccepted(deliveryId, phoneHash, receipt.transactionId, receipt.messageId);
+    } catch { throw unknownDelivery(); } // A DB failure after HTTP acceptance is not a provider rejection.
+    if (!confirmed) throw apiError(503, 'otp_delivery_unavailable', 'The verification code could not be delivered.');
     return accepted();
   }
 
@@ -71,7 +81,7 @@ export class OtpService {
     if (!/^[0-9]{6}$/.test(otp)) throw apiError(400, 'invalid_otp_request', 'The phone number or verification code is invalid.');
     const phoneHash = hmacSha256(phone, this.config.phone.hashKey);
     const otpHash = hmacSha256(otp, this.config.phone.hashKey);
-    if (!await this.authRepository.consumeOtp(phoneHash, otpHash)) {
+    if (!await this.otpRepository.consumeOtp(phoneHash, otpHash)) {
       throw apiError(401, 'invalid_or_expired_otp', 'The verification code is invalid or expired.');
     }
     return { phone, phoneHash };
@@ -80,6 +90,10 @@ export class OtpService {
 
 function accepted(): { message: string } {
   return { message: 'Verification code request accepted.' };
+}
+
+function unknownDelivery() {
+  return apiError(503, 'otp_delivery_unknown', 'The verification code delivery is not yet confirmed.');
 }
 
 function generateOtp(): string {

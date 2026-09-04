@@ -126,6 +126,7 @@ export class ConfigService {
     region: string;
     timeoutMillis: number;
     otpTtlMillis: number;
+    webhookSecret: string;
   };
   readonly scylla: ScyllaConfig;
   readonly redis: RedisConfig;
@@ -161,6 +162,7 @@ export class ConfigService {
     swipe: LimitPolicy;
     billing: LimitPolicy;
     billingWebhook: LimitPolicy;
+    smsWebhook: LimitPolicy;
     adminAuth: LimitPolicy;
   };
 
@@ -349,6 +351,10 @@ export class ConfigService {
     const smsTimeoutMillis = duration(envOr('SWEEGO_TIMEOUT', '10s'), 'SWEEGO_TIMEOUT');
     if (smsTimeoutMillis > 30_000) throw new Error('config: SWEEGO_TIMEOUT must not exceed 30s');
     const otpTtlMillis = duration(envOr('OTP_TTL', '10m'), 'OTP_TTL');
+    const smsWebhookSecret = envOr('SWEEGO_WEBHOOK_SECRET', '');
+    if (smsWebhookSecret && !/^[A-Za-z0-9+/]{64}$/.test(smsWebhookSecret)) {
+      throw new Error('config: SWEEGO_WEBHOOK_SECRET must be the 64-character base64 secret provided by Sweego');
+    }
     if (otpTtlMillis < 60_000 || otpTtlMillis > 30 * 60_000) throw new Error('config: OTP_TTL must be between 1m and 30m');
     this.sms = {
       provider: smsProviderValue,
@@ -358,6 +364,7 @@ export class ConfigService {
       region: smsRegion(envOr('SWEEGO_SMS_REGION', 'FR')),
       timeoutMillis: smsTimeoutMillis,
       otpTtlMillis,
+      webhookSecret: smsWebhookSecret,
     };
     const termsVersion = envOr('TERMS_OF_SERVICE_VERSION', '');
     const privacyVersion = envOr('PRIVACY_POLICY_VERSION', '');
@@ -482,6 +489,7 @@ export class ConfigService {
       swipe: limit('RATE_LIMIT_SWIPE', 120, '1m'),
       billing: limit('RATE_LIMIT_BILLING', 10, '1m'),
       billingWebhook: limit('RATE_LIMIT_BILLING_WEBHOOK', 300, '1m'),
+      smsWebhook: limit('RATE_LIMIT_SMS_WEBHOOK', 300, '1m'),
       adminAuth: limit('RATE_LIMIT_ADMIN_AUTH', 10, '5m'),
     };
   }

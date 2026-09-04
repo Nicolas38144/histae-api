@@ -117,7 +117,9 @@ proxies autorisés, sinon une adresse transmise par le client pourrait fausser l
   Les sessions peuvent être listées/révoquées, toutes déconnectées et reliées aux appareils push. Le mobile doit
   sérialiser les refresh ; une réponse perdue peut imposer un nouvel OTP. Voir `docs/mobile-sessions.md`.
 - OTP à six chiffres stocké sous forme de HMAC, à usage unique, activé seulement après acceptation du SMS par le
-  fournisseur et protégé par idempotence.
+  fournisseur ou callback d’envoi signé, et protégé par idempotence. Les réponses perdues restent `unknown`,
+  sans renvoi automatique ; les callbacks tardifs ne réactivent aucun code consommé/remplacé/expiré.
+  `sms_sent` ne prouve pas une réception au téléphone. Voir [suivi Sweego](docs/sweego-delivery.md).
 - Numéro limité actuellement au format français E.164. Le clair n’est ni persisté ni journalisé : HMAC-SHA-256
   pour l’index et AES-256-GCM avec nonce/tag pour la valeur récupérable.
 - Les administrateurs ont des contrôles de rôle en base. Les accès aux détails personnels et conversations
@@ -311,6 +313,10 @@ La compatibilité est sans perte :
 - une historique ancienne partielle est refusée avec une erreur explicite ;
 - une baseline déjà enregistrée dont le checksum change est refusée.
 
+`014_sweego_delivery_tracking` migre l’ancien `sent` (acceptation HTTP) vers `accepted`, distingue callbacks et
+issues incertaines, puis ordonne les tentatives existantes et nouvelles. Les métadonnées suivent la purge OTP,
+sans journal des payloads ni allongement de rétention. Arrêter les anciens écrivains OTP avant déploiement.
+
 Après déploiement de la baseline, toute évolution persistante doit reprendre sous forme de migration incrémentale.
 `pnpm run db:reset` reste séparé et refuse toute cible autre que `ENV=development`, PostgreSQL local et la base
 `histae-dev`.
@@ -381,14 +387,14 @@ améliorations, tests manquants, périmètres API/dashboard et critères de fin.
 
 Ordre conseillé côté API :
 
-1. Finaliser le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines (R04/R05).
+1. Réconcilier Stripe, dont les créations Customer incertaines (R05). Le suivi Sweego R04 est implémenté ;
+   configurer et éprouver la destination réelle avant production.
 2. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
 
-R01 à R03 sont terminés. Les migrations jusqu’à 013 sont appliquées localement sans reset ; R03 n’ajoute pas
-de migration. Les notifications historiques ne sont pas rejouées. R03 ajoute 33 scénarios et corrige les courses
-consentement/écriture et expiration/verrou, le quota nul et la fermeture des pools Scylla remplacés après coupure.
-Le pilote 4.9.0 garde un petit patch pnpm versionné ; aucune nouvelle dépendance ni écran dashboard.
-Le bilan R03 couvre 632 tests, dont 160 intégrations réelles ; voir la [roadmap](docs/roadmap.md) et [l’isolation/les limites](docs/resilience-tests.md).
+R01 à R04 sont terminés ; les migrations jusqu’à 014 sont appliquées localement sans reset. Les notifications
+historiques ne sont pas rejouées. Le pilote Scylla 4.9.0 conserve son correctif pnpm de fermeture des pools après
+coupure. R04 n’ajoute ni dépendance ni écran dashboard. Les bilans de validation sont dans la
+[roadmap](docs/roadmap.md), les règles d’isolation dans [les tests de résilience](docs/resilience-tests.md).
 
 Avant production : calibration et recours de modération, alertes et supervision des workers,
 sauvegardes/restaurations éprouvées, exploitation WebAuthn, tests de charge et audit indépendant.

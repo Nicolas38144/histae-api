@@ -16,7 +16,7 @@ Ne pas refaire ce qui existe déjà :
 - métriques HTTP/dépendances, suivi persistant des maintenances et récupération auditée des dead letters ;
 - optimisation SQL documentée et séparation récente des responsabilités matchs, administration et Stripe.
 
-R01, R02 et R03 sont livrés. Le bilan R03 ci-dessous comprend **82 suites et 632 tests**, dont 160 intégrations réelles PostgreSQL/Scylla/Redis/S3. [test.md](../test.md) décrit les commandes et prérequis, pas un compteur permanent de la couverture.
+R01 à R04 sont livrés. Le bilan R04 comprend **87 suites et 718 tests**, dont 181 intégrations réelles PostgreSQL/Scylla/Redis/S3. [test.md](../test.md) décrit les commandes et prérequis, pas un compteur permanent de la couverture.
 
 Priorités : **P1** = prochain lot ou exigence importante avant production ; **P2** = consolidation, à avancer selon les volumes et l’exposition. Une limite constatée n’implique pas qu’un incident se soit déjà produit. Un manque de tests n’est pas une vulnérabilité démontrée.
 
@@ -25,7 +25,7 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 | R01 | Livraison durable des notifications — terminé après revue | Livré le 03/09/2026 | API |
 | R02 | Effacement de compte reprenable par étapes — terminé | Livré le 04/09/2026 | API et dashboard |
 | R03 | Concurrence, pannes et régressions métier — terminé | Livré le 04/09/2026 | API |
-| R04 | Suivi de livraison et issues incertaines Sweego | P1 | API, fournisseur existant |
+| R04 | Suivi de livraison et issues incertaines Sweego — terminé | Livré le 04/09/2026 | API, fournisseur existant |
 | R05 | Réconciliation Stripe et échecs persistants | P1 | API, dashboard éventuel |
 | R06 | Traitements bornés, exports et pagination | P2 | API |
 | R07 | Réduction des données dans les logs | P1 avant production | API |
@@ -98,17 +98,21 @@ et des fixtures, sans nouveau contrat HTTP ni changement dashboard.
 séparément. Sweego/Stripe restent R04/R05, charge R06/R12, panne de machine et restauration R10. Aucun nouvel
 audit des dépendances ni pentest n’est revendiqué.
 
-### R04 — Compléter le suivi Sweego
+### R04 — Compléter le suivi Sweego — terminé
 
-**Limite constatée.** L’acceptation fournisseur ne prouve pas la livraison du SMS. Une réponse perdue peut être traitée comme un échec alors que le SMS arrive, avec un OTP potentiellement inutilisable.
+**Livré.** Le suivi distingue l’acceptation HTTP, le callback d’envoi, l’échec explicite et l’issue inconnue. Un callback signé peut récupérer une tentative dont la réponse d’envoi a été perdue, sans second POST ni réactivation d’un code consommé ou remplacé. Voir [le protocole et sa configuration](sweego-delivery.md).
 
-- [ ] Vérifier le contrat fournisseur actuel : statuts disponibles, authentification des callbacks et garanties d’idempotence.
-- [ ] Distinguer acceptation, livraison, échec et issue incertaine sans inventer une garantie du fournisseur.
-- [ ] Gérer les callbacks rejoués ou désordonnés et les pertes de réponse sans fragiliser l’usage unique des OTP.
-- [ ] Définir la conduite de reprise et les métriques de délai/échec, sans téléphone ni OTP dans les logs.
-- [ ] Tester les cas SMS livré/réponse perdue, callback tardif, doublon et indisponibilité.
+- [x] Vérifier la documentation officielle : HMAC-SHA256 du corps brut, secret décodé en base64 et événements `sms_sent` / `sms_undelivered`. Aucune garantie documentée de déduplication des POST n’a été trouvée.
+- [x] Séparer `pending`, `accepted`, `sent`, `failed` et `unknown`. `sms_sent` ne constitue pas une preuve de réception au téléphone ; celle-ci reste explicitement non confirmée.
+- [x] Sérialiser les transitions par téléphone, vérifier la corrélation et rendre les callbacks monotones ; conserver l’usage unique, l’expiration après verrou et la priorité de la tentative acceptée la plus récente, même déjà consommée.
+- [x] Définir les reprises mobiles sans renvoi automatique, borner le corps et le délai fournisseur, normaliser les erreurs sans conserver leur cause brute. Les agrégats `operations.sms_delivery` restent sans identifiant ni nouvelle rétention.
+- [x] Tester réponse perdue, callback précoce/tardif/doublonné/désordonné, concurrence, purge, corrélation et indisponibilité ; deux cas utilisent un vrai serveur HTTP local qui interrompt ou laisse expirer une réponse partielle.
 
-**Terminé lorsque :** chaque issue est observable et la reprise n’entraîne ni réutilisation d’OTP ni envoi incontrôlé. Ce lot utilise Sweego déjà présent, pas un nouveau composant à héberger.
+**Migration et refactoring :** 014 convertit les anciens `sent` en `accepted` et attribue un ordre chronologique déterministe aux tentatives historiques. Elle est appliquée sur `localhost/histae-dev`, avec second passage idempotent, sans reset. Arrêter les anciens écrivains OTP lors du déploiement ; toute évolution persistante suivante exige une migration après 014. Le SQL est extrait dans `OtpRepository`, les identifiants et limites fournisseur sont partagés, les erreurs sont typées. Aucun nouveau composant, dépendance ou écran dashboard.
+
+**Validation exécutée :** lint, typecheck, build, 537 tests autonomes et 181 intégrations réussis, soit 718 tests dans 87 suites. Les 21 intégrations PostgreSQL dédiées couvrent le protocole et la migration historique ; elles sont incluses dans ce total. Les premiers passages globaux ont échoué avec des services locaux indisponibles, puis des dépassements de délai et un arrêt anormal du processus. Après rétablissement de l’environnement, les 35 tests du contrat PostgreSQL puis les 11 suites d’intégration complètes passent, sans augmenter les délais ni forcer l’arrêt de Jest. Les fixtures sont isolées ; aucun reset des stockages partagés. Aucun audit des dépendances ni pentest supplémentaire n’est revendiqué.
+
+**Limites avant production :** configurer `SWEEGO_WEBHOOK_SECRET` et la destination HTTPS dans le compte Sweego, puis éprouver un SMS autorisé, la signature et les retries réels. La politique de re-signature des anciennes livraisons reste à vérifier ; Histae conserve sa fenêtre anti-rejeu. Aucun SMS réel n’a été envoyé par ces tests. Sans acquittement HTTP ni callback, le code reste inutilisable et l’issue inconnue : ne pas inventer de certitude fournisseur. Les métriques OTP ne concernent que les tentatives non expirées, les compteurs de callbacks sont propres au processus ; leur historisation/alerting relève de R08.
 
 ### R05 — Réconcilier Stripe et rendre ses anomalies opérables
 
@@ -216,20 +220,21 @@ audit des dépendances ni pentest n’est revendiqué.
 
 ## 5. Frontières API, dashboard et mobile
 
-R01, R02 et R03 sont livrés, avec suivi des effacements dans le dashboard pour R02 et sans changement dashboard pour R03. R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R04/R05 concernent des fournisseurs déjà utilisés. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
+R01 à R04 sont livrés, avec suivi des effacements dans le dashboard pour R02 et sans changement dashboard pour R03/R04. R04 ajoute le suivi OTP et les métriques API. R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R05 concerne Stripe déjà utilisé. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
 
 Pour le dashboard, vérifier avant ajout les besoins de suivi des anomalies de livraison/facturation et des recours de modération. Réutiliser les protections existantes : listes minimales, détail autorisé, motif/audit et authentification récente pour les opérations sensibles. Ne pas recréer les écrans de modération, de réconciliation photo ou de suivi des effacements déjà livrés.
 
 Côté mobile, restent à **vérifier dans son propre dépôt**, sans les déclarer manquants ici :
 
 - rafraîchissement des tokens en single-flight, stockage atomique de la paire et retour à l’OTP après une réponse de rotation perdue ; voir [sessions mobiles](mobile-sessions.md) ;
+- gestion de `otp_delivery_unknown`, conservation de la clé d’intention OTP et absence de boucle automatique d’envoi avec de nouvelles clés ; voir [suivi Sweego](sweego-delivery.md) ;
 - prise en charge du nouveau `202` de suppression : fermer la session dès acceptation, sans afficher prématurément que tous les stockages sont nettoyés ;
 - intégration du catalogue et des trois réponses de profil, de leur ordre, de leur sauvegarde et de leur affichage ;
 - présentation des statuts de modération, erreurs et éventuels recours.
 
 ## 6. Ordre conseillé et entretien du document
 
-1. R04/R05 : suivi Sweego et réconciliation Stripe.
+1. R05 : réconciliation Stripe, dont les créations Customer incertaines. La configuration réelle Sweego de R04 reste à éprouver avant production.
 2. R06/R07 : débit de purge outbox, volumes, cohérence des exports et revue des logs restante.
 3. Avant production : terminer R08 à R13 ; commencer tôt les décisions et procédures qui nécessitent des intervenants externes.
 

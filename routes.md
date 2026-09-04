@@ -63,7 +63,7 @@ Le client doit interpréter `error.code`, pas le texte de `message`. Aucune stac
 | 429 | Limite de débit dépassée ; respecter `Retry-After` lorsqu’il est fourni. |
 | 503 | Dépendance ou protection temporairement indisponible. |
 
-Une limite globale par IP s’ajoute aux limites dédiées indiquées ci-dessous ; leurs valeurs sont les valeurs par défaut configurables. Dépassement global : `rate_limit_exceeded` ; protection Redis indisponible : `rate_limit_unavailable`, sans laisser passer la requête. Le webhook Stripe a sa propre limite à la place de la limite globale.
+Une limite globale par IP s’ajoute aux limites dédiées indiquées ci-dessous ; leurs valeurs sont les valeurs par défaut configurables. Dépassement global : `rate_limit_exceeded` ; protection Redis indisponible : `rate_limit_unavailable`, sans laisser passer la requête. Les webhooks Stripe et Sweego ont chacun leur propre limite à la place de la limite globale.
 
 ### Pagination
 
@@ -99,7 +99,13 @@ Il n’existe pas de mécanisme de retry universel.
 
 **OTP.** Seuls les téléphones français E.164 `+33…` sont acceptés. La vérification consomme le code une seule fois et crée un compte utilisateur si nécessaire. Envoi et vérification : 5/h par IP et numéro pseudonymisé. La validité du code suit `OTP_TTL`.
 
-L’envoi répond `202 { "message": "Verification code request accepted." }` : cela ne prouve pas la livraison du SMS. Un rejeu identique déjà accepté, ou encore en cours dans son délai autorisé, ne déclenche pas un second appel fournisseur. Une demande échouée ou restée en cours au-delà du timeout fournisseur augmenté de cinq secondes renvoie `503 otp_delivery_unavailable`. Une clé réutilisée avec un autre numéro renvoie `409 idempotency_key_conflict`.
+L’envoi répond `202 { "message": "Verification code request accepted." }` : cela ne prouve pas la livraison du SMS.
+Pendant la rétention de la demande, aucun rejeu identique ne déclenche un second appel fournisseur. Une demande
+rejetée renvoie `503 otp_delivery_unavailable`. Un timeout, une réponse inexploitable ou une attente dépassant
+le timeout fournisseur augmenté de cinq secondes renvoie `503 otp_delivery_unknown`. Un callback signé peut
+confirmer le code initial, jamais réactiver un code consommé, expiré ou remplacé. Attendre puis rejouer la même clé ;
+un nouvel envoi exige une nouvelle intention explicite, avec les limites OTP habituelles. Une clé réutilisée avec
+un autre numéro renvoie `409 idempotency_key_conflict`. Détails : [suivi Sweego](docs/sweego-delivery.md).
 
 **Refresh.** Envoyer le dernier refresh sous la forme opaque reçue `jti:secret`, puis enregistrer atomiquement la nouvelle paire de tokens. Le rejeu d’un ancien token authentique non expiré révoque toute sa famille et renvoie `401 invalid_or_expired_refresh_token`. Il n’y a pas de fenêtre de grâce : deux refresh concurrents ou une réponse perdue peuvent imposer une nouvelle connexion OTP. Limite : 30/15 min/IP.
 
@@ -116,6 +122,27 @@ Erreurs utiles : `authentication_required`, `invalid_or_expired_access_token`, `
 La signature est obligatoire, ainsi que la cohérence test/live. Les Event IDs sont dédupliqués ; les événements non pris en charge mais valides sont acquittés sans effet. Limite dédiée : 300/min/IP.
 
 Événements traités : `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created|updated|deleted|paused|resumed|trial_will_end`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed`, `customer.deleted`. Les événements de facture/abonnement plus anciens que l’état connu sont ignorés. Erreurs : `invalid_stripe_signature`, `stripe_mode_mismatch`, `invalid_stripe_event`, `billing_webhook_rate_limit_exceeded`.
+
+### Webhook Sweego
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/auth/sweego/webhook` | Corps JSON brut + `webhook-id`, `webhook-timestamp`, `webhook-signature` → `200 { received: true }`. |
+
+HMAC-SHA256 obligatoire avec le secret Sweego décodé en base64 ; aucune session mobile/admin. Signature sur
+`id.timestamp.corps-brut`, envoi datant de moins de cinq minutes et au plus une minute dans le futur.
+Charge signée limitée à 16 Kio. Limite dédiée : 300/min/IP, à la place de la limite globale.
+Les DTO des événements pris en charge refusent les champs inconnus ; les métadonnées fournisseur, notamment
+le téléphone éventuellement reçu, sont immédiatement écartées après validation et ne sont pas journalisées.
+
+`sms_sent` confirme l’envoi fournisseur, **pas une réception au téléphone démontrée**. `sms_undelivered` marque
+l’échec et prévaut sur `sms_sent`, quel que soit l’ordre d’arrivée. Rejeux et callbacks anciens ne réactivent
+aucun OTP consommé, expiré ou remplacé. Événements non pris en charge, simulations, autres campagnes/senders
+et demandes déjà purgées sont acquittés sans effet. La corrélation utilise `campaign_id` et `swg_uid`.
+
+Erreurs : `401 invalid_sweego_signature`, `400 invalid_sweego_event`, `409 sweego_delivery_conflict`,
+`429 sms_webhook_rate_limit_exceeded`, `503 sweego_webhook_unavailable` (configuration absente ou stockage indisponible).
+Configuration et limites fournisseur : [suivi OTP Sweego](docs/sweego-delivery.md).
 
 ### Santé
 
@@ -406,6 +433,12 @@ La décision est `approved | rejected`, avec la `version` lue au préalable. Une
 `revenue_period = last_7_days | last_30_days | month_to_date | previous_month | year_to_date | all_time`, défaut `month_to_date`. Le revenu est une estimation : abonnements Premium mis à jour sur la période × tarif mensuel actuel ; **ni encaissements ni bénéfice comptable**.
 
 `operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `completed` signifie tâche acquittée encore conservée, pas push reçu.
+
+`operations.sms_delivery` expose `states` (`pending, accepted, sent, failed, unknown`), `awaiting_callback`,
+`oldest_unresolved_age_seconds`, `average_acceptance_ms`, `average_sent_callback_ms`, `average_failure_ms`,
+`webhook_enabled`, `handset_delivery: "not_confirmed"`, `retention: "otp_expiry"` et `callbacks`
+(`applied, ignored, conflict, invalid_signature, invalid_event, unavailable, disabled`). Les états et délais
+portent sur les OTP non expirés, pas sur un historique complet ; les compteurs de callbacks sont locaux au processus.
 
 Réconciliation photo : filtre `all | stale_processing | deleting | dead_letter` (défaut `all`). UUID photo/utilisateur, métadonnées techniques, diagnostics et état outbox uniquement ; aucune image ni clé objet. Une photo prête ou un traitement récent refuse la relance : `409 photo_reconciliation_not_allowed` ; worker actif : `409 photo_reconciliation_in_progress` ; photo absente : `404 photo_not_found`.
 

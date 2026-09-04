@@ -61,6 +61,9 @@ export const migrations = [{
 }, {
   version: '013_resumable_account_erasure',
   filenames: ['013_resumable_account_erasure.sql'],
+}, {
+  version: '014_sweego_delivery_tracking',
+  filenames: ['014_sweego_delivery_tracking.sql'],
 }] as const;
 
 export type LegacyHistoryState = 'fresh' | 'complete' | 'partial';

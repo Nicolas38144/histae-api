@@ -11,8 +11,8 @@ describe('OtpService', () => {
   it('persists a pending hash, sends through the provider, then activates the OTP', async () => {
     const repository = {
       beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'created', id: 'ignored' }),
-      markOtpSent: jest.fn().mockResolvedValue(true),
-      markOtpFailed: jest.fn(),
+      markOtpAccepted: jest.fn().mockResolvedValue(true),
+      markOtpOutcome: jest.fn(),
     };
     const sms = {
       sendOtp: jest.fn().mockResolvedValue({ transactionId: 'transaction-1', messageId: 'message-1' }),
@@ -29,8 +29,8 @@ describe('OtpService', () => {
       phoneHash: string;
       otpHash: string;
       idempotencyKey: string;
-      expiresAt: Date;
-      staleBefore: Date;
+      ttlMillis: number;
+      settlementMillis: number;
     };
     const delivered = sms.sendOtp.mock.calls[0]?.[0] as { phone: string; region: string; code: string; deliveryId: string };
     expect(delivered.code).toMatch(/^[0-9]{6}$/);
@@ -39,19 +39,19 @@ describe('OtpService', () => {
       phoneHash: hmacSha256('+33612345678', config.phone.hashKey),
       otpHash: hmacSha256(delivered.code, config.phone.hashKey),
       idempotencyKey,
-      expiresAt: expect.any(Date),
-      staleBefore: expect.any(Date),
+      ttlMillis: 600_000,
+      settlementMillis: 15_000,
     }));
-    expect(persisted.staleBefore.getTime()).toBeLessThan(Date.now() - config.sms.timeoutMillis);
-    expect(repository.markOtpSent).toHaveBeenCalledWith(persisted.id, persisted.phoneHash, 'transaction-1', 'message-1');
-    expect(repository.markOtpFailed).not.toHaveBeenCalled();
+    expect(persisted.settlementMillis).toBeGreaterThan(config.sms.timeoutMillis);
+    expect(repository.markOtpAccepted).toHaveBeenCalledWith(persisted.id, persisted.phoneHash, 'transaction-1', 'message-1');
+    expect(repository.markOtpOutcome).not.toHaveBeenCalled();
   });
 
-  it.each(['sent', 'pending'] as const)('replays a %s idempotency record without sending another SMS', async (state) => {
+  it.each(['accepted', 'sent', 'pending'] as const)('replays a %s idempotency record without sending another SMS', async (state) => {
     const repository = {
       beginOtpDelivery: jest.fn().mockResolvedValue({ state, id: 'delivery-1' }),
-      markOtpSent: jest.fn(),
-      markOtpFailed: jest.fn(),
+      markOtpAccepted: jest.fn(),
+      markOtpOutcome: jest.fn(),
     };
     const sms = { sendOtp: jest.fn() };
     const service = new OtpService(config as never, repository as never, sms as never);
@@ -65,23 +65,23 @@ describe('OtpService', () => {
   it('keeps a failed delivery unusable and maps the provider failure to a stable 503', async () => {
     const repository = {
       beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'created', id: 'delivery-1' }),
-      markOtpSent: jest.fn(),
-      markOtpFailed: jest.fn().mockResolvedValue(undefined),
+      markOtpAccepted: jest.fn(),
+      markOtpOutcome: jest.fn().mockResolvedValue('failed'),
     };
-    const sms = { sendOtp: jest.fn().mockRejectedValue(new SmsDeliveryError('provider_http_429')) };
+    const sms = { sendOtp: jest.fn().mockRejectedValue(new SmsDeliveryError('provider_rejected', 'failed')) };
     const service = new OtpService(config as never, repository as never, sms as never);
 
     await expect(service.send('+33612345678', 'f5c3c744-a75f-46e7-8b59-6b94671cb029'))
       .rejects.toEqual(expect.objectContaining({ status: 503, code: 'otp_delivery_unavailable' }));
-    expect(repository.markOtpSent).not.toHaveBeenCalled();
-    expect(repository.markOtpFailed).toHaveBeenCalledWith(expect.any(String), 'provider_http_429');
+    expect(repository.markOtpAccepted).not.toHaveBeenCalled();
+    expect(repository.markOtpOutcome).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'failed', 'provider_rejected');
   });
 
-  it('returns a stable 503 without sending when an abandoned pending delivery was marked failed', async () => {
+  it('returns a stable 503 without sending when a definitive failure was recorded', async () => {
     const repository = {
       beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'failed', id: 'delivery-1' }),
-      markOtpSent: jest.fn(),
-      markOtpFailed: jest.fn(),
+      markOtpAccepted: jest.fn(),
+      markOtpOutcome: jest.fn(),
     };
     const sms = { sendOtp: jest.fn() };
     const service = new OtpService(config as never, repository as never, sms as never);
@@ -94,8 +94,8 @@ describe('OtpService', () => {
   it('rejects a reused key bound to another phone and malformed keys', async () => {
     const repository = {
       beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'conflict' }),
-      markOtpSent: jest.fn(),
-      markOtpFailed: jest.fn(),
+      markOtpAccepted: jest.fn(),
+      markOtpOutcome: jest.fn(),
     };
     const service = new OtpService(config as never, repository as never, { sendOtp: jest.fn() } as never);
 
@@ -121,6 +121,36 @@ describe('OtpService', () => {
       hmacSha256('+33612345678', config.phone.hashKey),
       hmacSha256('123456', config.phone.hashKey),
     );
+  });
+
+  it.each(['unknown', 'failed'] as const)('does not resend a persisted %s attempt', async state => {
+    const sms = { sendOtp: jest.fn() };
+    const repository = { beginOtpDelivery: jest.fn().mockResolvedValue({ state, id: 'delivery' }) };
+    const service = new OtpService(config as never, repository as never, sms as never);
+    await expect(service.send('+33600000000', 'f5c3c744-a75f-46e7-8b59-6b94671cb029'))
+      .rejects.toMatchObject({ code: state === 'unknown' ? 'otp_delivery_unknown' : 'otp_delivery_unavailable' });
+    expect(sms.sendOtp).not.toHaveBeenCalled();
+  });
+
+  it.each(['unknown', 'sent'] as const)('settles a lost response according to the persisted %s state', async state => {
+    const repository = { beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'created' }),
+      markOtpOutcome: jest.fn().mockResolvedValue(state) };
+    const sms = { sendOtp: jest.fn().mockRejectedValue(new SmsDeliveryError('provider_network_error', 'unknown')) };
+    const service = new OtpService(config as never, repository as never, sms as never);
+    const result = service.send('+33600000000', 'f5c3c744-a75f-46e7-8b59-6b94671cb029');
+    if (state === 'sent') await expect(result).resolves.toHaveProperty('message');
+    else await expect(result).rejects.toMatchObject({ code: 'otp_delivery_unknown', cause: undefined });
+    expect(repository.markOtpOutcome).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'unknown', 'provider_network_error');
+  });
+
+  it('never marks a provider-accepted request failed when its database acknowledgement is lost', async () => {
+    const repository = { beginOtpDelivery: jest.fn().mockResolvedValue({ state: 'created' }),
+      markOtpAccepted: jest.fn().mockRejectedValue(new Error('private DB detail')), markOtpOutcome: jest.fn() };
+    const sms = { sendOtp: jest.fn().mockResolvedValue({ messageId: 'one', transactionId: 'two' }) };
+    const service = new OtpService(config as never, repository as never, sms as never);
+    await expect(service.send('+33600000000', 'f5c3c744-a75f-46e7-8b59-6b94671cb029'))
+      .rejects.toMatchObject({ code: 'otp_delivery_unknown', cause: undefined });
+    expect(repository.markOtpOutcome).not.toHaveBeenCalled();
   });
 
   it.each(['+442071838750', '+330612345678'])('rejects the non-French or malformed E.164 number %s', async (phone) => {

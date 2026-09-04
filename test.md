@@ -134,5 +134,6 @@ Guides spécialisés :
 - [Notifications durables](docs/durable-notifications.md)
 - [Effacement reprenable](docs/account-erasure.md)
 - [Concurrence et pannes locales](docs/resilience-tests.md)
+- [Callbacks et reprises OTP Sweego](docs/sweego-delivery.md) : signatures/réponses synthétiques, PostgreSQL isolé, aucun SMS réel.
 - [Politique de rétention](docs/retention-policy.md)
 - [Portée du check-up de sécurité](docs/security-checkup.md)

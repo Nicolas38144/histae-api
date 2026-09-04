@@ -26,11 +26,14 @@ describe('OperationalStatusService', () => {
     };
     const service = new OperationalStatusService(
       metrics as never, database as never, outbox as never, maintenance as never, config as never,
+      { statusSnapshot: jest.fn().mockResolvedValue({ states: { unknown: 2 } }) } as never,
+      { snapshot: jest.fn().mockReturnValue({ applied: 3 }) } as never,
     );
 
     const snapshot = await service.snapshot(new Date('2030-01-02T00:00:00.000Z'));
     expect(snapshot.postgres_pool).toEqual({ total: 5, idle: 1, waiting: 2 });
     expect(snapshot.outbox).toEqual(expect.objectContaining({ dead_letter: 1 }));
+    expect(snapshot.sms_delivery).toEqual({ states: { unknown: 2 }, webhook_enabled: false, callbacks: { applied: 3 } });
     expect(snapshot.maintenance).toEqual(expect.arrayContaining([
       expect.objectContaining({ job_name: 'matches', missing: false, overdue: true }),
       expect.objectContaining({ job_name: 'photos', missing: true, overdue: true }),

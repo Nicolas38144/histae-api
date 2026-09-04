@@ -11,6 +11,7 @@ Avant chaque nouvelle version juridique :
 - valider la matrice [`retention-policy.md`](retention-policy.md), y compris les sauvegardes et sous-traitants ;
 - inclure les références de livraison push par appareil, leur suppression en cascade et le contexte de facture/abonnement interne servant à écarter les alertes obsolètes ; R01 ne change pas les durées de notification/outbox/audit et ne copie ni token FCM ni texte privé dans les tâches ;
 - inclure les métadonnées des familles mobiles et les motifs normalisés de révocation dans cette validation ; les hashes des tokens consommés restent conservés jusqu'à leur expiration initiale pour détecter le rejeu, sans nouvelle durée ni collecte d'IP/user-agent ;
+- inclure le suivi OTP/Sweego : métadonnées d’envoi rattachées à la rétention OTP existante, sans journal des callbacks ni copie du téléphone éventuellement reçu du fournisseur ; aucune nouvelle durée en R04 ;
 - faire approuver les questions de profil initiales et la gouvernance des ajouts administratifs, interdire les
   formulations qui solliciteraient inutilement des données sensibles, informer que les réponses sont visibles aux
   autres membres et vérifier que la suppression d’une question et de toutes ses réponses est compatible avec les

@@ -7,7 +7,7 @@ import {
 
 describe('PostgreSQL migration catalog', () => {
   it('builds the consolidated baseline followed by incremental migrations', async () => {
-    expect(migrations).toHaveLength(13);
+    expect(migrations).toHaveLength(14);
     const migration = await loadMigration(migrations[0]);
     expect(migration.sql).toContain('-- source: schema_postgres.sql');
     expect(migration.sql).toContain('CREATE TABLE user_account');

@@ -39,6 +39,18 @@ describe('ConfigService SMS configuration', () => {
     }));
   });
 
+  it('accepts the webhook secret provided by Sweego and keeps localhost tracking opt-in', () => {
+    expect(new ConfigService().sms.webhookSecret).toBe('');
+    process.env.SWEEGO_WEBHOOK_SECRET = Buffer.alloc(48, 7).toString('base64');
+    expect(new ConfigService().sms.webhookSecret).toHaveLength(64);
+    expect(new ConfigService().rateLimit.smsWebhook).toEqual({ max: 300, windowMs: 60_000 });
+  });
+
+  it.each(['not-a-secret', 'a'.repeat(63), '-'.repeat(64)])('rejects an invalid webhook secret (%#)', secret => {
+    process.env.SWEEGO_WEBHOOK_SECRET = secret;
+    expect(() => new ConfigService()).toThrow('config: SWEEGO_WEBHOOK_SECRET');
+  });
+
   it('requires the Sweego provider in production', () => {
     process.env = productionEnvironment({ SMS_PROVIDER: 'disabled' });
 

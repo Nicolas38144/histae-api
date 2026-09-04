@@ -11,6 +11,8 @@ import type {
 } from './operations.models';
 import { MAINTENANCE_JOB_NAMES } from './operations.models';
 import { OperationalMetricsService } from './operational-metrics.service';
+import { OtpRepository } from '../auth/otp.repository';
+import { SweegoWebhookMetricsService } from '../auth/sweego-webhook-metrics.service';
 
 const EXPECTED_INTERVAL_MILLIS: Record<MaintenanceJobName, number> = {
   matches: 60 * 60 * 1_000,
@@ -27,12 +29,15 @@ export class OperationalStatusService {
     private readonly outbox: OutboxRepository,
     private readonly maintenance: MaintenanceStatusRepository,
     private readonly config: ConfigService,
+    private readonly otp: OtpRepository,
+    private readonly smsWebhooks: SweegoWebhookMetricsService,
   ) {}
 
   async snapshot(now = new Date()): Promise<OperationalSnapshot> {
-    const [outbox, recordedJobs] = await Promise.all([
+    const [outbox, recordedJobs, smsDelivery] = await Promise.all([
       this.outbox.statusSnapshot(),
       this.maintenance.list(),
+      this.otp.statusSnapshot(),
     ]);
     const jobs = new Map(recordedJobs.map((job) => [job.job_name, job]));
     return {
@@ -48,6 +53,8 @@ export class OperationalStatusService {
       }),
       postgres_pool: this.database.poolStats(),
       outbox,
+      sms_delivery: { ...smsDelivery, webhook_enabled: this.config.sms.provider === 'sweego' && !!this.config.sms.webhookSecret,
+        callbacks: this.smsWebhooks.snapshot() },
       maintenance: MAINTENANCE_JOB_NAMES.map((jobName) => maintenanceView(jobName, jobs.get(jobName), now)),
     };
   }

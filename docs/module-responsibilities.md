@@ -1,13 +1,15 @@
 # Frontières de responsabilités
 
 Mise à jour : 4 septembre 2026. Ces frontières incluent R01 (notifications durables), R02 (effacement
-reprenable) et R03 (concurrence/reprises), sans nouveau service à déployer. R03 applique un correctif versionné
+reprenable), R03 (concurrence/reprises) et R04 (suivi OTP/Sweego), sans nouveau service à déployer. R03 applique un correctif versionné
 au pilote Scylla existant ; le contrat de suppression R02 est détaillé séparément.
 
 ## Composants spécialisés
 
 | Domaine | Composant | Responsabilité |
 | --- | --- | --- |
+| Auth mobile | `OtpService` / `OtpRepository` | Intentions d’envoi et erreurs publiques / états OTP, corrélation, activation et consommation sérialisées. `AuthRepository` ne conserve que les comptes. |
+| SMS | `SweegoSmsService` / `SweegoWebhookService` | POST borné sans retry / signature brute, validation et projection minimale du callback. |
 | Matchs | `MatchesRepository` | Création, listes et projections, révélation, continuation et quotas. |
 | Matchs | `MatchMessageRepository` | Pagination des messages, envoi idempotent et accusés de lecture. |
 | Matchs | `MatchMaintenanceRepository` | Élection transactionnelle du worker puis transitions et purge. Le timer et le suivi opérationnel restent dans `MatchMaintenanceService`. |
@@ -29,6 +31,10 @@ validations et limites de débit. R02 ajoute l’authentification récente aux t
 leur progression et les reprises, sans piloter directement les étapes internes.
 
 ## Frontières transactionnelles à conserver
+
+- Les écritures OTP prennent le verrou du téléphone pseudonymisé avant les lignes. Aucun réseau sous verrou.
+  Un callback tardif ne réactive jamais un ancêtre consommé/remplacé ; un échec de persistance après envoi reste
+  incertain. Les métadonnées de livraison restent dans la rétention OTP existante. Voir [suivi Sweego](sweego-delivery.md).
 
 - `match-access.ts` reçoit le `PoolClient` de l'appelant. Révélation et messagerie partagent ainsi les mêmes
   contrôles de participation, verrouillage et expiration ; l'utilitaire ne démarre pas une autre transaction.
@@ -61,4 +67,4 @@ une classe par méthode ou d'imposer une architecture distribuée.
 
 Les tests HTTP suivent les contrats documentés. Les intégrations exercent les repositories réels, les reprises
 et la concurrence ; les tests unitaires isolent notamment les échecs fournisseur. Voir [`test.md`](../test.md)
-pour les résultats réellement exécutés.
+pour les commandes et prérequis ; les bilans réellement exécutés sont dans la [roadmap](roadmap.md).

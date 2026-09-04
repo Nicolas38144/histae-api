@@ -19,6 +19,8 @@ import { MaintenanceStatusRepository } from './operations/maintenance-status.rep
 import { MaintenanceTrackerService } from './operations/maintenance-tracker.service';
 import { OperationalMetricsService } from './operations/operational-metrics.service';
 import { OperationalStatusService } from './operations/operational-status.service';
+import { OtpRepository } from './auth/otp.repository';
+import { SweegoWebhookMetricsService } from './auth/sweego-webhook-metrics.service';
 
 @Global()
 @Module({
@@ -43,6 +45,8 @@ import { OperationalStatusService } from './operations/operational-status.servic
     MaintenanceStatusRepository,
     MaintenanceTrackerService,
     OperationalStatusService,
+    OtpRepository,
+    SweegoWebhookMetricsService,
   ],
   exports: [
     ConfigService, DatabaseService, AccountActivityService, ScyllaService, RedisService, RateLimitService,
@@ -52,6 +56,7 @@ import { OperationalStatusService } from './operations/operational-status.servic
     PhotoModerationService, TextModerationService,
     OperationalMetricsService, MaintenanceStatusRepository,
     MaintenanceTrackerService, OperationalStatusService,
+    OtpRepository, SweegoWebhookMetricsService,
   ],
 })
 export class CoreModule {}

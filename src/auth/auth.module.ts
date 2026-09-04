@@ -10,11 +10,13 @@ import { SmsDelivery } from './sms-delivery';
 import { SweegoSmsService } from './sweego-sms.service';
 import { TokenService } from './token.service';
 import { RefreshSessionRepository } from './refresh-session.repository';
+import { SweegoWebhookController } from './sweego-webhook.controller';
+import { SweegoWebhookService } from './sweego-webhook.service';
 
 @Module({
   imports: [JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.jwt.secret }) })],
-  controllers: [AuthController],
-  providers: [AuthRepository, RefreshSessionRepository, TokenService, { provide: SmsDelivery, useClass: SweegoSmsService }, OtpService, AuthService, JwtActiveGuard],
+  controllers: [AuthController, SweegoWebhookController],
+  providers: [AuthRepository, RefreshSessionRepository, TokenService, { provide: SmsDelivery, useClass: SweegoSmsService }, OtpService, AuthService, JwtActiveGuard, SweegoWebhookService],
   exports: [AuthService, JwtActiveGuard, JwtModule, RefreshSessionRepository],
 })
 export class AuthModule {}

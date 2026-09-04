@@ -6,7 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { AppModule } from '../../src/app.module';
-import { AuthRepository } from '../../src/auth/auth.repository';
+import { OtpRepository } from '../../src/auth/otp.repository';
 import { AdminPhotoRepository } from '../../src/admin/admin-photo.repository';
 import { AdminMetricsRepository } from '../../src/admin/admin-metrics.repository';
 import { DiscoveryRepository } from '../../src/discovery/discovery.repository';
@@ -751,7 +751,7 @@ describe('PostgreSQL schema contract', () => {
   });
 
   it('activates only provider-accepted OTPs and preserves an older code after delivery failure', async () => {
-    const repository = new AuthRepository(databaseFor(pool) as never);
+    const repository = new OtpRepository(databaseFor(pool) as never);
     const phoneHash = 'otp-test-' + randomUUID();
     const firstId = randomUUID();
     const firstKey = randomUUID();
@@ -762,28 +762,28 @@ describe('PostgreSQL schema contract', () => {
         phoneHash,
         otpHash: 'first-hash',
         idempotencyKey: firstKey,
-        expiresAt: new Date(Date.now() + 600_000),
-        staleBefore: new Date(Date.now() - 15_000),
+        ttlMillis: 600_000,
+        settlementMillis: 15_000,
       })).resolves.toEqual({ state: 'created', id: firstId });
       await expect(repository.beginOtpDelivery({
         id: randomUUID(),
         phoneHash,
         otpHash: 'different-hash',
         idempotencyKey: firstKey,
-        expiresAt: new Date(Date.now() + 600_000),
-        staleBefore: new Date(Date.now() - 15_000),
+        ttlMillis: 600_000,
+        settlementMillis: 15_000,
       })).resolves.toEqual({ state: 'pending', id: firstId });
-      await expect(repository.markOtpSent(firstId, phoneHash, 'transaction-1', 'message-1')).resolves.toBe(true);
+      await expect(repository.markOtpAccepted(firstId, phoneHash, 'transaction-1', 'message-1')).resolves.toBe(true);
 
       await expect(repository.beginOtpDelivery({
         id: failedId,
         phoneHash,
         otpHash: 'failed-hash',
         idempotencyKey: randomUUID(),
-        expiresAt: new Date(Date.now() + 600_000),
-        staleBefore: new Date(Date.now() - 15_000),
+        ttlMillis: 600_000,
+        settlementMillis: 15_000,
       })).resolves.toEqual({ state: 'created', id: failedId });
-      await repository.markOtpFailed(failedId, 'provider_http_503');
+      await repository.markOtpOutcome(failedId, phoneHash, 'failed', 'provider_rejected');
 
       await expect(repository.consumeOtp(phoneHash, 'failed-hash')).resolves.toBe(false);
       await expect(repository.consumeOtp(phoneHash, 'first-hash')).resolves.toBe(true);
@@ -791,14 +791,14 @@ describe('PostgreSQL schema contract', () => {
         'SELECT delivery_status, delivery_error_code FROM otp_verification WHERE id = $1',
         [failedId],
       );
-      expect(failed.rows[0]).toEqual({ delivery_status: 'failed', delivery_error_code: 'provider_http_503' });
+      expect(failed.rows[0]).toEqual({ delivery_status: 'failed', delivery_error_code: 'provider_rejected' });
     } finally {
       await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);
     }
   });
 
-  it('marks an abandoned pending OTP as a failed delivery on replay', async () => {
-    const repository = new AuthRepository(databaseFor(pool) as never);
+  it('marks an abandoned pending OTP as unknown on replay', async () => {
+    const repository = new OtpRepository(databaseFor(pool) as never);
     const phoneHash = 'otp-stale-' + randomUUID();
     const id = randomUUID();
     const idempotencyKey = randomUUID();
@@ -808,31 +808,31 @@ describe('PostgreSQL schema contract', () => {
         phoneHash,
         otpHash: 'stale-hash',
         idempotencyKey,
-        expiresAt: new Date(Date.now() + 600_000),
-        staleBefore: new Date(Date.now() - 15_000),
+        ttlMillis: 600_000,
+        settlementMillis: 15_000,
       })).resolves.toEqual({ state: 'created', id });
-      await pool.query("UPDATE otp_verification SET created_at = clock_timestamp() - INTERVAL '1 minute' WHERE id = $1", [id]);
+      await pool.query("UPDATE otp_verification SET settlement_deadline = clock_timestamp() - INTERVAL '1 minute' WHERE id = $1", [id]);
 
       await expect(repository.beginOtpDelivery({
         id: randomUUID(),
         phoneHash,
         otpHash: 'replacement-hash',
         idempotencyKey,
-        expiresAt: new Date(Date.now() + 600_000),
-        staleBefore: new Date(),
-      })).resolves.toEqual({ state: 'failed', id });
+        ttlMillis: 600_000,
+        settlementMillis: 15_000,
+      })).resolves.toEqual({ state: 'unknown', id });
       const delivery = await pool.query<{ delivery_status: string; delivery_error_code: string }>(
         'SELECT delivery_status, delivery_error_code FROM otp_verification WHERE id = $1',
         [id],
       );
-      expect(delivery.rows[0]).toEqual({ delivery_status: 'failed', delivery_error_code: 'delivery_unknown' });
+      expect(delivery.rows[0]).toEqual({ delivery_status: 'unknown', delivery_error_code: 'delivery_unknown' });
     } finally {
       await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);
     }
   });
 
   it('keeps exactly one usable OTP when two provider acceptances complete concurrently', async () => {
-    const repository = new AuthRepository(databaseFor(pool) as never);
+    const repository = new OtpRepository(databaseFor(pool) as never);
     const phoneHash = 'otp-concurrent-' + randomUUID();
     const firstId = randomUUID();
     const secondId = randomUUID();
@@ -843,19 +843,19 @@ describe('PostgreSQL schema contract', () => {
           phoneHash,
           otpHash,
           idempotencyKey: randomUUID(),
-          expiresAt: new Date(Date.now() + 600_000),
-          staleBefore: new Date(Date.now() - 15_000),
+          ttlMillis: 600_000,
+          settlementMillis: 15_000,
         })).resolves.toEqual({ state: 'created', id });
       }
 
       await expect(Promise.all([
-        repository.markOtpSent(firstId, phoneHash, 'transaction-1', 'message-1'),
-        repository.markOtpSent(secondId, phoneHash, 'transaction-2', 'message-2'),
+        repository.markOtpAccepted(firstId, phoneHash, 'transaction-1', 'message-1'),
+        repository.markOtpAccepted(secondId, phoneHash, 'transaction-2', 'message-2'),
       ])).resolves.toEqual([true, true]);
       const deliveries = await pool.query<{ delivery_status: string; used: boolean }>(`
         SELECT delivery_status, used FROM otp_verification WHERE phone_number_hash = $1
       `, [phoneHash]);
-      expect(deliveries.rows.filter((row) => row.delivery_status === 'sent' && !row.used)).toHaveLength(1);
+      expect(deliveries.rows.filter((row) => row.delivery_status === 'accepted' && !row.used)).toHaveLength(1);
       expect(deliveries.rows.filter((row) => row.used)).toHaveLength(1);
     } finally {
       await pool.query('DELETE FROM otp_verification WHERE phone_number_hash = $1', [phoneHash]);

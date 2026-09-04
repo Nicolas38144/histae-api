@@ -161,6 +161,10 @@ La migration `010_mobile_refresh_sessions`, les contraintes de déploiement et l
 
 La livraison réelle des SMS nécessite `SMS_PROVIDER=sweego` et les identifiants Sweego correspondants. Les
 numéros acceptés utilisent actuellement le format français E.164, par exemple `+33612345678`.
+Le suivi des envois/échecs exige aussi `SWEEGO_WEBHOOK_SECRET` et une destination Sweego vers
+`POST /api/auth/sweego/webhook`. Une réponse perdue reste incertaine, sans renvoi automatique ; un callback signé
+peut confirmer le code initial sans le réutiliser. Migration 014, configuration localhost et limites de réception :
+[`docs/sweego-delivery.md`](docs/sweego-delivery.md).
 
 Le dashboard utilise exclusivement WebAuthn, sans SSO ni fournisseur d’identité externe. Les clés privées restent
 dans l’authenticator. PostgreSQL ne conserve que la clé publique, le compteur, les challenges et secrets de session
@@ -174,6 +178,8 @@ parcourir un historique de sécurité paginé. Aucune de ces vues ne contient de
 statuts sensibles, les résultats des appels aux dépendances configurées, le pool PostgreSQL, l’outbox et les
 dernières exécutions de maintenance. Les métriques volatiles repartent à zéro au redémarrage ; les exécutions de
 maintenance et l’état de l’outbox sont conservés dans PostgreSQL pour signaler un worker manquant ou en retard.
+`operations.sms_delivery` ajoute les états OTP non expirés, les délais observés et les issues des callbacks,
+sans données individuelles ni garantie de réception au téléphone.
 
 Les chemins SQL critiques (feed, matchs, recherche admin, exports et rétention) sont alignés avec des index dédiés
 par la migration `009_sql_performance_indexes`. La méthode, les choix d’index et les plans locaux mesurés sont

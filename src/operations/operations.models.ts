@@ -1,4 +1,6 @@
 import type { OutboxStatusSnapshot } from '../outbox/outbox.models';
+import type { OtpDeliverySnapshot } from '../auth/otp-delivery.models';
+import type { SmsWebhookOutcome } from '../auth/sweego-webhook-metrics.service';
 
 export const DEPENDENCY_NAMES = [
   'postgres',
@@ -83,5 +85,6 @@ export type OperationalSnapshot = {
   dependencies: Record<DependencyName, DependencySnapshot>;
   postgres_pool: { total: number; idle: number; waiting: number };
   outbox: OutboxStatusSnapshot;
+  sms_delivery: OtpDeliverySnapshot & { webhook_enabled: boolean; callbacks: Record<SmsWebhookOutcome, number> };
   maintenance: MaintenanceJobOperationalView[];
 };

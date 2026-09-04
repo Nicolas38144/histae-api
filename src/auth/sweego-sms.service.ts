@@ -1,7 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '../config/config.service';
 import type { OtpSms, SmsDeliveryReceipt } from './sms-delivery';
-import { SmsDelivery, SmsDeliveryError } from './sms-delivery';
+import { MAX_SMS_PROVIDER_BODY_BYTES, SmsDelivery, SmsDeliveryError, smsProviderIdentifier } from './sms-delivery';
 import { OperationalMetricsService } from '../operations/operational-metrics.service';
 
 type SweegoSuccess = {
@@ -24,12 +24,13 @@ export class SweegoSmsService extends SmsDelivery {
   }
 
   private async deliver(message: OtpSms): Promise<SmsDeliveryReceipt> {
-    if (this.config.sms.provider !== 'sweego') throw new SmsDeliveryError('not_configured');
+    if (this.config.sms.provider !== 'sweego') throw new SmsDeliveryError('not_configured', 'failed');
 
     let response: Response;
     try {
       response = await fetch(this.config.sms.endpoint, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'Api-Key': this.config.sms.apiKey,
           'Content-Type': 'application/json',
@@ -47,8 +48,8 @@ export class SweegoSmsService extends SmsDelivery {
         }),
         signal: AbortSignal.timeout(this.config.sms.timeoutMillis),
       });
-    } catch (error) {
-      throw new SmsDeliveryError('provider_network_error', error);
+    } catch {
+      throw new SmsDeliveryError('provider_network_error', 'unknown');
     }
 
     if (response.status !== 200) {
@@ -57,19 +58,20 @@ export class SweegoSmsService extends SmsDelivery {
       } catch {
         // The provider status remains the useful, stable failure reason.
       }
-      throw new SmsDeliveryError(`provider_http_${response.status}`);
+      const rejected = [400, 401, 403, 404, 405, 413, 415, 422, 429].includes(response.status);
+      throw new SmsDeliveryError(rejected ? 'provider_rejected' : 'provider_unavailable', rejected ? 'failed' : 'unknown');
     }
 
     let payload: unknown;
     try {
-      payload = await response.json();
-    } catch (error) {
-      throw new SmsDeliveryError('provider_invalid_response', error);
+      payload = await boundedResponse(response);
+    } catch {
+      throw new SmsDeliveryError('provider_invalid_response', 'unknown');
     }
-    if (!isSweegoSuccess(payload)) throw new SmsDeliveryError('provider_invalid_response');
+    if (!isSweegoSuccess(payload)) throw new SmsDeliveryError('provider_invalid_response', 'unknown');
 
     const messageIds = Object.values(payload.swg_uids);
-    if (messageIds.length !== 1 || !messageIds[0]) throw new SmsDeliveryError('provider_invalid_response');
+    if (messageIds.length !== 1 || !messageIds[0]) throw new SmsDeliveryError('provider_invalid_response', 'unknown');
     return { transactionId: payload.transaction_id, messageId: messageIds[0] };
   }
 }
@@ -77,10 +79,29 @@ export class SweegoSmsService extends SmsDelivery {
 function isSweegoSuccess(value: unknown): value is SweegoSuccess {
   if (!isRecord(value)) return false;
   const candidate = value as Partial<SweegoSuccess>;
-  return typeof candidate.transaction_id === 'string'
-    && candidate.transaction_id.trim().length > 0
+  return smsProviderIdentifier(candidate.transaction_id)
     && isRecord(candidate.swg_uids)
-    && Object.values(candidate.swg_uids).every((id) => typeof id === 'string' && id.trim().length > 0);
+    && Object.values(candidate.swg_uids).every(smsProviderIdentifier);
+}
+
+async function boundedResponse(response: Response): Promise<unknown> {
+  if (!response.body) throw new Error('Empty SMS response');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_SMS_PROVIDER_BODY_BYTES) throw new Error('Oversized SMS response');
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } finally {
+    try { await reader.cancel(); } catch { /* Never retain provider errors. */ }
+    reader.releaseLock();
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

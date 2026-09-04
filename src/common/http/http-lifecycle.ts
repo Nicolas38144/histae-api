@@ -29,7 +29,7 @@ export function registerHttpLifecycle(
     request.id = requestId;
     requestStarts.set(request, process.hrtime.bigint());
 
-    if (requestPath(request.url) === '/api/billing/stripe/webhook') return;
+    if (['/api/billing/stripe/webhook', '/api/auth/sweego/webhook'].includes(requestPath(request.url))) return;
     try {
       await limits.enforce('global', request.ip, config.rateLimit.global, 'rate_limit_exceeded');
     } catch (error) {
