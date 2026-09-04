@@ -3,7 +3,7 @@
 Mise à jour : 4 septembre 2026.
 
 Ce document donne le contexte utile pour reprendre le projet. Il ne répète plus chaque route ni chaque scénario
-de test : consulter respectivement `routes.md` et `test.md` pour ces inventaires détaillés.
+de test : consulter `routes.md` pour le contrat HTTP, `test.md` pour le guide de validation et `test/` pour les scénarios détaillés.
 
 ## 1. État actuel
 
@@ -359,13 +359,13 @@ pnpm run test:e2e
 pnpm test
 ```
 
-Avec PostgreSQL, ScyllaDB et Redis locaux :
+Avec PostgreSQL, ScyllaDB, Redis et S3 locaux :
 
 ```powershell
 pnpm run test:integration
 ```
 
-L’inventaire, les prérequis et les derniers résultats se trouvent dans `test.md`. Les autres références sont :
+Les commandes, prérequis et limites de validation se trouvent dans `test.md` ; les bilans des lots livrés sont dans la roadmap. Les autres références sont :
 
 - `routes.md` : contrat HTTP exhaustif ;
 - `.env.example` : variables et valeurs locales documentées ;
@@ -381,13 +381,14 @@ améliorations, tests manquants, périmètres API/dashboard et critères de fin.
 
 Ordre conseillé côté API :
 
-1. Compléter les tests de concurrence métier et de panne/reprise (R03).
-2. Finaliser le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines (R04/R05).
-3. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
+1. Finaliser le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines (R04/R05).
+2. Borner les traitements volumineux, préciser la cohérence des exports et réduire les données dans les logs.
 
-R01 et R02 sont terminés. Les migrations jusqu’à 013 sont appliquées localement sans reset ; les notifications
-historiques ne sont pas rejouées. La validation R02 couvre 599 tests, dont 127 intégrations réelles ; détails
-et portée des contrôles dans `test.md`.
+R01 à R03 sont terminés. Les migrations jusqu’à 013 sont appliquées localement sans reset ; R03 n’ajoute pas
+de migration. Les notifications historiques ne sont pas rejouées. R03 ajoute 33 scénarios et corrige les courses
+consentement/écriture et expiration/verrou, le quota nul et la fermeture des pools Scylla remplacés après coupure.
+Le pilote 4.9.0 garde un petit patch pnpm versionné ; aucune nouvelle dépendance ni écran dashboard.
+Le bilan R03 couvre 632 tests, dont 160 intégrations réelles ; voir la [roadmap](docs/roadmap.md) et [l’isolation/les limites](docs/resilience-tests.md).
 
 Avant production : calibration et recours de modération, alertes et supervision des workers,
 sauvegardes/restaurations éprouvées, exploitation WebAuthn, tests de charge et audit indépendant.

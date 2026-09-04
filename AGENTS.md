@@ -11,7 +11,7 @@ Les sources de référence à consulter avant une modification importante sont :
 - `resume.md` pour l'architecture, les règles métier, les risques ouverts et la feuille de route ;
 - `docs/roadmap.md` pour le backlog détaillé, les limites constatées, les priorités et les critères de fin ;
 - `routes.md` pour le contrat HTTP existant ;
-- `test.md` pour l'inventaire des tests et la procédure de validation ;
+- `test.md` pour les commandes, prérequis, règles d’isolation et limites de validation ; les scénarios détaillés restent dans les tests, les bilans de lots dans la roadmap ;
 - `docs/retention-policy.md` et `docs/legal-release-checklist.md` pour la rétention et les contraintes juridiques ;
 - `.env.example` pour la configuration prise en charge.
 
@@ -63,7 +63,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - La gestion des passkeys et des autres sessions exige une authentification récente. Ne jamais permettre de révoquer la passkey de la session courante, la dernière passkey active ou la session courante via la route de révocation ciblée. Les listes et historiques ne doivent exposer ni token/hash, ni clé publique.
 - Les routes utilisateur normales exigent les CGU et la notice courantes. Les routes indispensables à l'onboarding, à la déconnexion et aux droits RGPD restent accessibles selon `routes.md`.
 - Le sexe et les préférences exigent le consentement aux données sensibles ; la présence exige le consentement de localisation. Leur retrait doit déclencher l'effacement immédiat documenté.
+- Les écritures profil/préférences/présence doivent verrouiller le compte puis relire les versions requises des consentements dans la même transaction. Un précontrôle du service ne suffit pas face à un retrait concurrent.
 - Les transitions de match, la continuation, les quotas, l'expiration et l'envoi idempotent des messages doivent rester atomiques.
+- Lire l’horloge d’expiration après l’acquisition du verrou de match, dans le SELECT extérieur à la CTE matérialisée. Une attente de verrou ne doit pas prolonger la fenêtre ; une limite de continuation à zéro ne doit pas allouer le premier usage.
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
 - Les notifications match/message/Stripe et leurs tâches `notification.push` par appareil sont écrites dans la transaction métier via `notification-outbox.ts`. Ne jamais réintroduire une programmation après commit. Conserver la clé source/type/destinataire, le `notification_id` stable, les contrôles d’éligibilité avant envoi et les erreurs FCM normalisées. La migration 012 nettoie les notifications intercalées pendant l’effacement ; préserver le verrou partagé du destinataire et ce nettoyage final. Les alertes Stripe doivent respecter le prédicat partagé `notification-billing.ts` à la programmation et à l’envoi ; ne pas exposer leur contexte interne. SSE reste best-effort ; les issues FCM incertaines peuvent produire un doublon externe. Voir `docs/durable-notifications.md`.
@@ -98,7 +100,8 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Les migrations incrémentales `002_user_photo_lifecycle` à `013_resumable_account_erasure` ajoutent le cycle photo, l’idempotence/outbox, la réconciliation, les questions, la modération, WebAuthn admin, le suivi des maintenances/récupération auditée des dead letters, les index SQL, les familles de refresh mobiles, les notifications durables par appareil et l’effacement reprenable avec guards d’écriture. Après ces versions, ajouter une nouvelle migration pour toute évolution persistante. Ne pas modifier une migration déjà déployée sans stratégie explicite de checksum et de compatibilité.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
-- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local et Redis local (base logique 15 pour la suite Redis). SeaweedFS local est requis pour la readiness complète et le smoke test photo.
+- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local, Redis local (base logique 15) et le bucket S3 local. Les tests R03 créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
+- Conserver `patches/cassandra-driver@4.9.0.patch`, `pnpm-workspace.yaml` et `pnpm-lock.yaml` ensemble : le correctif ferme le pool d’un hôte remplacé après coupure. Rejouer le test réseau et vérifier l’arrêt naturel du processus lors d’une évolution du pilote ; ne pas masquer une fuite par `forceExit`.
 
 ## Commandes de travail
 
@@ -121,7 +124,7 @@ pnpm run test:e2e
 pnpm test
 ```
 
-Validation réelle, avec PostgreSQL, ScyllaDB et Redis locaux préparés :
+Validation réelle, avec PostgreSQL, ScyllaDB, Redis et S3 locaux préparés :
 
 ```powershell
 pnpm run test:integration
@@ -135,13 +138,13 @@ Au 4 septembre 2026, les migrations jusqu’à `013_resumable_account_erasure` s
 
 Le socle fonctionnel P0/P1 et le stockage photo privé sont présents. SeaweedFS `weed mini` sert au développement sur une machine ; avant la production, il faut choisir et éprouver une cible S3-compatible durable, hautement disponible, sauvegardée et supervisée.
 
-Le backlog détaillé et ses critères de validation sont centralisés dans `docs/roadmap.md`. R01 (notifications durables) et R02 (effacement reprenable et suivi dashboard) sont livrés. Les prochains lots API conseillés sont les tests de concurrence/panne, puis le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines trop anciennes. Le bornage des traitements, les exports et les logs restent à consolider. Avant production, terminer également calibration/recours de modération, alertes/supervision, sauvegardes/restaurations, exploitation WebAuthn, charge et audit indépendant. Mettre à jour la feuille de route après chaque lot validé plutôt que dupliquer son inventaire ici.
+Le backlog détaillé et ses critères de validation sont centralisés dans `docs/roadmap.md`. R01 (notifications durables), R02 (effacement reprenable et suivi dashboard) et R03 (concurrence/pannes, 33 scénarios supplémentaires) sont livrés. Les prochains lots API conseillés sont le suivi Sweego et la réconciliation Stripe, dont les créations Customer incertaines trop anciennes. Le bornage des traitements, les exports et les logs restent à consolider. Avant production, terminer également calibration/recours de modération, alertes/supervision, sauvegardes/restaurations, exploitation WebAuthn, charge et audit indépendant. Mettre à jour la feuille de route après chaque lot validé plutôt que dupliquer son inventaire ici.
 
 La migration `010_mobile_refresh_sessions` ajoute les familles et la filiation des refresh, les liens d'appareils push et l'effacement des sessions mobiles ; elle est incompatible avec les écritures de l'ancien code sans `family_id`. Les tests PostgreSQL réels couvrent rotation, rejeu, concurrence, logout, révocation, bannissement, rétention et migration des tokens historiques.
 
 La migration `011_durable_notifications` ajoute la déduplication des notifications et les références de livraison par appareil ; `012_notification_eligibility` ajoute le contexte interne de facturation et le nettoyage final des notifications lors de la désactivation. `013_resumable_account_erasure` ajoute les étapes RGPD et intentions Customer. Toute évolution persistante suivante exige une migration après 013. Arrêter les anciens écrivains et déployer API et workers compatibles ensemble : un ancien worker ne connaît pas les nouveaux événements ou ignore leurs contrôles. Les références sont effacées avec notification/appareil/événement purgé ; ne pas copier les tokens FCM dans l’outbox ni prolonger les rétentions existantes.
 
-La couverture à étendre concerne notamment la concurrence de continuation/quota Free, les tombstones, le retrait des consentements, la pagination matchs/signalements, la maintenance sur les autres données expirées, les coupures Redis/Scylla, le webhook Sweego et un parcours Stripe sandbox complet.
+R03 couvre continuation/quota Free, tombstones, retrait concurrent des consentements, pagination matchs/signalements, maintenances sur données expirées, coupures Redis/Scylla/S3 et arrêts réels du worker d’effacement. La couverture à étendre concerne les issues Sweego, un parcours Stripe sandbox complet, les volumes, les pannes de l’hôte et les restaurations sur la cible de production ; ces tests locaux ne remplacent pas ces validations.
 
 Les validations juridiques/DPO, l'AIPD, les comptes inactifs, les sous-traitants/transferts et les règles de sauvegarde ne sont pas des décisions à inventer dans le code. Les signaler comme dépendances lorsqu'une tâche les touche.
 
@@ -150,6 +153,7 @@ Les validations juridiques/DPO, l'AIPD, les comptes inactifs, les sous-traitants
 - Préserver les changements utilisateur déjà présents dans le worktree et ne jamais écraser un fichier modifié sans avoir inspecté son diff.
 - Ajouter ou adapter les tests au niveau approprié : unitaire pour les règles isolées, e2e pour le contrat Fastify, intégration pour le SQL/CQL et la concurrence réels.
 - Toute nouvelle route doit avoir validation DTO, erreurs stables, authentification/autorisation explicite, rate limit adapté, documentation dans `routes.md` et tests de contrat.
+- Les tableaux de `routes.md` portent les chemins complets (`/api` inclus), une seule ligne par méthode/chemin. Le test `routes-documentation.contract.spec.ts` compare cet inventaire au graphe Nest/Fastify réel ; ne pas le remplacer par une liste de contrôleurs maintenue à la main. Il ne vérifie pas les schémas JSON ni les autorisations.
 - Toute mutation pouvant être rejouée par le mobile ou un fournisseur doit définir son comportement d'idempotence.
 - Maintenir la pagination par curseur pour les grandes listes ; `offset` n'est conservé que pour compatibilité et est déprécié.
 - Ne pas ajouter de workflow CI sans demande explicite : la validation complète est actuellement locale.

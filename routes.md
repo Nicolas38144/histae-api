@@ -1,284 +1,421 @@
-# Histae API — routes existantes
+# Histae API — contrat HTTP
 
-Mise à jour : 4 septembre 2026. Toutes les routes ci-dessous sont préfixées par `/api`.
+Ce guide décrit les routes destinées au mobile, au dashboard et aux intégrations. Il ne décrit pas les mécanismes SQL ou les workers internes. Aucun document OpenAPI ni Swagger n’est exposé.
 
-## Conventions
+## Sommaire
 
-- Ce fichier est la référence du contrat HTTP ; l’API n’expose ni document OpenAPI ni interface Swagger.
-- Les requêtes avec corps utilisent JSON. Les champs non documentés sont refusés.
-- Taille maximale d’un corps JSON : **1 Mio**.
-- L’upload photo est la seule entrée multipart : `Idempotency-Key: <UUID v4>` et un fichier de **500 000 octets maximum** dans le champ `photo`.
-- Les erreurs suivent le format `{ "error": { "code", "message" } }`.
-- Une route « authentifiée » requiert le JWT mobile `Authorization: Bearer <access_token>`. Le compte doit être non supprimé et non banni. Pour un utilisateur, les CGU et la notice de confidentialité courantes doivent aussi être enregistrées ; sinon la route renvoie `403 onboarding_incomplete`.
-- Pendant l'onboarding, `GET /auth/me`, `GET|PUT /users/me/consents`, la gestion des sessions et les déconnexions `/auth/sessions`, `/auth/sessions/:id`, `/auth/logout`, `/auth/logout-all`, `POST /users/me/deletion-token` et `DELETE /users/me` restent accessibles, ainsi que les droits RGPD signalés plus bas. Les comptes administrateur sont exemptés de l'onboarding utilisateur.
-- Une route « admin » exige une session WebAuthn administrateur dans le cookie `HttpOnly` dédié et accepte les rôles `admin` et `superadmin`. Un JWT mobile, même émis pour un compte administratif, n’est pas accepté.
-- `limit` est un entier de 1 à 100 (20 par défaut). Les listes volumineuses renvoient `next_cursor`; passez-le ensuite dans `cursor`. `offset` reste accepté pour compatibilité, mais est déprécié et doit valoir `0` avec un curseur.
-- Un rate limit global par IP est actif et partagé dans Redis entre les instances de l’API. Les clés Redis sont pseudonymisées par HMAC. En cas de dépassement : `429 rate_limit_exceeded` avec l’en-tête `Retry-After` ; Redis indisponible produit `503 rate_limit_unavailable`.
-- `X-Request-ID` est renvoyé dans chaque réponse. Un UUID v4 fourni par le client est conservé ; toute autre valeur est remplacée.
-- Toutes les réponses désactivent le cache et portent des en-têtes défensifs contre le MIME sniffing, l’intégration en frame, les referrers et les permissions navigateur. HSTS est ajouté en production.
+- [Conventions communes](#conventions-communes)
+- [Routes publiques et intégrations](#routes-publiques-et-integrations)
+- [Client mobile](#client-mobile)
+- [Administration](#administration)
+- [Entretien du contrat](#entretien-du-contrat)
 
-## Authentification
+<a id="conventions-communes"></a>
+## Conventions communes
 
-| Méthode | Route | Accès | Entrée | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/auth/me` | Authentifiée, onboarding incomplet accepté | — | `200 { "user_id", "onboarding_complete" }`. Bootstrap minimal de session pour l’application mobile, sans exposer le rôle administratif. |
-| POST | `/auth/otp/send` | Public | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "phone_number": "+336…" }`. Seuls les numéros français `+33` sont acceptés. | `202 { "message": "Verification code request accepted." }` après acceptation de la demande. Une clé absente ou mal formée renvoie `400 invalid_idempotency_key`; sa réutilisation pour un autre numéro renvoie `409 idempotency_key_conflict`. Une erreur ou une réponse Sweego invalide renvoie `503 otp_delivery_unavailable`. Limite : 5/h par IP et par numéro pseudonymisé. |
-| POST | `/auth/otp/verify` | Public | `{ "phone_number": "+336…", "otp": "123456" }`, numéro français `+33` uniquement | `200` avec `{ "access_token", "refresh_token" }`. Le code OTP est consommé une seule fois. Si le téléphone n’est associé à aucun compte, un compte de rôle `user` est créé. Limite : 5/h par IP et numéro pseudonymisé. |
-| POST | `/auth/refresh` | Public | `{ "refresh_token": "jti:secret" }` | `200` avec une nouvelle paire de tokens. Rotation atomique dans la même famille. Le rejeu d'un ancêtre authentique non expiré révoque toute la famille et retourne `401 invalid_or_expired_refresh_token`. Limite : 30/15 min/IP. |
-| POST | `/auth/logout` | Authentifiée, onboarding incomplet accepté | `{ "refresh_token": "jti:secret", "device_id"?: "uuid" }` | `204`, révoque la famille du Bearer et ses appareils push. Le refresh doit appartenir à cette même famille ; un prédécesseur authentique non expiré est accepté. L'appareil optionnel est aussi supprimé s'il appartient au compte. |
-| GET | `/auth/sessions` | Authentifiée, onboarding incomplet accepté | `limit` (1–100), `cursor` optionnel ; pas d'offset | `200 { "sessions": [{ "id", "created_at", "last_refreshed_at", "expires_at", "current" }], "next_cursor" }`. Seulement les familles actives du compte, sans token, hash, IP ni user-agent. |
-| DELETE | `/auth/sessions/:id` | Authentifiée, onboarding incomplet accepté | UUID v4 | `204`, révoque une famille du compte et ses appareils push. La session courante peut être révoquée. Idempotent pour une autre famille déjà révoquée encore référencée ; `404 session_not_found` si absente ou étrangère. |
-| POST | `/auth/logout-all` | Authentifiée, onboarding incomplet accepté | `{ "confirm": true }` | `200 { "revoked_sessions" }`, révoque toutes les familles non révoquées du compte, courante comprise, et retire tous ses appareils push. |
+### Chemins, entrées et réponses
 
-Pour l’envoi OTP, l’API persiste d’abord un hash avec l’état `pending`, appelle l’endpoint transactionnel Sweego, puis passe le code à `sent` uniquement après une réponse HTTP `200` contenant un `transaction_id` et un identifiant `swg_uids` valides. Rejouer rapidement la même clé lorsque la demande est `pending`, ou rejouer une demande déjà `sent`, renvoie le même `202` sans second appel fournisseur. Un `pending` plus ancien que le timeout Sweego augmenté de cinq secondes est marqué `failed` lors du retry et renvoie `503`, comme toute autre demande échouée. L’activation est sérialisée par téléphone et la base garantit qu’un seul OTP envoyé reste utilisable. La durée de validité est définie par `OTP_TTL`.
+Les tableaux donnent les **chemins complets**, préfixe `/api` inclus. Seules les routes `/health/live` et `/health/ready` sont hors de ce préfixe. `:id`, `:userId`, etc. représentent des paramètres à remplacer, généralement des UUID.
 
-Le 17 août 2026, ce contrat a été validé manuellement avec Sweego réel : envoi vers un numéro français, retry de la même clé sans second SMS, vérification du code, accès Bearer, rotation du refresh token avec refus de l’ancien et logout `204`.
+Les corps sont JSON, sauf l’upload photo multipart. Les champs inconnus sont refusés. Dans les tableaux, `?` signifie « facultatif », `A | B` indique les valeurs admises et une liste de noms représente les champs d’un objet, pas un exemple JSON littéral. Une réponse `204` n’a pas de corps.
 
-Les access tokens utilisent HS256, le type `access`, l’issuer `histae-api`, l’audience `histae-app`, une famille `sid`
-et un en-tête `kid` configuré localement ; `exp` est obligatoire et suit `JWT_ACCESS_TTL`. La famille est relue à
-chaque requête. Les refresh tokens contiennent un secret aléatoire de 256 bits et suivent `JWT_REFRESH_TTL`.
-Les erreurs courantes restent `authentication_required`, `invalid_or_expired_access_token`,
-`invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`,
-`otp_delivery_unavailable`, `otp_rate_limit_exceeded` et `refresh_rate_limit_exceeded`. La gestion des sessions
-ajoute `session_not_found`, `invalid_session_id`, `invalid_session_query` et `session_rate_limit_exceeded` ;
-elle partage une limite séparée de 30/15 min/utilisateur, incluant le logout.
+- Corps JSON : **1 Mio** maximum ; les limites métier peuvent être plus petites.
+- Photos : **500 000 octets** maximum en entrée et après conversion WebP.
+- Dates de naissance : date calendrier stricte `YYYY-MM-DD`, jamais un timestamp.
+- Horodatages : ISO 8601 avec fuseau ; traiter les curseurs comme des chaînes opaques.
+- Prix du catalogue : centimes, avec devise explicite. Distances : kilomètres.
+- En-têtes communs : `Cache-Control: no-store`, protections navigateur et `X-Request-ID`. Un UUID v4 fourni dans `X-Request-ID` est conservé ; sinon un identifiant est généré. HSTS est ajouté en production.
 
-Le mobile doit sérialiser les refresh et enregistrer atomiquement les nouveaux tokens. Il n'y a pas de fenêtre de
-grâce : un double refresh ou une réponse perdue peut imposer une nouvelle connexion OTP. La migration des anciens
-tokens, la durée de conservation des ancêtres et la rotation des clés sont détaillées dans
-[`docs/mobile-sessions.md`](docs/mobile-sessions.md).
+### Authentification et autorisations
 
-## Plans
+| Public | Justificatif | Règle |
+| --- | --- | --- |
+| Public | Aucun JWT/cookie | Ne dispense pas d’un OTP, d’une signature de webhook ou d’un secret d’enrôlement lorsqu’ils sont requis. |
+| Mobile | `Authorization: Bearer <access_token>` | Compte actif, non banni ; CGU et notice courantes requises pour un rôle utilisateur. |
+| Admin | Cookie de session WebAuthn `HttpOnly; SameSite=Strict` | Rôle `admin` ou `superadmin`. Aucun JWT mobile accepté, même avec un rôle administratif. |
 
-| Méthode | Route | Accès | Résultat |
-| --- | --- | --- | --- |
-| GET | `/plans` | Public | `200 { "plans": [...] }`. Chaque plan expose son code, nom, prix mensuel/annuel, devise, jours d’essai, éventuelle limite hebdomadaire et fonctionnalités. |
+Les routes mobiles marquées **onboarding incomplet accepté** restent accessibles avant acceptation des textes. Le contrôle global renvoie sinon `403 onboarding_incomplete`. Le sexe et les préférences exigent aussi le consentement sensible, la présence celui de localisation : `403 required_consent_missing`. Un retrait concurrent empêche une requête préalablement validée de réintroduire les données effacées.
 
-## Abonnement Stripe utilisateur
+Toute mutation authentifiée par session admin exige l’en-tête `Origin` égal à `ADMIN_WEBAUTHN_ORIGIN`. Pour les routes publiques de connexion/enrôlement, l’origine est vérifiée dans la preuve WebAuthn lors de sa validation, pas par ce guard de session. Les actions marquées **récentes** exigent une authentification WebAuthn récente (moins de dix minutes par défaut). Les consultations sensibles demandent un motif et sont auditées.
 
-Le client mobile n’envoie jamais de Product ID, Price ID, montant, devise, durée d’essai ou identifiant de client Stripe. L’API choisit le Price mensuel ou annuel depuis sa configuration, et seul un webhook Stripe signé peut modifier les droits Premium. Les créations de Checkout et de portail sont limitées à 10/min/utilisateur par défaut.
+### Erreurs et limites de débit
 
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/users/me/subscription` | Authentifiée | — | `200` avec `plan`, `provider`, `status`, `access_granted`, `billing_period`, les dates de période/essai/annulation, `cancel_at_period_end` et `customer_portal_available`. Les statuts Stripe donnant accès sont `trialing`, `active` et `past_due`, uniquement pendant la période projetée. |
-| POST | `/users/me/subscription/checkout` | Authentifiée | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "billing_period": "monthly\|annual" }` | `201 { "session_id", "url", "expires_at" }`. URL Checkout hébergée, valable 30 minutes. Une seule session peut être créée ou ouverte par utilisateur. Un premier abonnement peut recevoir l’essai du catalogue ; un essai déjà consommé n’est jamais réattribué. |
-| POST | `/users/me/subscription/portal` | Authentifiée | — | `201 { "url" }`. Crée une session courte du portail client Stripe pour gérer moyen de paiement, changement de tarif et annulation. Requiert un client Stripe déjà lié. |
-| POST | `/billing/stripe/webhook` | Public, signature Stripe obligatoire | Corps JSON brut et en-tête `Stripe-Signature` | `200 { "received": true }`. Vérifie le corps brut avec `STRIPE_WEBHOOK_SECRET`, refuse un événement test/live incohérent, déduplique par Event ID et traite transactionnellement Checkout, abonnements, factures et suppression du Customer. Cette route est exclue de la petite limite globale mais limitée séparément à 300/min/IP par défaut. |
+```json
+{
+  "error": {
+    "code": "required_consent_missing",
+    "message": "The required consent has not been granted."
+  }
+}
+```
 
-Événements traités : `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created|updated|deleted|paused|resumed|trial_will_end`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed` et `customer.deleted`. Les autres événements valides sont acquittés sans effet métier ni stockage. Les événements de facture ou d’abonnement plus anciens que la projection courante sont ignorés. Les transitions d’abonnement émettent `subscription.updated` en SSE ; un paiement échoué ou une fin d’essai proche produit aussi une notification persistée/FCM.
+Le client doit interpréter `error.code`, pas le texte de `message`. Aucune stack n’est exposée.
 
-Erreurs spécifiques : `billing_unavailable`, `invalid_stripe_signature`, `stripe_mode_mismatch`, `invalid_stripe_event`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded` et `billing_webhook_rate_limit_exceeded`.
+| Statut | Interprétation habituelle |
+| --- | --- |
+| 400 | Corps, paramètre, curseur ou clé d’idempotence invalide. |
+| 401 | Authentification absente, expirée ou invalide. |
+| 403 | Autorisation, onboarding, consentement ou quota insuffisant. |
+| 404 | Ressource absente ou non accessible au demandeur. |
+| 409 | Conflit d’état, de version ou d’idempotence. |
+| 410 | Match expiré. |
+| 413 | Taille du fichier ou du corps dépassée. |
+| 429 | Limite de débit dépassée ; respecter `Retry-After` lorsqu’il est fourni. |
+| 503 | Dépendance ou protection temporairement indisponible. |
 
-## Authentification WebAuthn administrateur
+Une limite globale par IP s’ajoute aux limites dédiées indiquées ci-dessous ; leurs valeurs sont les valeurs par défaut configurables. Dépassement global : `rate_limit_exceeded` ; protection Redis indisponible : `rate_limit_unavailable`, sans laisser passer la requête. Le webhook Stripe a sa propre limite à la place de la limite globale.
 
-Cette authentification est native à Histae et ne dépend ni de Cloudflare, ni d’un SSO, ni d’un fournisseur
-d’identité. En développement, le relying party est `localhost`, l’origine exacte est `http://localhost:5173` et le
-dashboard passe par son proxy même-origine `/api`. Il ne faut pas ouvrir le dashboard via `127.0.0.1`. En production,
-`ADMIN_WEBAUTHN_ORIGIN` doit être une origine HTTPS exacte et `ADMIN_WEBAUTHN_RP_ID` son hôte ou un suffixe de domaine
-valide.
+### Pagination
 
-| Méthode | Route | Accès | Entrée | Réponse et règles |
-| --- | --- | --- | --- | --- |
-| POST | `/admin/auth/login/options` | Public, 10 requêtes/5 min/IP par défaut | — | `200 { "challenge_id", "options" }`. Crée un challenge de cinq minutes pour une passkey découvrable et exige la vérification de l’utilisateur. |
-| POST | `/admin/auth/login/verify` | Public, même limite | `{ "challenge_id", "credential" }` | `200 { "user_id", "role", "authenticated_at", "expires_at" }` et cookie de session `HttpOnly`, `SameSite=Strict`. Vérifie le challenge à usage unique, l’origine, le RP ID, la signature, le compteur et le rôle actif. Le secret de session n’est jamais présent dans le JSON. |
-| POST | `/admin/auth/bootstrap/options` | Public, même limite | `{ "bootstrap_token": "uuid:secret" }` | `200 { "challenge_id", "options" }`. Le jeton est créé hors bande et audité par `pnpm run admin:webauthn:bootstrap -- <user_uuid>`, expire après quinze minutes par défaut et cible un compte admin actif. |
-| POST | `/admin/auth/bootstrap/verify` | Public, même limite | `{ "bootstrap_token", "challenge_id", "credential", "name" }` | `201` avec la session et le même cookie. Consomme atomiquement le jeton, enregistre la clé publique et ouvre la première session. |
-| GET | `/admin/auth/session` | Admin | — | Retourne la session courante après relecture du compte, de la passkey et des expirations en PostgreSQL. |
-| POST | `/admin/auth/logout` | Admin | — | `204`, révoque la session serveur et expire le cookie. Toutes les mutations admin exigent l’en-tête `Origin` égal à l’origine WebAuthn configurée. |
-| GET | `/admin/auth/credentials` | Admin | — | Liste les passkeys actives sans clé publique et marque celle de la session courante. |
-| PATCH | `/admin/auth/credentials/:id` | Admin, authentification récente | UUID ; `{ "name": "…" }` (1 à 100 caractères, 200 octets maximum après normalisation) | `200`, renomme une passkey active et écrit l’événement `credential_renamed`. Une passkey absente ou révoquée renvoie `404 admin_credential_not_found`. |
-| POST | `/admin/auth/credentials/options` | Admin, authentification WebAuthn de moins de 10 min | — | Crée les options d’une passkey supplémentaire en excluant les credentials existants. |
-| POST | `/admin/auth/credentials/verify` | Admin, authentification récente | `{ "challenge_id", "credential", "name" }` | `201`, enregistre la passkey vérifiée. |
-| DELETE | `/admin/auth/credentials/:id` | Admin, authentification récente | UUID | `204`. Interdit la passkey courante et la dernière passkey active ; révoque les autres sessions après suppression. |
-| GET | `/admin/auth/sessions` | Admin | — | Liste uniquement les sessions actives du compte avec passkey associée, dates et marqueur `current`. Aucun cookie, jeton ni hash n’est exposé. |
-| DELETE | `/admin/auth/sessions/:id` | Admin, authentification récente | UUID | `204`, révoque une session active précise. La session courante est refusée avec `409 current_admin_session`; utiliser `/logout` pour celle-ci. |
-| POST | `/admin/auth/sessions/revoke-others` | Admin, authentification récente | — | `200 { "revoked_sessions" }`, conserve uniquement la session courante. |
-| GET | `/admin/auth/events` | Admin | `limit`, `cursor` optionnels | `200 { "events", "next_cursor" }`. Historique d’authentification du compte, récent d’abord, borné à 100 éléments par page, sans secret ni clé publique. |
+Sauf indication contraire, `limit` vaut 20, entre 1 et 100. Les collections paginées exposent `next_cursor` : le réutiliser avec les mêmes filtres, jusqu’à `null`. Ne pas le décoder ni le reconstruire avec les dates ou distances arrondies affichées.
 
-La session expire après 30 minutes d’inactivité et au plus 8 heures par défaut. Seuls les hashes SHA-256 des jetons
-d’enrôlement, challenges et sessions sont persistés. Les erreurs principales sont
-`invalid_or_expired_admin_bootstrap`, `invalid_or_expired_webauthn_challenge`, `webauthn_registration_failed`,
-`webauthn_authentication_failed`, `admin_session_invalid`, `admin_reauthentication_required`,
-`invalid_admin_request_origin`, `last_admin_credential`, `current_admin_credential` et
-`current_admin_session`, `admin_session_not_found`, `admin_auth_rate_limit_exceeded`.
+`offset` est déprécié ; seules les routes qui le mentionnent l’acceptent. Avec un curseur, il doit être nul. Les curseurs évitent les décalages d’offset, mais **ne figent pas un instantané** : un nouveau message, un changement de statut ou de position peut modifier l’ordre ou l’éligibilité pendant le parcours. Dédupliquer les identifiants côté client et rafraîchir la liste si nécessaire.
 
-## Console d’administration
+Les listes non paginées ne doivent pas recevoir arbitrairement `limit` ou `cursor`. Les listes administratives RGPD et journaux d’accès restent plafonnées à 500 résultats, sans curseur.
 
-Toutes ces routes exigent la session WebAuthn d’un compte `admin` ou `superadmin`. Les consultations de données personnelles et les actions de sûreté sont inscrites dans `data_access_log`. Les numéros de téléphone, leurs empreintes et les coordonnées précises ne sont jamais exposés au dashboard.
+### Idempotence et réponses perdues
 
-| Méthode | Route | Corps / paramètres | Résultat |
-| --- | --- | --- | --- |
-| GET | `/admin/me` | — | `200 { "user_id", "role" }`. Alias métier protégé par la session WebAuthn ; le dashboard utilise normalement `/admin/auth/session`. |
-| GET | `/admin/metrics` | `revenue_period` optionnel, mêmes valeurs que `/admin/revenue` (défaut : `month_to_date`) | Synthèse métier et `operations` : requêtes/latences HTTP agrégées par route normalisée, compteurs `401`/`403`/`429`/`5xx`, mémoire/event loop, appels et erreurs PostgreSQL/Redis/Scylla/S3/Sweego/Stripe, pression du pool, profondeur/retard/dead letters outbox et dernière exécution des quatre maintenances. Les mesures sont internes au processus, bornées et sans donnée personnelle ; elles repartent à zéro au redémarrage, contrairement aux états maintenance/outbox persistés. |
-| GET | `/admin/revenue` | `revenue_period=last_7_days\|last_30_days\|month_to_date\|previous_month\|year_to_date\|all_time` (défaut : `month_to_date`) | Recalcule uniquement le CA estimé : nombre d’abonnements Premium mis à jour sur la période × tarif mensuel Premium courant. Cette estimation n’est ni un registre d’encaissements ni un bénéfice comptable. |
-| GET | `/admin/photo-reconciliation` | `status=all\|stale_processing\|deleting\|dead_letter` (défaut : `all`) ; `limit`, `cursor` (`offset` déprécié) | File paginée des traitements photo anciens et suppressions en cours. Retourne les UUID photo/utilisateur, états, métadonnées techniques, diagnostic et état outbox, mais jamais `object_key`, URL signée ou image. |
-| POST | `/admin/photo-reconciliation/:id/retry` | UUID photo ; `{ "reason": "…" }` obligatoire (3 à 500 caractères) | `202` après remise en file transactionnelle. Une photo `ready` ou un traitement récent renvoie `409 photo_reconciliation_not_allowed`; un événement possédé par un worker actif renvoie `409 photo_reconciliation_in_progress`; une photo absente renvoie `404 photo_not_found`. La photo passe à `deleting`, l’événement `photo.delete` est créé ou réinitialisé et l’action `admin_reconcile_photo` est auditée dans la même transaction. |
-| GET | `/admin/outbox/dead-letters` | `limit`, `cursor` optionnels | `200 { "events", "next_cursor" }`. Liste bornée des événements définitivement échoués avec type, tentatives et code normalisé. Le payload, l’agrégat et les clés objet ne sont jamais exposés. |
-| POST | `/admin/outbox/:id/retry` | Authentification récente ; `{ "reason": "…" }` | `202`, verrouille la dead letter, inscrit l’action opérateur puis la remet à zéro en `pending`. Une mutation concurrente ou un état déjà changé renvoie `409 outbox_event_not_dead_letter`. |
-| POST | `/admin/outbox/:id/discard` | Authentification récente ; `{ "reason": "…" }` | `204`, marque explicitement l’événement `discarded` avec opérateur et motif. Pour `photo.delete`, l’abandon est refusé avec `409 outbox_discard_not_allowed` tant que `user_photo` existe. L’abandon de `account.erase` est toujours interdit ; utiliser la reprise auditée après diagnostic. |
-| GET | `/admin/content-moderation` | `status=pending\|approved\|rejected`, `content_type=photo\|bio\|profile_answer`, `limit`, `cursor` (`offset` déprécié), tous optionnels | `200 { "cases": [...], "next_cursor" }`. File paginée, récente d’abord, avec identifiants, utilisateur/prénom, statut, motifs, version de politique, version optimiste, signaux photo, contrôles du reviewer et dates. Ne retourne jamais le texte, la question, la clé objet, l’URL ou l’image. |
-| GET | `/admin/content-moderation/:id` | UUID cas ; query `reason` obligatoire (3 à 500 caractères) | Retourne le même cas enrichi de `content`, `question` et `photo`. `content` contient le texte pour une bio/réponse ; `photo` est une URL signée courte pour une photo. L’accès `view_moderation_content` est audité avant toute signature. |
-| PATCH | `/admin/content-moderation/:id` | `{ "version": 1, "decision": "approved\|rejected", "reason": "…", "photo_checks"?: { "face_detectable", "sharp_enough", "content_allowed" } }` | `200 { "message": "content moderation decision recorded" }`. La version empêche d’écraser une revue concurrente. Une photo exige les trois contrôles : approbation seulement s’ils sont tous vrais, rejet seulement si au moins un est faux. Rejeter une photo `ready` la passe à `deleting` et écrit `photo.delete` dans l’outbox. L’action `admin_review_content` est auditée dans la transaction. |
-| GET | `/admin/users` | `status=active\|banned`, `role=user\|admin\|superadmin`, `search` optionnels ; `limit`, `cursor` (`offset` déprécié) | `200 { "users": [...], "next_cursor" }`. La recherche porte sur le prénom ou un UUID exact. Aucun téléphone n’est retourné et `photo` vaut toujours `null` dans cette collection. |
-| GET | `/admin/users/:id` | UUID ; `reason` obligatoire (3 à 500 caractères) | Détail administratif : compte, profil, préférences, traits, dernier état de consentement et fraîcheur de présence sans coordonnées. L’accès est journalisé avant qu’une éventuelle URL photo signée soit produite. |
-| PATCH | `/admin/users/:id/status` | `{ "is_banned", "reason"?: "…" }`. Le motif est obligatoire pour bannir. | Bannit ou débannit le compte. Un bannissement révoque immédiatement tous ses refresh tokens. Un admin ne peut agir que sur un rôle `user`; un superadmin ne peut agir ni sur lui-même ni sur un autre superadmin. |
-| GET | `/admin/matches/:id/messages` | UUID ; `reason` obligatoire ; `limit`, `cursor` (`offset` déprécié) | Conversation paginée pour modération. L’accès est journalisé pour les deux participants. |
+Il n’existe pas de mécanisme de retry universel.
 
-Les routes OTP/JWT restent réservées au parcours mobile et ne donnent accès à aucune route admin.
+| Opération | Comportement attendu du client |
+| --- | --- |
+| Envoi OTP, photo, message, Checkout | Fournir `Idempotency-Key: <UUID v4>` et conserver la même clé et le même contenu pour la même intention. Les fenêtres et conflits sont propres au parcours. |
+| Refresh mobile | Un seul appel à la fois. **Pas de retry aveugle** après perte de réponse ; voir le parcours ci-dessous. |
+| Consentements, attribution/retrait de trait | Rejouer un état identique ne doit pas dupliquer l’effet. |
+| Effacement du compte | Le jeton est à usage unique. Un `202` indique une acceptation durable, pas la fin des suppressions. |
+| Revue admin | Relire après conflit de version ou d’état ; ne pas écraser automatiquement la décision d’un autre opérateur. |
 
-## Compte utilisateur
+<a id="routes-publiques-et-integrations"></a>
+## Routes publiques et intégrations
 
-Toutes ces routes sont authentifiées.
+### Connexion mobile et catalogue
 
-| Méthode | Route | Corps / paramètres | Résultat |
-| --- | --- | --- | --- |
-| GET | `/users/me` | — | `200` avec `user_id`, `firstname`, `birthdate`, `profile_answers`, `moderation` et, lorsqu’ils existent, `sex`, `bio`, `photo`. `moderation.bio` et `moderation.photo` exposent `{ "status", "reasons" }`; chaque réponse expose aussi ses champs `moderation_status` et `moderation_reasons`. Le propriétaire voit son contenu même en attente/refusé et reçoit une URL photo signée tant que la photo est techniquement `ready`. Retourne `404 profile_not_found` tant que le profil n’est pas complété. |
-| PATCH | `/users/me/profile` | `{ "firstname", "birthdate", "sex"?: "male\|female\|other\|null", "bio"?: "…\|null" }` | `200 { "message": "profile updated" }`. `firstname` (100 octets max) et `birthdate` au format calendrier strict `YYYY-MM-DD` sont requis ; l’utilisateur doit avoir au moins 18 ans. Bio : 2 000 octets max. Toute bio modifiée reçoit dans la même transaction une décision automatique `approved` ou `pending`; la photo n’est pas acceptée par cette route. |
-| PUT | `/users/me/photo` | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `multipart/form-data`, un fichier dans `photo` | `200 { "message": "photo updated", "photo": "https://…", "moderation_status", "moderation_reasons" }`. Extensions admises : `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Extension, MIME et signature doivent correspondre. Entrée et WebP final : 500 000 octets maximum ; une seule image, 40 Mpx au plus, ramenée au plus à 2 048 px et enregistrée sans métadonnées sous une clé versionnée. L’analyse de visage, netteté et score NSFW est bornée par timeout ; une panne place la photo en revue manuelle. Pendant 24 h, rejouer la même clé avec le même fichier renvoie la même photo et la même décision sans reconversion. Une clé réutilisée avec un autre nom, MIME ou contenu renvoie `409 idempotency_key_conflict`; une clé dont la photo a depuis été remplacée ou supprimée renvoie `409 idempotency_key_consumed`; une demande encore active renvoie `409 photo_update_in_progress`. Une clé absente ou invalide renvoie `400 invalid_idempotency_key`. Limite dédiée : 10 tentatives/h/utilisateur par défaut. |
-| DELETE | `/users/me/photo` | — | `204` dès que la transition est durable. La photo `ready` passe atomiquement à `deleting`, devient immédiatement invisible et un événement `photo.delete` est ajouté à l’outbox PostgreSQL. Le worker supprime ensuite l’objet privé et la ligne technique avec reprises bornées ; une panne S3 après le `204` n’annule donc pas la demande. |
-| GET | `/users/me/preferences` | — | `200` avec `min_age`, `max_age`, `max_distance_km`, `looking_for`; ou `404 preferences_not_found`. |
-| PATCH | `/users/me/preferences` | `{ "min_age", "max_age", "max_distance_km", "looking_for" }` | `200 { "message": "preferences updated" }`. Âges entiers 18–99, distance entière 1–500, et `looking_for` vaut `male`, `female`, `both` ou `other`. |
-| PATCH | `/users/me/presence` | `{ "latitude", "longitude" }` | `200 { "message": "presence updated" }`. Latitude : -90 à 90 ; longitude : -180 à 180. |
-| POST | `/users/me/deletion-token` | — | `201 { "confirmation_token", "expires_at" }`. Remplace tout jeton précédent par un secret dédié, hashé en base, à usage unique et valable 10 minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1 à 30 min). |
-| DELETE | `/users/me` | `{ "confirmation_token": "uuid:secret" }` | `202 { "request_id": "uuid", "status": "in_progress" }`. Consomme le jeton, enregistre l’effacement et désactive le compte dans la même transaction. Le worker nettoie Stripe, les photos, Scylla puis anonymise PostgreSQL ; les factures sont détachées pour leur conservation comptable. Une panne externe est réessayée en arrière-plan et ne transforme pas la demande en succès définitif. Jeton invalide/expiré : `401 invalid_or_expired_deletion_token`. Voir [le protocole et le rejeu mobile](docs/account-erasure.md). |
-| GET | `/users/me/continuation-quota` | — | `200` avec le plan effectif, l’usage et, pour un plan limité, `weekly_limit` et `remaining`. |
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/auth/otp/send` | `{ phone_number }` + clé d’idempotence → `202 { message }`. |
+| POST | `/api/auth/otp/verify` | `{ phone_number, otp }` → `200 { access_token, refresh_token }`. |
+| POST | `/api/auth/refresh` | `{ refresh_token }` → `200 { access_token, refresh_token }`. |
+| GET | `/api/plans` | `200 { plans: [...] }`. |
 
-### Appareils, push et temps réel
+**OTP.** Seuls les téléphones français E.164 `+33…` sont acceptés. La vérification consomme le code une seule fois et crée un compte utilisateur si nécessaire. Envoi et vérification : 5/h par IP et numéro pseudonymisé. La validité du code suit `OTP_TTL`.
 
-| Méthode | Route | Corps / paramètres | Résultat |
-| --- | --- | --- | --- |
-| GET | `/users/me/devices` | — | `200 { "devices": [...] }`. Expose les UUID, `session_id` (nul pour les anciens appareils), plateformes, versions d’application et dates d’usage, jamais les jetons FCM. |
-| POST | `/users/me/devices` | `{ "push_token", "platform": "ios\|android", "app_version"?: "…" }` | `201` avec l’appareil public et sa `session_id` issue du Bearer. Un jeton fournisseur déjà connu est réaffecté et rafraîchi de manière idempotente. |
-| DELETE | `/users/me/devices/:id` | UUID appareil | `204`, ou `404 device_not_found`. La propriété par l’utilisateur authentifié est imposée. |
-| GET | `/users/me/events` | — | Flux SSE `text/event-stream` authentifié. Envoie `connected`, un heartbeat toutes les 25 secondes, puis les événements `match.created`, `match.updated`, `matches.invalidated`, `message.created`, `message.read` et `subscription.updated`. Fermé à l'expiration du JWT ; la session est revérifiée toutes les 25 secondes, avec fermeture en cas de révocation ou d'échec de vérification. |
+L’envoi répond `202 { "message": "Verification code request accepted." }` : cela ne prouve pas la livraison du SMS. Un rejeu identique déjà accepté, ou encore en cours dans son délai autorisé, ne déclenche pas un second appel fournisseur. Une demande échouée ou restée en cours au-delà du timeout fournisseur augmenté de cinq secondes renvoie `503 otp_delivery_unavailable`. Une clé réutilisée avec un autre numéro renvoie `409 idempotency_key_conflict`.
 
-Le temps réel est relayé entre instances via Redis en production et fonctionne localement en mémoire lorsque Redis est explicitement désactivé. Les notifications push FCM sont optionnelles (`PUSH_PROVIDER=fcm`) et ne contiennent jamais le texte d’un message : seulement des identifiants nécessaires à la resynchronisation. Un jeton signalé `UNREGISTERED` par FCM est supprimé automatiquement.
+**Refresh.** Envoyer le dernier refresh sous la forme opaque reçue `jti:secret`, puis enregistrer atomiquement la nouvelle paire de tokens. Le rejeu d’un ancien token authentique non expiré révoque toute sa famille et renvoie `401 invalid_or_expired_refresh_token`. Il n’y a pas de fenêtre de grâce : deux refresh concurrents ou une réponse perdue peuvent imposer une nouvelle connexion OTP. Limite : 30/15 min/IP.
 
-Les notifications de match, message, paiement échoué et fin d’essai sont persistées avec leurs tâches
-`notification.push` dans la transaction métier. L’envoi FCM est asynchrone via le worker outbox, séparé par
-appareil, avec reprises et dead letters. Le push ajoute un `notification_id` stable pour permettre la
-déduplication côté mobile ; une issue réseau incertaine peut produire un nouvel envoi, sans nouvelle notification
-métier. SSE reste best-effort, sans replay hors ligne : relire les ressources après reconnexion.
-Les alertes de facturation sont filtrées à la programmation puis avant envoi : facture encore ouverte et due,
-ou même essai encore actif avec la même échéance future. Les références de facture/abonnement restent internes,
-hors payload ; une ancienne notification sans contexte vérifiable n’est pas poussée.
-Avec `PUSH_PROVIDER=disabled`, les tâches consommées sont acquittées sans réseau ni rattrapage ultérieur.
-Voir [notifications durables](docs/durable-notifications.md).
+Erreurs utiles : `authentication_required`, `invalid_or_expired_access_token`, `invalid_or_expired_refresh_token`, `invalid_idempotency_key`, `idempotency_key_conflict`, `otp_delivery_unavailable`, `otp_rate_limit_exceeded`, `refresh_rate_limit_exceeded`. Le format cryptographique, les durées et la rotation des clés sont décrits dans [sessions mobiles](docs/mobile-sessions.md).
 
-Les métriques `operations.outbox.notification_push` de `/admin/metrics` détaillent `pending`, `processing`,
-`completed`, `dead_letter`, `discarded` et `oldest_pending_at`. Ces compteurs sont persistants et agrégés ;
-`completed` compte les tâches acquittées encore conservées, pas les push reçus. Les routes admin de dead letters
-acceptent aussi `notification.push`. Leur abandon est audité et ne supprime pas la notification ; la protection
-des suppressions photo encore nécessaires reste inchangée.
+**Plans.** Chaque plan expose code, nom, prix mensuel/annuel, devise, jours d’essai, limite hebdomadaire éventuelle et fonctionnalités. Le client ne choisit jamais les identifiants ou prix Stripe.
 
-### Consentements
+### Webhook Stripe
 
-| Methode | Route | Corps / parametres | Resultat |
-| --- | --- | --- | --- |
-| GET | `/users/me/consents` | - | `200 { "consents": [...], "onboarding_complete", "required_actions": [...] }`. Chaque choix expose la version acceptée éventuelle, `required_document_version` et `document_url`, afin que le mobile présente exactement le texte attendu. Les preuves techniques (IP, user-agent) ne sont jamais exposées. |
-| PUT | `/users/me/consents` | `{ "consents": [{ "consent_type", "granted" }] }` | Renvoie le même état enrichi. Un type ne peut figurer qu'une fois. Les quatre textes utilisent leur version configurée côté serveur. Retirer `sensitive_data_consent` supprime sexe et préférences ; retirer `location_consent` supprime la présence. Un retry identique est idempotent. |
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/billing/stripe/webhook` | Corps JSON brut + `Stripe-Signature` → `200 { received: true }`. |
 
-Les types sont `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, `sensitive_data_consent` et `location_consent`. Il n'existe aucun choix marketing. L'acceptation des CGU et l'accusé de présentation ne peuvent pas être retirés via cet endpoint : l'utilisateur peut refuser de les fournir pendant l'inscription ou supprimer son compte. Toute route utilisateur protégée exige les deux premiers choix dans leur version courante ; sexe/préférences exigent en plus `sensitive_data_consent`, et la présence exige `location_consent`. Le guard global renvoie `403 onboarding_incomplete` ; un traitement spécifique sans son consentement renvoie `403 required_consent_missing`.
+La signature est obligatoire, ainsi que la cohérence test/live. Les Event IDs sont dédupliqués ; les événements non pris en charge mais valides sont acquittés sans effet. Limite dédiée : 300/min/IP.
 
-### Vie privée, droits et blocages
+Événements traités : `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created|updated|deleted|paused|resumed|trial_will_end`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed`, `customer.deleted`. Les événements de facture/abonnement plus anciens que l’état connu sont ignorés. Erreurs : `invalid_stripe_signature`, `stripe_mode_mismatch`, `invalid_stripe_event`, `billing_webhook_rate_limit_exceeded`.
 
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| POST | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | `{ "type": "access\|erasure\|portability\|rectification\|restriction\|objection" }` | `201` avec la demande. Une seule demande ouverte par utilisateur et par type. |
-| GET | `/users/me/data-subject-requests` | Authentifiée, onboarding incomplet accepté | — | `200 { "requests": [...] }`. |
-| GET | `/users/me/data-export` | Authentifiée, onboarding incomplet accepté | — | `200` avec les données PostgreSQL, dont les réponses aux questions de profil, la projection d’abonnement, les factures Stripe rattachées, les métadonnées `mobile_sessions` (sans hashes ni tokens) et uniquement les décisions de swipe prises par l’utilisateur. Limite : 5/h/utilisateur, puis `429 data_export_rate_limit_exceeded`. L’export est journalisé. Si l’une des sources nécessaires est indisponible : `503 data_export_unavailable`. |
-| GET | `/users/me/blocks` | Authentifiée | — | `200 { "blocks": [...] }`. `photo` vaut toujours `null` : bloquer un compte n’accorde aucun accès à sa photo privée. |
-| POST | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. Clôt immédiatement les matchs entre les deux comptes et empêche leur recréation. |
-| DELETE | `/users/me/blocks/:userId` | Authentifiée | UUID utilisateur | `204`. |
-| GET | `/admin/data-subject-requests` | Admin | `status` optionnel | Liste de traitement, 500 résultats maximum. `erasure` nullable contient `step`, `scylla_partition` (0–64), `updated_at`, `event_id`, `status` outbox, `attempts` et `last_error_code`, sans payload, identifiant Stripe, clé objet ni URL. Après purge de l’événement résolu, `event_id`/`status` peuvent être nuls, sans perdre le checkpoint terminé. |
-| PATCH | `/admin/data-subject-requests/:id` | Admin et authentification récente | `{ "status": "in_progress\|completed\|rejected", "notes"?: "…" }` | Transition contrôlée et auditée. Pour une demande d’effacement en cours, `completed` programme le workflow : `200 { "message": "account erasure scheduled" }` ; la DSR reste `in_progress` jusqu’à la réussite réelle. Le rejeu ne duplique rien ; rejeter un effacement commencé renvoie `409 invalid_data_request_transition`. Les autres transitions répondent `200 { "message": "data subject request updated" }`. |
-| GET | `/admin/data-access-logs` | Admin | `user_id` | `200 { "logs": [...] }`, 500 résultats maximum. |
-
-## Traits
-
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/traits` | Authentifiée | — | `200 { "traits": [{ "id", "name" }] }`. |
-| GET | `/users/me/traits` | Authentifiée | — | `200 { "traits": [{ "id", "name" }] }` avec uniquement les traits actuellement attribués à l’utilisateur. |
-| POST | `/users/me/traits` | Authentifiée | `{ "trait_id": "uuid" }` | `204`. Trait absent : `404 trait_not_found`. L’opération est idempotente pour une attribution déjà existante. |
-| DELETE | `/users/me/traits/:traitId` | Authentifiée | UUID | `204`. L’opération est idempotente si le trait n’était pas attribué. |
-| POST | `/admin/traits` | Admin | `{ "name": "…" }` | `201 { "id", "name" }`. Nom non vide, 100 octets maximum ; doublon : `409 trait_already_exists`. |
-| PATCH | `/admin/traits/:id` | Admin | `{ "name": "…" }` | `200 { "message": "trait updated" }`. |
-| DELETE | `/admin/traits/:id` | Admin | UUID | `204`. Cette version supprime physiquement le trait. |
-
-## Questions de profil
-
-Le catalogue initial contient quinze questions. Chaque réponse du propriétaire a la forme
-`{ "question_id", "code", "question", "answer", "position", "moderation_status", "moderation_reasons" }`. Une réponse est une ligne de texte normalisée,
-de 10 à 300 caractères et 1 000 octets maximum ; les caractères de contrôle sont refusés.
-
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/profile-questions` | Authentifiée | — | `200 { "questions": [...] }`, trié par `display_order` puis UUID. Chaque entrée expose `id`, `code`, `prompt`, `category` et `display_order`. |
-| GET | `/users/me/profile-answers` | Authentifiée | — | `200 { "answers": [...] }`, avec au plus trois réponses dans l’ordre choisi et leur état de modération. |
-| PUT | `/users/me/profile-answers` | Authentifiée | `{ "answers": [{ "question_id": "uuid", "answer": "…" }] }` | Remplace atomiquement toutes les réponses et leurs cas de modération, puis renvoie `200 { "answers": [...] }`. Le tableau peut être vide, contient au plus trois questions distinctes et n’accepte que des questions existantes. Un texte sans signal est approuvé automatiquement ; spam, insultes, coordonnées ou signaux sexuels restent privés en `pending`. Profil absent : `404 profile_not_found`; question absente : `404 profile_question_not_found`. |
-| GET | `/admin/profile-questions` | Admin | — | `200 { "questions": [...] }`, avec dates et `answer_count` pour avertir avant une modification ou suppression. |
-| POST | `/admin/profile-questions` | Admin | `{ "prompt", "category", "display_order"?: 100 }` | `201` avec la question créée. Les catégories sont `daily_life`, `personality`, `interests`, `relationships` et `conversation`. Un libellé déjà présent, sans tenir compte de la casse, renvoie `409 profile_question_already_exists`. |
-| PATCH | `/admin/profile-questions/:id` | Admin | Au moins un de `{ "prompt", "category", "display_order" }` | `200` avec la question mise à jour. La modification du libellé devient immédiatement visible avec les réponses existantes. |
-| DELETE | `/admin/profile-questions/:id` | Admin | UUID | `204`. Supprime définitivement la question et toutes ses réponses utilisateur dans la même opération PostgreSQL (`ON DELETE CASCADE`). |
-
-## Signalements
-
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| POST | `/reports` | Authentifiée | `{ "reported_user_id": "uuid", "match_id"?: "uuid\|null", "reason": "inappropriate_content\|fake_profile\|harassment\|spam\|other", "description"?: "…\|null" }` | `201` avec le signalement. Auto-signalement interdit ; la cible doit exister. La description est limitée à 2 000 octets. Un match fourni doit relier les deux utilisateurs. Limite : 5/h/utilisateur par défaut. |
-| GET | `/admin/reports` | Admin | `status` optionnel : `pending`, `reviewed`, `dismissed`; `limit`, `cursor` (`offset` déprécié) | `200 { "reports": [...], "next_cursor": "…\|null" }`, tri antéchronologique. |
-| PATCH | `/admin/reports/:id` | Admin | `{ "status": "pending\|reviewed\|dismissed" }` | `200 { "message": "report updated" }`, ou `404 report_not_found`. |
-
-## Matchs et messagerie
-
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/matches/me` | Authentifiée | `limit`, `cursor` (`offset` déprécié) | `200 { "matches": [...], "next_cursor": "…\|null" }`, triés par activité. Chaque élément contient l’autre utilisateur (`firstname`, âge, sexe, bio, traits, `profile_answers` et photo conditionnelle), `my_revealed`, `photos_revealed`, `my_continued`, `unread_count` et `last_message`. Bio, réponses et photo doivent être modérées `approved`; la photo reste aussi `null` avant la révélation mutuelle. |
-| GET | `/matches/:userId` | Admin | UUID utilisateur ; `reason` obligatoire (3 à 500 caractères) ; `limit`, `cursor` (`offset` déprécié) | Même réponse paginée pour l’utilisateur ciblé. La consultation est inscrite dans `data_access_log`. |
-| PATCH | `/matches/:id/reveal` | Authentifiée | — | `200` avec `{ "message", "photos_revealed" }`. Chaque participant enregistre son consentement ; `photos_revealed` devient vrai quand les deux ont consenti. |
-| PATCH | `/matches/:id/continue` | Authentifiée | — | `200` avec `{ "message", "match_confirmed" }`. Disponible après la fenêtre initiale de 24 h, puis demande le consentement des deux participants. Le quota hebdomadaire est débité lorsque le second consentement confirme le match. |
-| GET | `/matches/:id/messages` | Authentifiée | UUID match ; `limit`, `cursor` (`offset` déprécié) | `200 { "messages": [...], "next_cursor": "…\|null" }`. Le demandeur doit participer au match. |
-| POST | `/matches/:id/messages` | Authentifiée | En-tête obligatoire `Idempotency-Key: <UUID v4>` et `{ "content": "…" }` | `201` avec le message stable. Rejouer la même clé, le même match et le même contenu retourne le message existant sans nouvelle notification ; réutiliser la clé pour une autre requête renvoie `409 idempotency_key_conflict`. Contenu non vide, 2 000 caractères maximum. Limite : 60/min/utilisateur. |
-| PATCH | `/matches/:id/messages/read` | Authentifiée | `{ "read_through_message_id": "uuid" }` | `200 { "updated_count", "read_through_message_id" }`. Marque en une transaction tous les messages reçus jusqu’à la borne incluse. |
-| PATCH | `/matches/:id/messages/:msgId/read` | Authentifiée | UUID match et UUID message | `200 { "message": "message marked as read" }`. Un expéditeur ne peut pas marquer son propre message comme lu. |
-
-Un match est initialement `active` pendant 24 h. Il passe ensuite à `awaiting_continuation`, puis à `confirmed` si les deux utilisateurs acceptent, ou à `expired` après la seconde fenêtre. Les routes concernées peuvent renvoyer notamment `404 match_not_found`, `409 continuation_not_available_yet`, `409 invalid_match_state`, `409 messaging_not_available`, `410 match_expired` et `403 continuation_quota_reached`.
-
-## Découverte
-
-| Méthode | Route | Accès | Corps / paramètres | Résultat |
-| --- | --- | --- | --- | --- |
-| GET | `/users/me/discovery-status` | Authentifiée | — | `200 { "ready", "required_actions", "presence_expires_at" }`. Les actions possibles sont `profile`, `sex`, `preferences`, `sensitive_data_consent`, `location_consent` et `fresh_presence`. |
-| POST | `/swipes` | Authentifiée | `{ "target_user_id": "uuid", "decision": "like\|pass" }` | `201 { "decision", "matched", "match"? }`. La décision est immuable pendant sa rétention. Deux likes réciproques créent atomiquement le match PostgreSQL. Limite dédiée : 120/min/utilisateur par défaut. |
-| GET | `/feed` | Authentifiée | `limit` de 1 à 100 (20 par défaut), `cursor` opaque optionnel | `200 { "profiles": [...], "next_cursor": "…\|null" }`. Limite : 60/min/utilisateur, puis `429 feed_rate_limit_exceeded`. Chaque profil expose `user_id`, prénom, âge, sexe, distance arrondie au dixième, traits, et uniquement la bio et les réponses modérées `approved`. |
-
-Le demandeur et les candidats doivent posséder un compte actif, un profil avec sexe, des préférences, les
-versions courantes des consentements sensible et de localisation, ainsi qu’une position fraîche de moins d’une
-heure. Le feed applique dans les deux sens les tranches d’âge, le sexe recherché et la distance maximale. Il
-exclut les blocages, les matchs existants et les cibles déjà swipées. PostgreSQL calcule les candidats et la
-distance ; Scylla est la source des décisions et exclusions. Le curseur keyset porte la distance exacte et
-l’UUID, même si la distance publique est arrondie.
-
-Erreurs spécifiques : `409 discovery_not_ready`, `404 discovery_candidate_not_found`,
-`409 swipe_already_recorded`, `400 invalid_cursor`, `429 swipe_rate_limit_exceeded`, `429 feed_rate_limit_exceeded` et
-`503 discovery_unavailable`. La route historique `/fake-match` a été supprimée : un match ne peut plus être
-créé que par deux likes réciproques.
-
-## Santé (hors préfixe `/api`)
+### Santé
 
 | Méthode | Route | Résultat |
 | --- | --- | --- |
-| GET | `/health/live` | `200 { "status": "ok" }` si le processus répond. |
-| GET | `/health/ready` | `200 { "status": "ready" }` si PostgreSQL, le bucket objet, ScyllaDB activée et Redis requis répondent ; sinon `503`. |
+| GET | `/health/live` | `200 { status: "ok" }` si le processus répond. |
+| GET | `/health/ready` | `200 { status: "ready" }` si les dépendances requises répondent ; sinon `503`. |
 
-Les erreurs photo spécifiques sont `400 invalid_idempotency_key`, `400 invalid_photo`, `413 photo_too_large`,
-`404 profile_not_found`, `409 idempotency_key_conflict`, `409 idempotency_key_consumed`,
-`409 photo_update_in_progress`, `409 photo_update_conflict`, `429 photo_rate_limit_exceeded` et
-`503 photo_storage_unavailable`.
+La readiness vérifie PostgreSQL, le bucket objet, Scylla lorsqu’activé et Redis lorsqu’il est requis. Ces routes n’exigent pas d’authentification.
 
-Les statuts de modération sont `pending`, `approved` et `rejected`. Les motifs automatiques fermés sont `spam`,
-`insult`, `personal_contact`, `sexual_content`, `face_not_detected`, `multiple_faces`, `blurry`, `explicit_image`,
-`analysis_unavailable` et `legacy_unreviewed`. L’automatisation approuve ou demande une revue, sans jamais rejeter.
-Les erreurs admin spécifiques sont `400 invalid_moderation_case_id`, `400 invalid_moderation_request`,
-`404 moderation_case_not_found`, `409 moderation_case_stale` et `409 moderation_review_not_allowed`.
+<a id="client-mobile"></a>
+## Client mobile
+
+Toutes les routes de cette section exigent le Bearer mobile.
+
+### Session et déconnexion
+
+Onboarding incomplet accepté pour toutes les routes de ce tableau. La gestion des sessions, logout compris, partage une limite de 30/15 min/utilisateur.
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/auth/me` | `200 { user_id, onboarding_complete }`, sans rôle admin. |
+| POST | `/api/auth/logout` | `{ refresh_token, device_id? }` → `204`. |
+| GET | `/api/auth/sessions` | `limit, cursor` → `200 { sessions, next_cursor }`. Pas d’offset. |
+| DELETE | `/api/auth/sessions/:id` | UUID v4 d’une famille du compte → `204`. |
+| POST | `/api/auth/logout-all` | `{ confirm: true }` → `200 { revoked_sessions }`. |
+
+Une session listée expose `id, created_at, last_refreshed_at, expires_at, current`, jamais token, hash, IP ou user-agent. Seules les familles actives sont listées.
+
+Logout révoque la famille du Bearer et ses appareils push ; le refresh doit appartenir à cette famille, un prédécesseur authentique non expiré étant accepté. L’appareil facultatif doit appartenir au compte. La révocation ciblée peut viser la session courante ; elle est idempotente pour une famille déjà révoquée encore référencée. Une famille absente/étrangère renvoie `404 session_not_found`. Logout-all révoque toutes les familles et supprime tous les appareils push. Autres erreurs : `invalid_session_id`, `invalid_session_query`, `session_rate_limit_exceeded`.
+
+### Consentements
+
+Onboarding incomplet accepté.
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/users/me/consents` | `200 { consents, onboarding_complete, required_actions }`. |
+| PUT | `/api/users/me/consents` | `{ consents: [{ consent_type, granted }] }` → même état enrichi. |
+
+Types : `terms_of_service_acceptance`, `privacy_notice_acknowledgement`, `sensitive_data_consent`, `location_consent`. Aucun choix marketing. Chaque type apparaît au plus une fois. Chaque choix retourné indique sa version acceptée éventuelle, `required_document_version` et `document_url` ; le mobile doit présenter ce texte. Aucune preuve technique IP/user-agent n’est exposée et le client ne choisit pas la version.
+
+Les CGU et la notice ne peuvent pas être retirées via cette route : on peut refuser l’onboarding ou supprimer son compte. Retirer le consentement sensible efface sexe/préférences ; retirer la localisation efface la présence. Un rejeu identique est idempotent.
+
+### Profil et préférences
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/users/me` | `200` avec le profil propriétaire ; `404 profile_not_found` s’il n’est pas complété. |
+| PATCH | `/api/users/me/profile` | `{ firstname, birthdate, sex?, bio? }` → `200 { message: "profile updated" }`. |
+| GET | `/api/users/me/preferences` | `200 { min_age, max_age, max_distance_km, looking_for }` ; `404 preferences_not_found`. |
+| PATCH | `/api/users/me/preferences` | Ces quatre champs requis → `200 { message: "preferences updated" }`. |
+| PATCH | `/api/users/me/presence` | `{ latitude, longitude }` → `200 { message: "presence updated" }`. |
+
+Le profil expose `user_id, firstname, birthdate, profile_answers, moderation`, et `sex, bio, photo` lorsqu’ils existent. Le propriétaire voit son contenu même non approuvé. `moderation.bio` et `moderation.photo` contiennent `status, reasons` ; les réponses ont `moderation_status, moderation_reasons`. Une URL photo propriétaire n’est fournie que si la photo est techniquement prête.
+
+Pour le profil, prénom et naissance sont requis même avec PATCH ; prénom limité à 100 octets, âge minimal 18 ans. `sex` accepte `male | female | other | null`, `bio` accepte du texte ou `null` et au plus 2 000 octets. **Omettre `sex` ou `bio` les remet à `null`** : ce PATCH ne conserve pas automatiquement ces valeurs absentes. Cette route n’accepte aucune photo. Une bio modifiée est réanalysée.
+
+Préférences : âges entiers 18–99, distance entière 1–500 km, `looking_for = male | female | both | other`. Présence : latitude entre -90 et 90, longitude entre -180 et 180.
+
+### Photo unique
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| PUT | `/api/users/me/photo` | Multipart `photo` + clé d’idempotence → `200` avec URL propriétaire et modération. |
+| DELETE | `/api/users/me/photo` | Aucun corps → `204` dès acceptation durable du retrait. |
+
+**Envoyer.** Un seul fichier, aucun champ additionnel. Extensions admises : `.jpg .jpeg .png .heic .heif .webp`. Nom, MIME déclaré et signature doivent correspondre. L’image ne peut dépasser 40 Mpx ; entrée et résultat sont limités chacun à 500 000 octets. Le résultat est un WebP privé sans métadonnées, au plus 2 048 px. Limite dédiée : 10 tentatives/h/utilisateur.
+
+Exemple de réponse (URL illustrative) :
+
+```json
+{
+  "message": "photo updated",
+  "photo": "https://storage.example.test/signed-photo.webp",
+  "moderation_status": "pending",
+  "moderation_reasons": ["analysis_unavailable"]
+}
+```
+
+**Rejouer.** Pendant 24 heures, garder la même clé et les mêmes nom/MIME/octets : pas de nouvelle conversion ni écriture objet. Contenu différent : `409 idempotency_key_conflict` ; résultat remplacé/supprimé : `409 idempotency_key_consumed` ; traitement actif : `409 photo_update_in_progress`. L’URL signée expire après 300 secondes ; ce n’est pas un identifiant durable.
+
+**Retirer.** Le `204` rend la photo immédiatement invisible dans les nouvelles lectures ; l’objet est supprimé en arrière-plan. Une panne ultérieure ne rétablit pas la photo. Les URL déjà émises restent soumises à leur expiration ou à la suppression de l’objet.
+
+Autres erreurs : `400 invalid_idempotency_key`, `400 invalid_photo`, `413 photo_too_large`, `404 profile_not_found`, `409 photo_update_conflict`, `429 photo_rate_limit_exceeded`, `503 photo_storage_unavailable`.
+
+**Modération commune.** Statuts `pending | approved | rejected`. Motifs automatiques : `spam, insult, personal_contact, sexual_content, face_not_detected, multiple_faces, blurry, explicit_image, analysis_unavailable, legacy_unreviewed`. Une panne d’analyse entraîne une revue manuelle, jamais une approbation automatique. L’automatisation approuve ou demande une revue, sans rejeter seule. Dans le feed et les matchs, bio, réponses et photo non approuvées restent masquées ; le propriétaire garde la visibilité de son propre état.
+
+### Traits et questions de profil
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/traits` | `200 { traits: [{ id, name }] }`, catalogue. |
+| GET | `/api/users/me/traits` | Même forme, traits attribués au demandeur. |
+| POST | `/api/users/me/traits` | `{ trait_id }` → `204` ; `404 trait_not_found`. |
+| DELETE | `/api/users/me/traits/:traitId` | UUID → `204`, même si non attribué. |
+| GET | `/api/profile-questions` | `200 { questions: [...] }`, catalogue ordonné. |
+| GET | `/api/users/me/profile-answers` | `200 { answers: [...] }`, réponses propriétaires ordonnées. |
+| PUT | `/api/users/me/profile-answers` | `{ answers: [{ question_id, answer }] }` → même collection remplacée. |
+
+L’attribution d’un trait existant est idempotente. Une question expose `id, code, prompt, category, display_order` ; ordre par `display_order` puis UUID. Une réponse propriétaire expose `question_id, code, question, answer, position, moderation_status, moderation_reasons`.
+
+**Enregistrer les réponses.** Envoyer toute la liste, de zéro à trois questions distinctes ; l’ordre du tableau définit l’ordre d’affichage. Chaque texte est normalisé sur une ligne, sans caractère de contrôle, entre 10 et 300 caractères et au plus 1 000 octets. Un tableau vide efface les réponses. Le remplacement est atomique et relance leur modération. Erreurs : `404 profile_not_found`, `404 profile_question_not_found`. Si une question est supprimée par l’administration, ses réponses sont supprimées aussi : recharger le catalogue et l’état propriétaire.
+
+### Découverte, matchs et messages
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/users/me/discovery-status` | `200 { ready, required_actions, presence_expires_at }`. |
+| GET | `/api/feed` | `limit, cursor` → `200 { profiles, next_cursor }`. |
+| POST | `/api/swipes` | `{ target_user_id, decision: like ou pass }` → `201 { decision, matched, match? }`. |
+| GET | `/api/matches/me` | `limit, cursor` (offset déprécié) → `200 { matches, next_cursor }`. |
+| GET | `/api/users/me/continuation-quota` | `200` : plan effectif, usage, `weekly_limit, remaining` pour un plan limité. |
+| PATCH | `/api/matches/:id/reveal` | Aucun corps → `200 { message, photos_revealed }`. |
+| PATCH | `/api/matches/:id/continue` | Aucun corps → `200 { message, match_confirmed }`. |
+| GET | `/api/matches/:id/messages` | `limit, cursor` (offset déprécié) → `200 { messages, next_cursor }`. |
+| POST | `/api/matches/:id/messages` | `{ content }` + clé d’idempotence → `201` avec le message stable. |
+| PATCH | `/api/matches/:id/messages/read` | `{ read_through_message_id }` → `200 { updated_count, read_through_message_id }`. |
+| PATCH | `/api/matches/:id/messages/:msgId/read` | Aucun corps → `200 { message: "message marked as read" }`. |
+
+**Découverte.** Demandeur et candidats doivent être actifs, avec sexe, préférences, consentements sensible/localisation courants et position de moins d’une heure. Les actions de préparation possibles sont `profile, sex, preferences, sensitive_data_consent, location_consent, fresh_presence`. Les critères âge/sexe/distance s’appliquent dans les deux sens. Blocages, matchs existants et profils déjà swipés sont exclus. Le feed expose `user_id`, prénom, âge, sexe, distance arrondie au dixième, traits, bio et réponses approuvées. Limites : feed 60/min/utilisateur ; swipe 120/min/utilisateur.
+
+Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques créent un seul match ; aucun endpoint ne permet de fabriquer directement un match. Erreurs : `409 discovery_not_ready`, `404 discovery_candidate_not_found`, `409 swipe_already_recorded`, `400 invalid_cursor`, `429 swipe_rate_limit_exceeded`, `429 feed_rate_limit_exceeded`, `503 discovery_unavailable`.
+
+**Matchs.** La liste est triée par activité. Chaque résumé contient l’autre utilisateur (prénom, âge, sexe, bio, traits, `profile_answers`, photo conditionnelle), `my_revealed, photos_revealed, my_continued, unread_count, last_message`. La photo reste `null` avant révélation mutuelle, même approuvée. Les routes mobiles d’un match exigent d’en être participant.
+
+Le match est `active` pendant 24 h, puis `awaiting_continuation` ; les deux accords le rendent `confirmed`, sinon il devient `expired` après la seconde fenêtre. Le quota de l’initiateur est débité au second accord, sans double consommation concurrente ; une limite nulle n’accorde aucune continuation. Une attente de verrou ne prolonge pas l’échéance. Erreurs : `404 match_not_found`, `409 continuation_not_available_yet`, `409 invalid_match_state`, `409 messaging_not_available`, `410 match_expired`, `403 continuation_quota_reached`.
+
+**Messages.** Contenu non vide, 2 000 caractères maximum ; limite 60/min/utilisateur. Rejouer clé/match/contenu identiques renvoie le message existant sans nouvelle notification ; réutiliser la clé pour une autre requête renvoie `409 idempotency_key_conflict`. La lecture par borne marque tous les messages reçus jusqu’à la borne incluse. Un expéditeur ne peut pas marquer son propre message comme lu.
+
+### Appareils et temps réel
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/users/me/devices` | `200 { devices: [...] }`, sans tokens FCM. |
+| POST | `/api/users/me/devices` | `{ push_token, platform: ios ou android, app_version? }` → `201` avec l’appareil public. |
+| DELETE | `/api/users/me/devices/:id` | UUID d’un appareil du compte → `204` ; `404 device_not_found`. |
+| GET | `/api/users/me/events` | Flux SSE authentifié `text/event-stream`. |
+
+L’appareil expose UUID, `session_id`, plateforme, version et dates d’usage ; la session vient du Bearer, pas du corps client. Un token fournisseur déjà connu est réaffecté/rafraîchi de façon idempotente. Une ancienne liaison peut avoir `session_id: null`.
+
+SSE envoie `connected`, un heartbeat toutes les 25 secondes, puis `match.created, match.updated, matches.invalidated, message.created, message.read, subscription.updated`. Le flux ferme à expiration du JWT ou après échec/révocation détecté lors du contrôle de session toutes les 25 secondes. Le client SSE doit pouvoir envoyer le Bearer.
+
+**Après reconnexion, relire les ressources : SSE n’a pas de replay hors ligne.** Le push optionnel n’embarque jamais le texte privé d’un message. Dédupliquer son `notification_id` stable : une réponse fournisseur perdue peut provoquer un doublon externe. Les alertes de paiement/essai devenues obsolètes ne sont pas envoyées. Avec le push désactivé, les tâches consommées ne seront pas rattrapées après activation. Voir [garanties de livraison](docs/durable-notifications.md).
+
+### Abonnement
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/users/me/subscription` | `200` avec l’état d’abonnement public. |
+| POST | `/api/users/me/subscription/checkout` | `{ billing_period: monthly ou annual }` + clé d’idempotence → `201 { session_id, url, expires_at }`. |
+| POST | `/api/users/me/subscription/portal` | Aucun corps → `201 { url }`. |
+
+L’état expose `plan, provider, status, access_granted, billing_period`, dates de période/essai/annulation, `cancel_at_period_end, customer_portal_available`. `trialing, active, past_due` ouvrent l’accès uniquement pendant la période connue de l’API.
+
+**Checkout.** Utiliser l’URL retournée (validité 30 minutes). Une seule session peut être créée/ouverte par utilisateur. Le premier abonnement peut bénéficier de l’essai du catalogue ; un essai consommé n’est pas réattribué. Le retour sur l’URL de succès **ne prouve pas à lui seul l’activation Premium** : relire l’abonnement, mis à jour par webhook signé. Ne jamais envoyer Product ID, Price ID, montant, devise, durée d’essai ou Customer ID. Le portail exige un client Stripe déjà lié. Checkout et portail : 10/min/utilisateur.
+
+Erreurs : `billing_unavailable`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded`.
+
+### Droits, effacement et sûreté
+
+Onboarding incomplet accepté pour les jetons/effacement, demandes RGPD et export, mais pas pour les blocages/signalements.
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/users/me/deletion-token` | Aucun corps → `201 { confirmation_token, expires_at }`. |
+| DELETE | `/api/users/me` | `{ confirmation_token }` → `202 { request_id, status: "in_progress" }`. |
+| POST | `/api/users/me/data-subject-requests` | `{ type }` → `201` avec la demande. |
+| GET | `/api/users/me/data-subject-requests` | `200 { requests: [...] }`. |
+| GET | `/api/users/me/data-export` | `200` avec l’export portable du demandeur. |
+| GET | `/api/users/me/blocks` | `200 { blocks: [...] }`, toujours `photo: null`. |
+| POST | `/api/users/me/blocks/:userId` | UUID → `204`, clôt les matchs entre les comptes et empêche leur recréation. |
+| DELETE | `/api/users/me/blocks/:userId` | UUID → `204`. |
+| POST | `/api/reports` | `{ reported_user_id, match_id?, reason, description? }` → `201` avec le signalement. |
+
+**Effacement.** Demander le jeton dédié, puis le transmettre comme reçu (`uuid:secret`). Il remplace le précédent et expire après dix minutes par défaut (`ACCOUNT_DELETION_TOKEN_TTL`, 1–30 min). Exemple de réponse au DELETE :
+
+```json
+{
+  "request_id": "11111111-1111-4111-8111-111111111111",
+  "status": "in_progress"
+}
+```
+
+Le `202` désactive immédiatement le compte ; fermer la session mobile. **Ne pas afficher que toutes les données ont déjà été supprimées.** Le nettoyage continue en arrière-plan malgré une panne externe. Jeton invalide/expiré : `401 invalid_or_expired_deletion_token`. Si la réponse est perdue après acceptation, le Bearer devient invalide : un retry n’est pas une route publique de suivi et ne rend pas forcément le même `202`. Voir [effacement et limites de reprise](docs/account-erasure.md).
+
+**Droits.** Types de demande : `access | erasure | portability | rectification | restriction | objection` ; une seule demande ouverte par type/utilisateur. L’export contient profil/réponses, abonnement/factures liés, métadonnées des sessions sans secrets et uniquement les décisions de swipe sortantes. Il n’expose jamais les décisions entrantes d’autrui. Limite 5/h/utilisateur : `429 data_export_rate_limit_exceeded` ; source indisponible : `503 data_export_unavailable`. L’accès est journalisé.
+
+**Signalements.** `reason = inappropriate_content | fake_profile | harassment | spam | other` ; description au plus 2 000 octets ; `match_id` et description peuvent être nuls. Auto-signalement interdit, cible existante et match éventuel reliant les deux comptes. Limite 5/h/utilisateur.
+
+<a id="administration"></a>
+## Administration
+
+### Entrée WebAuthn
+
+Ces quatre routes d’entrée ne demandent pas de session existante. La preuve WebAuthn est vérifiée contre l’origine admin ; bootstrap exige en plus le secret d’enrôlement. Limite : 10 requêtes/5 min/IP par défaut. Aucun SSO ni fournisseur d’identité externe.
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/admin/auth/login/options` | Aucun corps → `200 { challenge_id, options }`. |
+| POST | `/api/admin/auth/login/verify` | `{ challenge_id, credential }` → `200` avec session publique et cookie. |
+| POST | `/api/admin/auth/bootstrap/options` | `{ bootstrap_token }` → `200 { challenge_id, options }`. |
+| POST | `/api/admin/auth/bootstrap/verify` | `{ bootstrap_token, challenge_id, credential, name }` → `201` avec session et cookie. |
+
+En développement, ouvrir **`http://localhost:5173`**, RP ID `localhost`, via le proxy même-origine `/api` du dashboard ; pas `127.0.0.1`. En production : origine HTTPS exacte, cookie `Secure` préfixé `__Host-`. Le RP ID doit correspondre au domaine configuré.
+
+Transmettre les options à l’API WebAuthn du navigateur et renvoyer le credential sérialisé. Passkey découvrable et vérification utilisateur obligatoires. Challenge valable cinq minutes, à usage unique. La session publique expose `user_id, role, authenticated_at, expires_at`, jamais son secret. Bootstrap, créé hors bande, expire après quinze minutes par défaut. Procédure d’enrôlement : [README](README.md#authentification).
+
+### Sessions et passkeys
+
+Toutes les routes suivantes exigent la session admin. Expiration inactive de 30 minutes et absolue de huit heures par défaut.
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/admin/auth/session` | Session courante après vérification du compte et de la passkey. |
+| GET | `/api/admin/me` | `200 { user_id, role }`, alias métier ; préférer la route session. |
+| POST | `/api/admin/auth/logout` | Aucun corps → `204`, expire aussi le cookie. |
+| GET | `/api/admin/auth/credentials` | Passkeys actives, marqueur de la passkey courante, sans clé publique. |
+| PATCH | `/api/admin/auth/credentials/:id` | **Récente** ; `{ name }` → `200`, renommage audité. |
+| POST | `/api/admin/auth/credentials/options` | **Récente** ; options d’une passkey supplémentaire. |
+| POST | `/api/admin/auth/credentials/verify` | **Récente** ; `{ challenge_id, credential, name }` → `201`. |
+| DELETE | `/api/admin/auth/credentials/:id` | **Récente** ; UUID → `204`. |
+| GET | `/api/admin/auth/sessions` | Sessions actives du compte avec passkey, dates et `current`, sans token/hash. |
+| DELETE | `/api/admin/auth/sessions/:id` | **Récente** ; UUID → `204`, sauf session courante. |
+| POST | `/api/admin/auth/sessions/revoke-others` | **Récente** ; `200 { revoked_sessions }`, garde la session courante. |
+| GET | `/api/admin/auth/events` | `limit, cursor` → `200 { events, next_cursor }`, récents d’abord. |
+
+Un nom de passkey normalisé contient 1–100 caractères, au plus 200 octets. Interdit de révoquer la passkey courante ou la dernière active ; révoquer une autre passkey invalide les sessions qui en dépendent. Pour fermer la session courante, utiliser logout, pas la révocation ciblée.
+
+Erreurs : `invalid_or_expired_admin_bootstrap`, `invalid_or_expired_webauthn_challenge`, `webauthn_registration_failed`, `webauthn_authentication_failed`, `admin_session_invalid`, `admin_reauthentication_required`, `invalid_admin_request_origin`, `last_admin_credential`, `current_admin_credential`, `current_admin_session`, `admin_session_not_found`, `admin_credential_not_found`, `admin_auth_rate_limit_exceeded`.
+
+### Comptes, signalements et droits
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/admin/users` | `status, role, search, limit, cursor` (offset déprécié) → `200 { users, next_cursor }`. |
+| GET | `/api/admin/users/:id` | UUID + query `reason` obligatoire → détail administratif audité. |
+| PATCH | `/api/admin/users/:id/status` | `{ is_banned, reason? }` → bannissement/débannissement. Motif requis pour bannir. |
+| GET | `/api/matches/:userId` | UUID utilisateur + `reason, limit, cursor` (offset déprécié) → `200 { matches, next_cursor }`. **Route admin malgré son chemin.** |
+| GET | `/api/admin/matches/:id/messages` | UUID match + `reason, limit, cursor` (offset déprécié) → conversation auditée. |
+| GET | `/api/admin/reports` | `status?, limit, cursor` (offset déprécié) → `200 { reports, next_cursor }`. |
+| PATCH | `/api/admin/reports/:id` | `{ status }` → `200 { message: "report updated" }` ; `404 report_not_found`. |
+| GET | `/api/admin/data-subject-requests` | `status?` → liste plafonnée à 500, avec progression `erasure` éventuelle. |
+| PATCH | `/api/admin/data-subject-requests/:id` | **Récente** ; `{ status, notes? }` → transition contrôlée et auditée. |
+| GET | `/api/admin/data-access-logs` | Query `user_id` → `200 { logs: [...] }`, au plus 500. |
+
+Recherche utilisateurs : prénom ou UUID exact ; `status = active | banned`, `role = user | admin | superadmin`. La liste ne signe aucune photo (`photo: null`). Le détail expose compte, profil, préférences, traits, consentements et fraîcheur de présence ; jamais téléphone, empreinte ou coordonnées précises. Les consultations sensibles requièrent un motif de 3–500 caractères ; une conversation est auditée pour les deux participants.
+
+Un bannissement invalide les sessions mobiles. Un admin n’agit que sur un rôle utilisateur ; un superadmin ne peut agir ni sur lui-même ni sur un autre superadmin. Statuts de signalement : `pending | reviewed | dismissed`.
+
+Pour une demande RGPD, la mutation accepte `in_progress | completed | rejected`. Sur un effacement en cours, demander `completed` **programme** le workflow et répond `200 { "message": "account erasure scheduled" }` ; la demande reste `in_progress` jusqu’à réussite réelle. Le rejeu ne duplique pas le travail. Rejet d’un effacement commencé : `409 invalid_data_request_transition`. Autres transitions : `200 { "message": "data subject request updated" }`.
+
+`erasure` peut être nul ; sinon il expose `step, scylla_partition` (0–64), `updated_at, event_id, status, attempts, last_error_code`. Après purge d’un événement résolu, `event_id/status` peuvent être nuls. Aucun payload, identifiant Stripe, clé objet ou URL.
+
+### Catalogue et modération
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| POST | `/api/admin/traits` | `{ name }` → `201 { id, name }`. |
+| PATCH | `/api/admin/traits/:id` | `{ name }` → `200 { message: "trait updated" }`. |
+| DELETE | `/api/admin/traits/:id` | UUID → `204`, suppression définitive. |
+| GET | `/api/admin/profile-questions` | `200 { questions: [...] }`, avec dates et `answer_count`. |
+| POST | `/api/admin/profile-questions` | `{ prompt, category, display_order? }` → `201` avec la question. |
+| PATCH | `/api/admin/profile-questions/:id` | Au moins un de ces trois champs → `200` avec la question. |
+| DELETE | `/api/admin/profile-questions/:id` | UUID → `204`, supprime aussi toutes ses réponses. |
+| GET | `/api/admin/content-moderation` | `status?, content_type?, limit, cursor` (offset déprécié) → `200 { cases, next_cursor }`. |
+| GET | `/api/admin/content-moderation/:id` | UUID + query `reason` (3–500 caractères) → contenu audité. |
+| PATCH | `/api/admin/content-moderation/:id` | `{ version, decision, reason, photo_checks? }` → `200 { message: "content moderation decision recorded" }`. |
+
+Traits : nom non vide, au plus 100 octets ; doublon `409 trait_already_exists`. Questions : catégories `daily_life | personality | interests | relationships | conversation`, ordre par défaut 100 ; doublon de libellé insensible à la casse : `409 profile_question_already_exists`. Modifier le libellé affecte aussi les réponses existantes. **Avant suppression, afficher `answer_count` et demander confirmation explicite** : les réponses ne sont pas conservées.
+
+**Revoir un contenu.** Filtrer par `status = pending | approved | rejected` et `content_type = photo | bio | profile_answer`. La liste expose identifiants, utilisateur/prénom, statut/motifs, versions de politique et de revue, signaux/contrôles photo et dates ; pas le texte, la question, la clé objet, l’URL ou l’image. Ouvrir le détail avec un motif fournit `content, question, photo` selon le type ; toute consultation est auditée avant signature photo.
+
+La décision est `approved | rejected`, avec la `version` lue au préalable. Une photo exige les trois booléens `face_detectable, sharp_enough, content_allowed` : tous vrais pour approuver, au moins un faux pour rejeter. Un rejet retire la photo et programme sa suppression. En cas de `409 moderation_case_stale`, recharger plutôt que réappliquer aveuglément. Autres erreurs : `400 invalid_moderation_case_id`, `400 invalid_moderation_request`, `404 moderation_case_not_found`, `409 moderation_review_not_allowed`.
+
+### Exploitation et reprises
+
+| Méthode | Route | Entrée → résultat |
+| --- | --- | --- |
+| GET | `/api/admin/metrics` | `revenue_period?` → synthèse métier et `operations`. |
+| GET | `/api/admin/revenue` | `revenue_period?` → estimation de chiffre d’affaires. |
+| GET | `/api/admin/photo-reconciliation` | `status?, limit, cursor` (offset déprécié) → traitements photo à réconcilier. |
+| POST | `/api/admin/photo-reconciliation/:id/retry` | UUID photo + `{ reason }` (3–500 caractères) → `202`. |
+| GET | `/api/admin/outbox/dead-letters` | `limit, cursor` → `200 { events, next_cursor }`. |
+| POST | `/api/admin/outbox/:id/retry` | **Récente** ; `{ reason }` → `202`, relance auditée. |
+| POST | `/api/admin/outbox/:id/discard` | **Récente** ; `{ reason }` → `204`, abandon audité lorsque permis. |
+
+`revenue_period = last_7_days | last_30_days | month_to_date | previous_month | year_to_date | all_time`, défaut `month_to_date`. Le revenu est une estimation : abonnements Premium mis à jour sur la période × tarif mensuel actuel ; **ni encaissements ni bénéfice comptable**.
+
+`operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `completed` signifie tâche acquittée encore conservée, pas push reçu.
+
+Réconciliation photo : filtre `all | stale_processing | deleting | dead_letter` (défaut `all`). UUID photo/utilisateur, métadonnées techniques, diagnostics et état outbox uniquement ; aucune image ni clé objet. Une photo prête ou un traitement récent refuse la relance : `409 photo_reconciliation_not_allowed` ; worker actif : `409 photo_reconciliation_in_progress` ; photo absente : `404 photo_not_found`.
+
+Les dead letters exposent type, tentatives et code normalisé, jamais payload/agrégat/clé objet. Une décision devenue obsolète renvoie `409 outbox_event_not_dead_letter`. L’abandon de `account.erase` est toujours interdit, celui de `photo.delete` est interdit tant que sa trace existe : `409 outbox_discard_not_allowed`. `notification.push` peut être abandonné sans effacer la notification. Un `202` de reprise ne garantit pas que la dépendance sera disponible lors du prochain essai.
+
+<a id="entretien-du-contrat"></a>
+## Entretien du contrat
+
+Modifier ce guide avec toute évolution de route, DTO, réponse, autorisation ou règle de rejeu. Garder les chemins complets dans les tableaux, une seule ligne par couple méthode/chemin.
+
+Le test [routes-documentation.contract.spec.ts](test/e2e/routes-documentation.contract.spec.ts) compare ces lignes aux routes réellement enregistrées par le graphe Nest/Fastify, avec stockages neutralisés. Il détecte routes non documentées, routes obsolètes et doublons. Les alias HEAD automatiques et le preflight CORS généré ne font pas partie de cet inventaire applicatif.
+
+Ce contrôle ne prouve ni les schémas JSON, ni les droits, ni les garanties métier : les autres tests de contrat et intégrations restent nécessaires. Voir [guide de validation](test.md), [responsabilités internes](docs/module-responsibilities.md) et [backlog](docs/roadmap.md).

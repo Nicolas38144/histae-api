@@ -219,9 +219,10 @@ pnpm run test:e2e
 pnpm run test:integration
 ```
 
-Les tests d’intégration nécessitent PostgreSQL, ScyllaDB et Redis locaux. La readiness et le smoke test photo
-nécessitent en plus le stockage objet local. Les suites utilisent uniquement les cibles de développement autorisées
-et nettoient leurs données temporaires.
+Les tests d’intégration nécessitent PostgreSQL, ScyllaDB, Redis et le stockage objet S3 locaux. Les suites utilisent
+uniquement les cibles de développement autorisées et nettoient leurs données temporaires. Les tests R03 coupent
+leurs propres relais TCP et processus, jamais les conteneurs partagés ; voir [isolation et limites](docs/resilience-tests.md).
+Le pilote Scylla 4.9.0 conserve un correctif pnpm versionné : inclure `patches/` avec les fichiers pnpm lors des installations.
 
 ## Contrat HTTP
 
@@ -246,5 +247,6 @@ Les erreurs de l’API conservent une structure stable :
 - [Travaux restants, améliorations et défauts](docs/roadmap.md)
 - [Notifications durables et exploitation du worker](docs/durable-notifications.md)
 - [Contrat exhaustif de l’API](routes.md)
-- [Stratégie, inventaire et exécution des tests](test.md)
+- [Guide de validation : commandes, prérequis et limites](test.md)
+- [Tests de concurrence et de reprise après panne](docs/resilience-tests.md)
 - [Check-up de sécurité du 3 septembre 2026](docs/security-checkup.md)
