@@ -57,8 +57,10 @@ d’un compte désactivé sans recréer ses projections.
 
 Cela ne crée pas une transaction distribuée. Un fournisseur qui termine arbitrairement tard une opération après
 une perte de processus/connexion ne fournit pas, à lui seul, une preuve d’absence définitive. Les traces
-techniques conservées, les deadlines des clients et la réconciliation demeurent nécessaires ; les interruptions
-d’infrastructure complètes et la cible S3 de production restent à éprouver dans R03/R10.
+techniques conservées, les deadlines des clients et la réconciliation demeurent nécessaires. R03 teste des arrêts
+réels du worker aux checkpoints et la perte de sa connexion de verrouillage, ainsi que des coupures réseau locales
+Scylla/S3. Les interruptions de l’hôte complet, restaurations et la cible S3 de production restent R10.
+Voir [les scénarios, leur isolation et leurs limites](resilience-tests.md).
 
 ## Issue incertaine Stripe
 

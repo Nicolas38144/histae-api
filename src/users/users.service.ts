@@ -22,7 +22,7 @@ import {
   legalDocumentUrl,
   legalDocumentVersion,
 } from './users.models';
-import { UsersRepository } from './users.repository';
+import { RequiredConsentMissingError, UsersRepository } from './users.repository';
 import { PhotosService } from '../photos/photos.service';
 import type { UploadedPhoto } from '../photos/photo-processor.service';
 import { TextModerationService } from '../moderation/text-moderation.service';
@@ -59,15 +59,13 @@ export class UsersService {
       : ['terms_of_service_acceptance', 'privacy_notice_acknowledgement', 'sensitive_data_consent']);
     const bio = input.bio === null ? null : input.bio.trim();
     if (bio !== null && Buffer.byteLength(bio) > 2_000) throw apiError(400, 'invalid_profile', 'The profile does not meet the required constraints.');
-    if (!await this.users.upsertProfile(userId, {
+    await this.persist(this.users.upsertProfile(userId, {
       firstname,
       birthdate: input.birthdate,
       sex: input.sex,
       bio,
       bioModeration: bio ? this.moderation.analyze(bio) : null,
-    })) {
-      throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
-    }
+    }, this.config.legal));
   }
 
   uploadPhoto(
@@ -100,9 +98,7 @@ export class UsersService {
       'privacy_notice_acknowledgement',
       'sensitive_data_consent',
     ]);
-    if (!await this.users.upsertPreferences(userId, { ...input, looking_for: lookingFor as PreferencesInput['looking_for'] })) {
-      throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
-    }
+    await this.persist(this.users.upsertPreferences(userId, { ...input, looking_for: lookingFor as PreferencesInput['looking_for'] }, this.config.legal));
   }
 
   async updatePresence(userId: string, input: PresenceInput): Promise<void> {
@@ -114,9 +110,7 @@ export class UsersService {
       'privacy_notice_acknowledgement',
       'location_consent',
     ]);
-    if (!await this.users.upsertPresence(userId, input, new Date())) {
-      throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
-    }
+    await this.persist(this.users.upsertPresence(userId, input, new Date(), this.config.legal));
   }
 
   async issueDeletionToken(userId: string): Promise<{ confirmation_token: string; expires_at: Date }> {
@@ -194,6 +188,15 @@ export class UsersService {
       .map((choice) => [choice.consent_type, choice.document_version]));
     if (required.some((consentType) => active.get(consentType) !== this.documentVersion(consentType))) {
       throw apiError(403, 'required_consent_missing', 'The required consent has not been granted.');
+    }
+  }
+
+  private async persist(mutation: Promise<boolean>): Promise<void> {
+    try {
+      if (!await mutation) throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
+    } catch (error) {
+      if (error instanceof RequiredConsentMissingError) throw apiError(403, 'required_consent_missing', 'The required consent has not been granted.');
+      throw error;
     }
   }
 

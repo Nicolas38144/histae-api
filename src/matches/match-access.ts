@@ -3,16 +3,19 @@ import type { MatchCommandResult, MatchRow } from './matches.models';
 import { MATCH_PURGE_MS } from './matches.constants';
 
 // The caller owns the transaction; expiration and the protected action stay atomic.
+// Evaluate the clock outside the materialized lock query, after any lock wait.
 export async function lockMessagingMatch(client: PoolClient, matchId: string, userId: string): Promise<MatchCommandResult<MatchRow>> {
   const locked = await client.query<MatchRow & { database_now: Date }>(`
-    SELECT id, user1_id, user2_id, status, expires_at, purge_after,
-      continuation_initiator_id, created_at, last_message_at,
-      clock_timestamp() AS database_now
-    FROM match_init
-    WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
-      AND NOT EXISTS (SELECT 1 FROM user_account
-        WHERE user_id IN (match_init.user1_id, match_init.user2_id) AND deleted_at IS NOT NULL)
-    FOR UPDATE
+    WITH locked AS MATERIALIZED (
+      SELECT id, user1_id, user2_id, status, expires_at, purge_after,
+        continuation_initiator_id, created_at, last_message_at
+      FROM match_init
+      WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
+        AND NOT EXISTS (SELECT 1 FROM user_account
+          WHERE user_id IN (match_init.user1_id, match_init.user2_id) AND deleted_at IS NOT NULL)
+      FOR UPDATE
+    )
+    SELECT locked.*, clock_timestamp() AS database_now FROM locked
   `, [matchId, userId]);
   const initial = locked.rows[0];
   if (!initial) return { ok: false, reason: 'not_found' };

@@ -9,6 +9,9 @@ overrides:
   find-my-way: 9.7.0
   js-yaml: 5.2.3
 
+patchedDependencies:
+  cassandra-driver@4.9.0: 0b06484e0a4502007c8e018a8713235ce11b561e74b8fa8671a7c701dd7de848
+
 importers:
 
   .:
@@ -39,7 +42,7 @@ importers:
         version: 14.0.0
       cassandra-driver:
         specifier: 4.9.0
-        version: 4.9.0
+        version: 4.9.0(patch_hash=0b06484e0a4502007c8e018a8713235ce11b561e74b8fa8671a7c701dd7de848)
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -5187,7 +5190,7 @@ snapshots:
 
   caniuse-lite@1.0.30001809: {}
 
-  cassandra-driver@4.9.0:
+  cassandra-driver@4.9.0(patch_hash=0b06484e0a4502007c8e018a8713235ce11b561e74b8fa8671a7c701dd7de848):
     dependencies:
       '@types/node': 20.19.43
       adm-zip: 0.6.0

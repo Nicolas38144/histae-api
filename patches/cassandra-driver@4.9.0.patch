@@ -1,0 +1,17 @@
+diff --git a/lib/control-connection.js b/lib/control-connection.js
+index fd707529a148953374f616eb36de816db5f6dff9..ebbeadd703e514c7f38bba1000c6aefce82c6f14 100644
+--- a/lib/control-connection.js
++++ b/lib/control-connection.js
+@@ -747,6 +747,12 @@ class ControlConnection extends events.EventEmitter {
+       : `${row['rpc_address']}:${this.options.protocolOptions.port}`;
+ 
+     if (initializing) {
++      // Re-initialization after all hosts went down can replace an existing
++      // endpoint. Drain its pool and cancel its timers before losing the Host.
++      const previousHost = this.hosts.get(endpoint);
++      if (previousHost) {
++        previousHost.shutdown(true);
++      }
+       localHost = new Host(endpoint, this.protocolVersion, this.options, this.metadata);
+       this.hosts.set(endpoint, localHost);
+       this.log('info', `Adding host ${endpoint}`);

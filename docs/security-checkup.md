@@ -7,6 +7,18 @@ le stockage photo et les dépendances. Il combine revue statique, tests automati
 configuration et audits pnpm complets/de production. Il ne remplace ni un pentest externe, ni une revue de l’infrastructure de
 production, ni une analyse juridique.
 
+## Complément ciblé R03 — 4 septembre 2026
+
+La revue et les tests ont reproduit la réintroduction de données après retrait de consentement, puis une
+continuation/un message accepté après expiration à cause d’une heure lue avant l’attente du verrou. Ces courses
+sont corrigées sous transaction. Le quota initial nul est aussi protégé. Un correctif pnpm du pilote Scylla ferme
+les anciens pools remplacés à la reconnexion, dont le test avait révélé les timers résiduels.
+
+Lint/typecheck/build, 472 tests autonomes et 160 intégrations passent, soit 632 cas. Les coupures réelles restent
+limitées aux connexions/processus de test ; aucune interruption des conteneurs partagés. Aucune nouvelle route,
+permission, rétention ou dépendance. Le patch du pilote change son code, pas sa version : aucun nouvel audit de
+dépendances ni pentest n’a été effectué pour R03. Voir [preuve, isolation et limites](resilience-tests.md).
+
 ## Complément ciblé R02 — 4 septembre 2026
 
 L’effacement utilise désormais des checkpoints outbox et désactive le compte dès l’acceptation atomique.

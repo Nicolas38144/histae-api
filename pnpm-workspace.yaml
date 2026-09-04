@@ -8,3 +8,5 @@ overrides:
   adm-zip: 0.6.0
   find-my-way: 9.7.0
   js-yaml: 5.2.3
+patchedDependencies:
+  cassandra-driver@4.9.0: patches/cassandra-driver@4.9.0.patch

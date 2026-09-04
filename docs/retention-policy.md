@@ -44,6 +44,11 @@ compte » désigne le workflow complet, pas un délai garanti de réponse HTTP. 
 signées restent limitées par leur expiration de 300 secondes ou la suppression de l’objet ; les copies déjà
 téléchargées ne sont pas révocables par l’API.
 
+Depuis R03, un retrait de consentement et les écritures du profil, des préférences ou de la présence utilisent
+le même verrou de compte. Les consentements courants sont relus dans la transaction d’écriture : une requête
+validée avant le retrait ne peut pas réintroduire les données ensuite. Les tests de rétention vérifient des lignes
+expirées et encore valides ; aucune durée ni décision juridique du présent document n’a été modifiée.
+
 Les intentions de création Customer Stripe sont conservées avec leurs tentatives Checkout jusqu’à
 l’anonymisation, afin qu’une réponse perdue ne fasse pas disparaître une référence à nettoyer. Une issue trop
 ancienne pour un rejeu idempotent sûr reste à réconcilier et bloque la clôture. Voir [le protocole R02](account-erasure.md).

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { enqueueAccountErasure, type AcceptedErasure } from '../privacy/erasure-enqueue';
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService, type Queryable } from '../database/database.service';
+import { legalDocumentVersion, ONBOARDING_LEGAL_CHOICE_TYPES, type LegalDocumentVersions } from './users.models';
 import type { ConsentChange, ConsentEvent, ConsentType, ModeratedProfileInput, PreferencesInput, PreferencesRow, PresenceInput, ProfileRow } from './users.models';
 
 @Injectable()
@@ -45,19 +46,15 @@ export class UsersRepository {
     return result.rows[0];
   }
 
-  async upsertProfile(userId: string, input: ModeratedProfileInput): Promise<boolean> {
+  async upsertProfile(userId: string, input: ModeratedProfileInput, versions: LegalDocumentVersions): Promise<boolean> {
     return this.database.transaction(async (client) => {
+      if (!await this.lockLegalChoices(client, userId, input.sex === null ? undefined : 'sensitive_data_consent', versions)) return false;
       const current = (await client.query<{ bio: string | null }>(`
-        SELECT profile.bio FROM user_profile AS profile
-        JOIN user_account AS account ON account.user_id = profile.user_id
-        WHERE profile.user_id = $1 AND account.deleted_at IS NULL
-        FOR UPDATE OF profile
+        SELECT bio FROM user_profile WHERE user_id = $1 FOR UPDATE
       `, [userId])).rows[0];
       const result = await client.query(`
         INSERT INTO user_profile (user_id, firstname, birthdate, sex, bio)
-        SELECT $1, $2, $3, $4, $5 WHERE EXISTS (
-          SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
-        )
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (user_id) DO UPDATE SET firstname = EXCLUDED.firstname, birthdate = EXCLUDED.birthdate,
           sex = EXCLUDED.sex, bio = EXCLUDED.bio
       `, [userId, input.firstname, input.birthdate, input.sex, input.bio]);
@@ -91,28 +88,30 @@ export class UsersRepository {
     return result.rows[0];
   }
 
-  async upsertPreferences(userId: string, input: PreferencesInput): Promise<boolean> {
-    const result = await this.database.query(`
-      INSERT INTO user_preferences (user_id, min_age, max_age, max_distance_km, looking_for)
-      SELECT $1, $2, $3, $4, $5 WHERE EXISTS (
-        SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
-      )
-      ON CONFLICT (user_id) DO UPDATE SET min_age = EXCLUDED.min_age, max_age = EXCLUDED.max_age,
-        max_distance_km = EXCLUDED.max_distance_km, looking_for = EXCLUDED.looking_for
-    `, [userId, input.min_age, input.max_age, input.max_distance_km, input.looking_for]);
-    return result.rowCount !== 0;
+  async upsertPreferences(userId: string, input: PreferencesInput, versions: LegalDocumentVersions): Promise<boolean> {
+    return this.database.transaction(async client => {
+      if (!await this.lockLegalChoices(client, userId, 'sensitive_data_consent', versions)) return false;
+      const result = await client.query(`
+        INSERT INTO user_preferences (user_id, min_age, max_age, max_distance_km, looking_for)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id) DO UPDATE SET min_age = EXCLUDED.min_age, max_age = EXCLUDED.max_age,
+          max_distance_km = EXCLUDED.max_distance_km, looking_for = EXCLUDED.looking_for
+      `, [userId, input.min_age, input.max_age, input.max_distance_km, input.looking_for]);
+      return result.rowCount !== 0;
+    });
   }
 
-  async upsertPresence(userId: string, input: PresenceInput, updatedAt: Date): Promise<boolean> {
-    const result = await this.database.query(`
-      INSERT INTO user_presence (user_id, latitude, longitude, is_location_fresh, updated_at)
-      SELECT $1, $2, $3, true, $4 WHERE EXISTS (
-        SELECT 1 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
-      )
-      ON CONFLICT (user_id) DO UPDATE SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
-        is_location_fresh = EXCLUDED.is_location_fresh, updated_at = EXCLUDED.updated_at
-    `, [userId, input.latitude, input.longitude, updatedAt]);
-    return result.rowCount !== 0;
+  async upsertPresence(userId: string, input: PresenceInput, updatedAt: Date, versions: LegalDocumentVersions): Promise<boolean> {
+    return this.database.transaction(async client => {
+      if (!await this.lockLegalChoices(client, userId, 'location_consent', versions)) return false;
+      const result = await client.query(`
+        INSERT INTO user_presence (user_id, latitude, longitude, is_location_fresh, updated_at)
+        VALUES ($1, $2, $3, true, $4)
+        ON CONFLICT (user_id) DO UPDATE SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
+          is_location_fresh = EXCLUDED.is_location_fresh, updated_at = EXCLUDED.updated_at
+      `, [userId, input.latitude, input.longitude, updatedAt]);
+      return result.rowCount !== 0;
+    });
   }
 
   async replaceDeletionToken(userId: string, id: string, tokenHash: string, expiresAt: Date): Promise<boolean> {
@@ -142,9 +141,9 @@ export class UsersRepository {
     });
   }
 
-  async activeLegalChoices(userId: string, consentTypes: ConsentType[]): Promise<Array<{ consent_type: ConsentType; document_version: string }>> {
+  async activeLegalChoices(userId: string, consentTypes: ConsentType[], database: Queryable = this.database): Promise<Array<{ consent_type: ConsentType; document_version: string }>> {
     if (!consentTypes.length) return [];
-    return (await this.database.query<{ consent_type: ConsentType; document_version: string }>(`
+    return (await database.query<{ consent_type: ConsentType; document_version: string }>(`
       SELECT consent_type, document_version FROM user_consent
       WHERE user_id = $1 AND consent_type = ANY($2::text[]) AND granted = true AND withdrawn_at IS NULL
     `, [userId, consentTypes])).rows;
@@ -156,6 +155,17 @@ export class UsersRepository {
       FROM user_consent WHERE user_id = $1
       ORDER BY consent_type, event_sequence DESC
     `, [userId])).rows;
+  }
+
+  private async lockLegalChoices(client: Queryable, userId: string, sensitive: 'sensitive_data_consent' | 'location_consent' | undefined, versions: LegalDocumentVersions): Promise<boolean> {
+    // Same account-first lock order as recordConsents and account erasure. A
+    // preflight HTTP check alone cannot authorize a later sensitive write.
+    const account = await client.query('SELECT user_id FROM user_account WHERE user_id=$1 AND deleted_at IS NULL FOR UPDATE', [userId]);
+    if (!account.rows[0]) return false;
+    const required: ConsentType[] = [...ONBOARDING_LEGAL_CHOICE_TYPES, ...(sensitive ? [sensitive] : [])];
+    const current = new Map((await this.activeLegalChoices(userId, required, client)).map(row => [row.consent_type, row.document_version]));
+    if (required.some(type => current.get(type) !== legalDocumentVersion(type, versions))) throw new RequiredConsentMissingError();
+    return true;
   }
 
   async recordConsents(
@@ -203,3 +213,5 @@ export class UsersRepository {
   }
 
 }
+
+export class RequiredConsentMissingError extends Error {}

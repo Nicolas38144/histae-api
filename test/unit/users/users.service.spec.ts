@@ -163,7 +163,7 @@ describe('UsersService consent enforcement', () => {
     })).resolves.toBeUndefined();
     expect(repository.upsertProfile).toHaveBeenCalledWith('user-id', {
       firstname: 'Nicolas', birthdate: '1990-01-01', sex: null, bio: null, bioModeration: null,
-    });
+    }, config.legal);
   });
 
   it('issues a short-lived deletion token while storing only its hash', async () => {

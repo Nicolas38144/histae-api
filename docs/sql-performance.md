@@ -1,6 +1,6 @@
 # Performance SQL PostgreSQL
 
-Mise à jour : 4 septembre 2026. Mesures historiques conservées ; les ajouts R02 sont décrits sans nouveau benchmark.
+Mise à jour : 4 septembre 2026. Mesures historiques conservées ; les ajouts R02/R03 sont décrits sans nouveau benchmark.
 
 ## Portée et méthode
 
@@ -86,6 +86,13 @@ servent la route mobile, mais retirer un index déployé sans statistiques de pr
 devra être réévalué après une période représentative.
 
 ## Exploitation
+
+Complément R03 : les contrôles d’expiration des messages/continuations placent `clock_timestamp()` hors de la
+CTE matérialisée portant `FOR UPDATE`, pour mesurer l’heure après une éventuelle attente sans requête supplémentaire.
+La consommation initiale du quota exige aussi une limite positive. Les écritures profil/préférences/présence
+verrouillent d’abord la clé primaire du compte, puis relisent les consentements requis avant mutation ; les
+anciens tests d’existence du compte devenus redondants sont retirés. Aucune migration ni nouvel index.
+Les tests réels valident ces courses ; leur passage n’est pas une mesure de débit ou de latence sous charge.
 
 Complément R01 : la migration `011_durable_notifications` ajoute l’unicité de la clé de notification, l’unicité
 notification/appareil et l’index de cascade par appareil. La programmation utilise une instruction avec CTE et

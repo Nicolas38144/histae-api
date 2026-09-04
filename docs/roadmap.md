@@ -16,7 +16,7 @@ Ne pas refaire ce qui existe déjà :
 - métriques HTTP/dépendances, suivi persistant des maintenances et récupération auditée des dead letters ;
 - optimisation SQL documentée et séparation récente des responsabilités matchs, administration et Stripe.
 
-R01 et R02 sont livrés. La validation R02 comprend **79 suites et 599 tests**, dont 127 intégrations réelles PostgreSQL/Scylla/Redis. Voir [test.md](../test.md) pour les contrôles, leurs résultats et leur portée.
+R01, R02 et R03 sont livrés. Le bilan R03 ci-dessous comprend **82 suites et 632 tests**, dont 160 intégrations réelles PostgreSQL/Scylla/Redis/S3. [test.md](../test.md) décrit les commandes et prérequis, pas un compteur permanent de la couverture.
 
 Priorités : **P1** = prochain lot ou exigence importante avant production ; **P2** = consolidation, à avancer selon les volumes et l’exposition. Une limite constatée n’implique pas qu’un incident se soit déjà produit. Un manque de tests n’est pas une vulnérabilité démontrée.
 
@@ -24,7 +24,7 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 | --- | --- | --- | --- |
 | R01 | Livraison durable des notifications — terminé après revue | Livré le 03/09/2026 | API |
 | R02 | Effacement de compte reprenable par étapes — terminé | Livré le 04/09/2026 | API et dashboard |
-| R03 | Concurrence, pannes et régressions métier | P1 | Tests API |
+| R03 | Concurrence, pannes et régressions métier — terminé | Livré le 04/09/2026 | API |
 | R04 | Suivi de livraison et issues incertaines Sweego | P1 | API, fournisseur existant |
 | R05 | Réconciliation Stripe et échecs persistants | P1 | API, dashboard éventuel |
 | R06 | Traitements bornés, exports et pagination | P2 | API |
@@ -70,21 +70,33 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 
 **Validation exécutée :** migration 013 appliquée sur `localhost/histae-dev`, second passage idempotent, sans reset. Les 26 scénarios PostgreSQL dédiés couvrent notamment les checkpoints perdus, l’upload S3 en cours, les écritures tardives, les verrous concurrents, les dead letters et leur reprise. Dix tests billing vérifient les issues Stripe incertaines ; le Scylla réel vérifie une partition de 120 références en deux lots. Les suites complètes restent vertes ; voir `test.md`.
 
-**Limites explicites :** une création Customer dont la réponse reste inconnue après 23 heures est bloquée avec `erasure_stripe_reconciliation_required`, sans déclarer l’effacement terminé. La résolution contrôlée et le diagnostic des anciennes créations sans intention persistée relèvent de R05. Les coupures complètes de processus/infrastructure et les validations sur la cible S3 de production restent R03/R10 ; ce protocole ne constitue pas une transaction distribuée.
+**Limites explicites :** une création Customer dont la réponse reste inconnue après 23 heures est bloquée avec `erasure_stripe_reconciliation_required`, sans déclarer l’effacement terminé. La résolution contrôlée et le diagnostic des anciennes créations sans intention persistée relèvent de R05. R03 couvre désormais les arrêts de processus et les coupures de connexions locales ; les pannes de l’hôte complet, restaurations et validations sur la cible S3 de production restent R10. Ce protocole ne constitue pas une transaction distribuée.
 
-### R03 — Compléter les tests de concurrence et de panne
+### R03 — Compléter les tests de concurrence et de panne — terminé
 
-**Couverture à étendre**, pas liste de bugs avérés. Les tests réels des refresh tokens existent désormais : ne pas les remettre entièrement dans les travaux à faire.
+**Livré.** Trois nouvelles suites, 33 scénarios et quatre correctifs. Voir [scénarios, isolation et limites](resilience-tests.md).
 
-- [ ] Continuations concurrentes : second consentement, création unique et consommation atomique du quota Free.
-- [ ] Tombstones, comptes bannis/effacés et expiration des restrictions.
-- [ ] Retrait des consentements sensibles et de localisation : effacement immédiat et projections publiques.
-- [ ] Pagination des matchs et signalements : stabilité, frontières et absence de doublons.
-- [ ] Maintenance sur jeux de données réellement expirées, avec plusieurs workers.
-- [ ] Pannes transitoires et reprises Redis, Scylla et S3 dans un environnement local isolé et jetable.
-- [ ] Compléter les 26 scénarios R02 par des arrêts réels de processus/connexions dans un environnement jetable, puis les cas Sweego et Stripe détaillés ci-dessous. Conserver les 34 scénarios notifications R01 et leurs régressions.
+- [x] Continuations concurrentes et quota Free atomique, y compris limite nulle et expiration pendant l’attente du verrou. La création unique sur likes réciproques reste couverte dans la suite Scylla.
+- [x] Tombstones, comptes bannis/effacés et expiration des restrictions.
+- [x] Retrait des consentements sensibles/localisation et projections publiques, avec les deux ordres de concurrence face aux écritures.
+- [x] Pagination matchs/signalements : égalités, microsecondes, frontières, filtre et insertion entre pages.
+- [x] Maintenance sur données expirées et encore valides, lots bornés et exclusion entre workers.
+- [x] Coupures de relais TCP Redis/Scylla/S3 et reprises, sans arrêter les conteneurs partagés.
+- [x] Arrêts réels du worker aux checkpoints et perte de sa connexion PostgreSQL ; reprise finale sans double audit. Les 26 scénarios R02 et 34 scénarios notifications R01 restent conservés.
 
-**Terminé lorsque :** les scénarios sont reproductibles et testent les invariants en base, pas seulement les réponses mockées. Ne pas couper ou réinitialiser une infrastructure partagée sans autorisation.
+**Défauts corrigés :** réintroduction de données après retrait de consentement ; heure d’expiration lue avant
+l’attente de `FOR UPDATE` ; première continuation allouée malgré une limite nulle ; ancien pool non fermé par
+le pilote Scylla après remplacement d’un hôte. Les deux premières courses ont été reproduites avant correction ;
+le test réseau a reproduit les ressources restant ouvertes du pilote. Le patch pnpm est limité à `cassandra-driver@4.9.0`.
+
+**Validation exécutée :** lint, typecheck, build, 472 tests autonomes et 160 intégrations réussis, soit 632 tests
+dans 82 suites. Sortie naturelle de Jest, sans `forceExit`. Aucun reset ni nouvelle migration ; les schémas,
+UUID, objets, connexions et processus de test sont isolés et nettoyés. Petit refactoring des gardes transactionnelles
+et des fixtures, sans nouveau contrat HTTP ni changement dashboard.
+
+**Limites conservées :** réponses fournisseur contrôlées dans les tests d’arrêt du worker ; réseau réel testé
+séparément. Sweego/Stripe restent R04/R05, charge R06/R12, panne de machine et restauration R10. Aucun nouvel
+audit des dépendances ni pentest n’est revendiqué.
 
 ### R04 — Compléter le suivi Sweego
 
@@ -204,7 +216,7 @@ Priorités : **P1** = prochain lot ou exigence importante avant production ; **P
 
 ## 5. Frontières API, dashboard et mobile
 
-R01 et R02 sont livrés, avec suivi des effacements dans le dashboard pour R02. R03, R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R04/R05 concernent des fournisseurs déjà utilisés. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
+R01, R02 et R03 sont livrés, avec suivi des effacements dans le dashboard pour R02 et sans changement dashboard pour R03. R06 et R07 peuvent avancer principalement dans l’API avec les stockages déjà présents. R04/R05 concernent des fournisseurs déjà utilisés. R08/R10/R12 comprennent du travail d’exploitation qui ne se résout pas par du code API seul.
 
 Pour le dashboard, vérifier avant ajout les besoins de suivi des anomalies de livraison/facturation et des recours de modération. Réutiliser les protections existantes : listes minimales, détail autorisé, motif/audit et authentification récente pour les opérations sensibles. Ne pas recréer les écrans de modération, de réconciliation photo ou de suivi des effacements déjà livrés.
 
@@ -217,11 +229,10 @@ Côté mobile, restent à **vérifier dans son propre dépôt**, sans les décla
 
 ## 6. Ordre conseillé et entretien du document
 
-1. R03 : compléter les autres scénarios métier et de concurrence prioritaires.
-2. R04/R05 : suivi Sweego et réconciliation Stripe.
-3. R06/R07 : débit de purge outbox, volumes, cohérence des exports et revue des logs restante.
-4. Avant production : terminer R08 à R13 ; commencer tôt les décisions et procédures qui nécessitent des intervenants externes.
+1. R04/R05 : suivi Sweego et réconciliation Stripe.
+2. R06/R07 : débit de purge outbox, volumes, cohérence des exports et revue des logs restante.
+3. Avant production : terminer R08 à R13 ; commencer tôt les décisions et procédures qui nécessitent des intervenants externes.
 
 Pas de besoin démontré à ce stade de microservices, de Kafka, d’un remplacement général des stockages ou d’une nouvelle réécriture. Les extractions de responsabilités déjà réalisées sont décrites dans [module-responsibilities.md](module-responsibilities.md) ; poursuivre seulement là où un changement concret le justifie.
 
-Après chaque lot : cocher uniquement les travaux validés, noter la preuve de validation, retirer les constats devenus obsolètes et synchroniser les documents concernés. Ce fichier porte le backlog détaillé ; [resume.md](../resume.md) conserve la synthèse architecturale, [routes.md](../routes.md) le contrat HTTP et [test.md](../test.md) la couverture réellement exécutée.
+Après chaque lot : cocher uniquement les travaux validés, noter ici la preuve de validation, retirer les constats devenus obsolètes et synchroniser les documents concernés. Ce fichier porte le backlog et les bilans des lots ; [resume.md](../resume.md) conserve la synthèse architecturale, [routes.md](../routes.md) le contrat HTTP et [test.md](../test.md) les procédures, prérequis et limites de validation. Les scénarios détaillés restent dans les fichiers de test.

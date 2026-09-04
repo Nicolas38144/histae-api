@@ -1,7 +1,8 @@
 # Frontières de responsabilités
 
-Mise à jour : 4 septembre 2026. Ces frontières incluent R01 (notifications durables) et R02 (effacement
-reprenable), sans nouvelle dépendance ni service à déployer. Le contrat de suppression R02 est détaillé séparément.
+Mise à jour : 4 septembre 2026. Ces frontières incluent R01 (notifications durables), R02 (effacement
+reprenable) et R03 (concurrence/reprises), sans nouveau service à déployer. R03 applique un correctif versionné
+au pilote Scylla existant ; le contrat de suppression R02 est détaillé séparément.
 
 ## Composants spécialisés
 
@@ -31,6 +32,11 @@ leur progression et les reprises, sans piloter directement les étapes internes.
 
 - `match-access.ts` reçoit le `PoolClient` de l'appelant. Révélation et messagerie partagent ainsi les mêmes
   contrôles de participation, verrouillage et expiration ; l'utilitaire ne démarre pas une autre transaction.
+- L’horloge des matchs est lue après acquisition du verrou, dans le SELECT extérieur à une CTE matérialisée.
+  Une heure calculée avant l’attente de `FOR UPDATE` ne doit pas prolonger la fenêtre métier.
+- `UsersRepository` verrouille le compte et relit les versions des consentements dans la transaction qui écrit
+  profil, préférences ou présence. `UsersService` fournit les versions configurées et traduit le refus en erreur
+  publique stable ; son précontrôle seul n’autorise pas une écriture après retrait concurrent.
 - `matches.constants.ts` porte la durée de purge déjà existante, sans changement de rétention.
 - `admin-audit.ts` reçoit la transaction de la consultation ou mutation protégée. La réconciliation photo
   conserve dans ce même commit le passage à `deleting`, la remise en file outbox et l'audit motivé.

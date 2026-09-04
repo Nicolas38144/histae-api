@@ -307,12 +307,16 @@ export class MatchesRepository {
 
   async recordContinuationConsent(matchId: string, userId: string): Promise<ContinuationResult> {
     return this.database.transaction(async (client) => {
+      // A SELECT target expression can run before FOR UPDATE finishes waiting.
+      // The outer clock must observe the time after the match lock is acquired.
       const header = await client.query<Pick<MatchRow, 'status' | 'expires_at' | 'continuation_initiator_id'> & { database_now: Date }>(`
-        SELECT status, expires_at, continuation_initiator_id,
-          clock_timestamp() AS database_now
-        FROM match_init
-        WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
-        FOR UPDATE
+        WITH locked AS MATERIALIZED (
+          SELECT status, expires_at, continuation_initiator_id
+          FROM match_init
+          WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)
+          FOR UPDATE
+        )
+        SELECT locked.*, clock_timestamp() AS database_now FROM locked
       `, [matchId, userId]);
       const initial = header.rows[0];
       if (!initial) return 'not_found';
@@ -357,7 +361,8 @@ export class MatchesRepository {
       const weekStart = startOfUtcWeek(now);
       if (plan.weeklyLimit !== null) {
         const usage = await client.query<{ used_count: number }>(`
-          INSERT INTO continuation_usage (user_id, week_start, used_count) VALUES ($1, $2, 1)
+          INSERT INTO continuation_usage (user_id, week_start, used_count)
+          SELECT $1, $2, 1 WHERE $3 > 0
           ON CONFLICT (user_id, week_start) DO UPDATE SET used_count = continuation_usage.used_count + 1
           WHERE continuation_usage.used_count < $3 RETURNING used_count
         `, [match.continuation_initiator_id, weekStart, plan.weeklyLimit]);
