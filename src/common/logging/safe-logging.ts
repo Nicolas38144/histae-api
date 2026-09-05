@@ -2,6 +2,7 @@ const EVENT_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const STRING_VALUE_PATTERN = /^[A-Za-z0-9_./:<>{}*,-]{1,200}$/;
 const ALLOWED_FIELDS = new Set([
   'batches',
+  'billing_processed',
   'duration_ms',
   'environment',
   'error_code',

@@ -4,12 +4,23 @@ import { join } from 'node:path';
 
 export const CONSOLIDATED_BASELINE_VERSION = '001_baseline_20260904';
 
-export const migrations = [{
-  version: CONSOLIDATED_BASELINE_VERSION,
-  filenames: ['schema_postgres.sql', 'insert_postgres.sql'],
-}] as const;
+export type MigrationDefinition = {
+  version: string;
+  filenames: readonly string[];
+};
 
-export async function loadMigration(migration: typeof migrations[number]): Promise<{ sql: string; checksum: string }> {
+export const migrations: readonly MigrationDefinition[] = [
+  {
+    version: CONSOLIDATED_BASELINE_VERSION,
+    filenames: ['schema_postgres.sql', 'insert_postgres.sql'],
+  },
+  {
+    version: '015_stripe_reconciliation',
+    filenames: ['015_stripe_reconciliation.sql'],
+  },
+];
+
+export async function loadMigration(migration: MigrationDefinition): Promise<{ sql: string; checksum: string }> {
   const sources = await Promise.all(migration.filenames.map(async (filename) => ({
     filename,
     contents: await readFile(join(process.cwd(), 'db', filename), 'utf8'),

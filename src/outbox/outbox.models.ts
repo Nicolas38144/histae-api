@@ -1,4 +1,10 @@
-export const OUTBOX_EVENT_TYPES = ['photo.delete', 'notification.push', 'account.erase'] as const;
+export const OUTBOX_EVENT_TYPES = [
+  'photo.delete',
+  'notification.push',
+  'account.erase',
+  'billing.subscription.reconcile',
+  'billing.customer.reconcile',
+] as const;
 export type OutboxEventType = typeof OUTBOX_EVENT_TYPES[number];
 export type OutboxStatus =
   | 'pending'
@@ -63,6 +69,13 @@ export type OutboxStatusSnapshot = {
     completed: number;
     dead_letter: number;
     discarded: number;
+    oldest_pending_at: string | null;
+  };
+  billing_reconciliation: {
+    pending: number;
+    processing: number;
+    completed: number;
+    dead_letter: number;
     oldest_pending_at: string | null;
   };
 };

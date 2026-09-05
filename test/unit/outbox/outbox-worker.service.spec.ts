@@ -134,6 +134,38 @@ describe('OutboxWorkerService', () => {
     expect(result.deadLettered).toBe(1);
     expect(result.retried).toBe(0);
   });
+
+  it('dispatches Stripe reconciliation through the durable outbox', async () => {
+    const billingEvent = { ...EVENT, eventType: 'billing.subscription.reconcile' };
+    const outbox = outboxMock([billingEvent]);
+    const billing = { process: jest.fn().mockResolvedValue(undefined) };
+    const worker = new OutboxWorkerService(
+      outbox as never, {} as never, {} as never, { maintenanceMode: 'disabled' } as never,
+      tracker() as never, {} as never, {} as never, billing as never,
+    );
+
+    expect((await worker.runOnce()).completed).toBe(1);
+    expect(billing.process).toHaveBeenCalledWith('billing.subscription.reconcile', EVENT.aggregateId);
+  });
+
+  it('dead-letters a permanent Stripe reconciliation anomaly immediately', async () => {
+    const { BillingReconciliationError } = await import('../../../src/billing/billing.errors');
+    const billingEvent = { ...EVENT, eventType: 'billing.subscription.reconcile' };
+    const outbox = outboxMock([billingEvent]);
+    outbox.reschedule.mockResolvedValue('dead_letter');
+    const billing = {
+      process: jest.fn().mockRejectedValue(new BillingReconciliationError('billing_mapping_conflict', true)),
+    };
+    const worker = new OutboxWorkerService(
+      outbox as never, {} as never, {} as never, { maintenanceMode: 'disabled' } as never,
+      tracker() as never, {} as never, {} as never, billing as never,
+    );
+
+    expect((await worker.runOnce()).deadLettered).toBe(1);
+    expect(outbox.reschedule).toHaveBeenCalledWith(
+      EVENT.id, expect.any(String), expect.any(Date), 'billing_mapping_conflict', 1,
+    );
+  });
 });
 
 function outboxMock(events: unknown[]): Record<string, jest.Mock> {

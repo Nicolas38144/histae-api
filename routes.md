@@ -301,9 +301,9 @@ SSE envoie `connected`, un heartbeat toutes les 25 secondes, puis `match.created
 
 L’état expose `plan, provider, status, access_granted, billing_period`, dates de période/essai/annulation, `cancel_at_period_end, customer_portal_available`. `trialing, active, past_due` ouvrent l’accès uniquement pendant la période connue de l’API.
 
-**Checkout.** Utiliser l’URL retournée (validité 30 minutes). Une seule session peut être créée/ouverte par utilisateur. Le premier abonnement peut bénéficier de l’essai du catalogue ; un essai consommé n’est pas réattribué. Le retour sur l’URL de succès **ne prouve pas à lui seul l’activation Premium** : relire l’abonnement, mis à jour par webhook signé. Ne jamais envoyer Product ID, Price ID, montant, devise, durée d’essai ou Customer ID. Le portail exige un client Stripe déjà lié. Checkout et portail : 10/min/utilisateur.
+**Checkout.** Utiliser l’URL retournée (validité 30 minutes). Une seule session peut être créée/ouverte par utilisateur. Le premier abonnement peut bénéficier de l’essai du catalogue ; un essai consommé n’est pas réattribué. Le retour sur l’URL de succès **ne prouve pas à lui seul l’activation Premium** : relire l’abonnement, mis à jour par webhook signé. Ne jamais envoyer Product ID, Price ID, montant, devise, durée d’essai ou Customer ID. Le portail exige un client Stripe déjà lié. Checkout et portail : 10/min/utilisateur. Tant qu’une création Customer reste incertaine, une nouvelle clé est refusée ; seule la clé d’origine peut rejouer le `POST` dans la fenêtre sûre de 23 heures, puis la réconciliation procède uniquement en lecture.
 
-Erreurs : `billing_unavailable`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded`.
+Erreurs : `billing_unavailable`, `stripe_request_failed`, `subscription_already_active`, `checkout_already_in_progress`, `billing_customer_reconciliation_required`, `idempotency_key_reused`, `idempotency_key_consumed`, `billing_customer_not_found`, `billing_rate_limit_exceeded`.
 
 ### Droits, effacement et sûreté
 
@@ -429,13 +429,14 @@ La décision est `approved | rejected`, avec la `version` lue au préalable. Une
 | GET | `/api/admin/revenue` | `revenue_period?` → estimation de chiffre d’affaires. |
 | GET | `/api/admin/photo-reconciliation` | `status?, limit, cursor` (offset déprécié) → traitements photo à réconcilier. |
 | POST | `/api/admin/photo-reconciliation/:id/retry` | UUID photo + `{ reason }` (3–500 caractères) → `202`. |
+| GET | `/api/admin/billing-reconciliation` | `kind?, limit, cursor` → dead letters Stripe `200 { events, next_cursor }`. |
 | GET | `/api/admin/outbox/dead-letters` | `limit, cursor` → `200 { events, next_cursor }`. |
 | POST | `/api/admin/outbox/:id/retry` | **Récente** ; `{ reason }` → `202`, relance auditée. |
 | POST | `/api/admin/outbox/:id/discard` | **Récente** ; `{ reason }` → `204`, abandon audité lorsque permis. |
 
 `revenue_period = last_7_days | last_30_days | month_to_date | previous_month | year_to_date | all_time`, défaut `month_to_date`. Le revenu est une estimation : abonnements Premium mis à jour sur la période × tarif mensuel actuel ; **ni encaissements ni bénéfice comptable**.
 
-`operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `completed` signifie tâche acquittée encore conservée, pas push reçu.
+`operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `operations.outbox.billing_reconciliation` fournit les mêmes états utiles sans `discarded`. `completed` signifie tâche acquittée encore conservée, pas réception par un terminal ni validation d’un paiement.
 
 `operations.sms_delivery` expose `states` (`pending, accepted, sent, failed, unknown`), `awaiting_callback`,
 `oldest_unresolved_age_seconds`, `average_acceptance_ms`, `average_sent_callback_ms`, `average_failure_ms`,
@@ -445,7 +446,9 @@ portent sur les OTP non expirés, pas sur un historique complet ; les compteurs 
 
 Réconciliation photo : filtre `all | stale_processing | deleting | dead_letter` (défaut `all`). UUID photo/utilisateur, métadonnées techniques, diagnostics et état outbox uniquement ; aucune image ni clé objet. Une photo prête ou un traitement récent refuse la relance : `409 photo_reconciliation_not_allowed` ; worker actif : `409 photo_reconciliation_in_progress` ; photo absente : `404 photo_not_found`.
 
-Les dead letters exposent type, tentatives et code normalisé, jamais payload/agrégat/clé objet. Une décision devenue obsolète renvoie `409 outbox_event_not_dead_letter`. L’abandon de `account.erase` est toujours interdit, celui de `photo.delete` est interdit tant que sa trace existe : `409 outbox_discard_not_allowed`. `notification.push` peut être abandonné sans effacer la notification. Un `202` de reprise ne garantit pas que la dépendance sera disponible lors du prochain essai.
+Réconciliation Stripe : la liste ne contient que les dead letters qui exigent une action humaine ; la file normale reste agrégée dans `operations`. `kind = all | subscription | customer_creation`. Elle expose UUID d’événement/utilisateur, type, tentatives, code d’erreur normalisé et dates ; jamais payload, identifiant fournisseur ou moyen de paiement. Une dead letter peut être relancée par la route outbox commune, après authentification récente, motif et audit. La relance effectue une nouvelle lecture et n’ordonne aucun paiement. Voir [protocole Stripe](docs/stripe-reconciliation.md).
+
+Les dead letters exposent type, tentatives et code normalisé, jamais payload/agrégat/clé objet. Une décision devenue obsolète renvoie `409 outbox_event_not_dead_letter`. L’abandon de `account.erase` et des événements `billing.*` est toujours interdit ; celui de `photo.delete` est interdit tant que sa trace existe : `409 outbox_discard_not_allowed`. `notification.push` peut être abandonné sans effacer la notification. Un `202` de reprise ne garantit pas que la dépendance sera disponible lors du prochain essai.
 
 <a id="entretien-du-contrat"></a>
 ## Entretien du contrat

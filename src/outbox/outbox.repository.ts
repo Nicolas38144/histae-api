@@ -197,7 +197,14 @@ export class OutboxRepository {
           'dead_letter', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'dead_letter'),
           'discarded', count(*) FILTER (WHERE event_type = 'notification.push' AND status = 'discarded'),
           'oldest_pending_at', min(available_at) FILTER (WHERE event_type = 'notification.push' AND status = 'pending')
-        ) AS notification_push
+        ) AS notification_push,
+        jsonb_build_object(
+          'pending', count(*) FILTER (WHERE event_type LIKE 'billing.%' AND status = 'pending'),
+          'processing', count(*) FILTER (WHERE event_type LIKE 'billing.%' AND status = 'processing'),
+          'completed', count(*) FILTER (WHERE event_type LIKE 'billing.%' AND status = 'completed'),
+          'dead_letter', count(*) FILTER (WHERE event_type LIKE 'billing.%' AND status = 'dead_letter'),
+          'oldest_pending_at', min(available_at) FILTER (WHERE event_type LIKE 'billing.%' AND status = 'pending')
+        ) AS billing_reconciliation
       FROM outbox_event
     `)).rows[0] ?? {
       pending: 0,
@@ -206,6 +213,7 @@ export class OutboxRepository {
       discarded: 0,
       oldest_pending_at: null,
       notification_push: { pending: 0, processing: 0, completed: 0, dead_letter: 0, discarded: 0, oldest_pending_at: null },
+      billing_reconciliation: { pending: 0, processing: 0, completed: 0, dead_letter: 0, oldest_pending_at: null },
     };
   }
 

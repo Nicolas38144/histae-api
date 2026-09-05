@@ -1,12 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import type { PoolClient } from 'pg';
 import { applyMigrations } from '../../scripts/migrate';
-import { CONSOLIDATED_BASELINE_VERSION, loadMigration, migrations } from '../../scripts/migration-catalog';
+import { loadMigration, migrations } from '../../scripts/migration-catalog';
 import { IsolatedPostgres } from '../helpers/isolated-postgres';
 
 jest.setTimeout(30_000);
 
-describe('Consolidated PostgreSQL baseline', () => {
+describe('PostgreSQL migration chain', () => {
   let fixture: IsolatedPostgres;
   beforeEach(async () => { fixture = new IsolatedPostgres(); await fixture.start({ migrate: false }); });
   afterEach(() => fixture.stop());
@@ -17,24 +17,24 @@ describe('Consolidated PostgreSQL baseline', () => {
   }
 
   it('initializes a fresh schema once, without implicitly creating development users', async () => {
-    expect(await runMigrations()).toBe(1);
+    expect(await runMigrations()).toBe(migrations.length);
     expect(await runMigrations()).toBe(0);
-    expect((await fixture.pool.query('SELECT version FROM schema_migrations')).rows)
-      .toEqual([{ version: CONSOLIDATED_BASELINE_VERSION }]);
+    expect((await fixture.pool.query('SELECT version FROM schema_migrations ORDER BY version')).rows)
+      .toEqual(migrations.map(({ version }) => ({ version })));
     expect((await fixture.pool.query('SELECT count(*)::int AS count FROM user_account')).rows[0].count).toBe(0);
     expect((await fixture.pool.query('SELECT count(*)::int AS count FROM profile_question')).rows[0].count).toBe(15);
   });
 
   it('serializes concurrent initialization', async () => {
-    expect((await Promise.all([runMigrations(), runMigrations()])).sort()).toEqual([0, 1]);
-    expect((await fixture.pool.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0].count).toBe(1);
+    expect((await Promise.all([runMigrations(), runMigrations()])).sort()).toEqual([0, migrations.length]);
+    expect((await fixture.pool.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0].count).toBe(migrations.length);
   });
 
   it('ignores an accidentally enabled seed setting during ordinary migrations', async () => {
     const client = await fixture.pool.connect();
     try {
       await client.query("SELECT set_config('histae.seed_fake_users','on',false)");
-      expect(await applyMigrations(client)).toBe(1);
+      expect(await applyMigrations(client)).toBe(migrations.length);
       expect((await client.query('SELECT count(*)::int AS count FROM user_account')).rows[0].count).toBe(0);
     } finally {
       await client.query("SELECT set_config('histae.seed_fake_users','off',false)");
@@ -69,7 +69,7 @@ describe('Consolidated PostgreSQL baseline', () => {
       await client.query('DROP TABLE schema_migrations');
       expect(await objectNames(client)).toEqual([]);
       await client.query("SELECT set_config('histae.seed_fake_users','on',true)");
-      await client.query((await loadMigration(migrations[0])).sql);
+      for (const migration of migrations) await client.query((await loadMigration(migration)).sql);
       expect(await objectNames(client)).toEqual(before);
       expect((await client.query('SELECT count(*)::int AS count FROM user_account')).rows[0].count).toBe(400);
       expect((await client.query("SELECT count(*)::int AS count FROM content_moderation_case WHERE status='pending'")).rows[0].count).toBe(400);

@@ -14,7 +14,7 @@ Histae API est un monolithe modulaire NestJS 11/Fastify 5 en TypeScript strict. 
 - authentification administrateur WebAuthn native et sessions serveur opaques ;
 - onboarding, consentements, profil, préférences, traits et trois réponses guidées au maximum ;
 - découverte ScyllaDB, swipes, match réciproque, continuation et messagerie ;
-- abonnements Premium et projection Stripe ;
+- abonnements Premium, projection Stripe et réconciliation durable ;
 - blocages, signalements, modération des textes/photos et audit administratif ;
 - photo privée unique, conversion WebP, stockage S3-compatible et suppression par outbox ;
 - notifications durables par appareil, push optionnel et signaux SSE ;
@@ -134,7 +134,16 @@ dédupliqué par `notification_id`. SSE reste best-effort et sans replay.
 ### Facturation et effacement
 
 Le client choisit uniquement une période mensuelle ou annuelle ; produits, prix, devise et essai viennent du
-serveur. Les webhooks Stripe sont signés, dédupliqués et ordonnés avant projection.
+serveur. Les webhooks Stripe sont signés, dédupliqués et ordonnés avant projection. Une lecture périodique bornée
+répare les webhooks perdus ; version et instant de snapshot empêchent une réponse concurrente ou ancienne de
+revenir en arrière.
+
+Une création Customer incertaine conserve une tentative locale et un watchdog outbox. Le même `POST` n’est rejoué
+que pendant 23 heures, soit une heure avant la garantie minimale d’idempotence Stripe ; ensuite, seules des lectures
+par métadonnée de tentative et fenêtre historique sont autorisées. Une autre clé reste bloquée et un arrêt après
+persistance de l’identifiant est repris sans second appel fournisseur. Les anomalies sont visibles sans identifiant
+fournisseur et leur reprise exige WebAuthn récent, motif et audit. Voir
+[docs/stripe-reconciliation.md](docs/stripe-reconciliation.md).
 
 L’effacement consomme un jeton dédié, désactive le compte et répond `202`. L’outbox reprend Stripe, photos,
 Scylla puis PostgreSQL. Les checkpoints ne progressent qu’après effets confirmés ; `account.erase` ne peut
@@ -142,17 +151,17 @@ jamais être abandonné. Voir [docs/account-erasure.md](docs/account-erasure.md)
 
 ## Base de données et exploitation
 
-`db/schema_postgres.sql` est la baseline PostgreSQL unique `001_baseline_20260904`. Les 44 tables définissent
-leurs contraintes sans `ALTER TABLE`. Les index suivent leur table ; fonctions et triggers terminent le fichier.
-La prochaine évolution persistante utilisera `015_<description>`. Voir
+`db/schema_postgres.sql` reste la baseline PostgreSQL `001_baseline_20260904`. Les 44 tables définissent leurs
+contraintes sans `ALTER TABLE`. `015_stripe_reconciliation` est la première migration incrémentale ; la prochaine
+évolution persistante utilisera `016_<description>`. Voir
 [docs/postgres-migrations.md](docs/postgres-migrations.md).
 
 `/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. L’outbox et la
 maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
 dashboard sont agrégées, bornées et sans identifiant utilisateur.
 
-Dernière validation complète : lint, typecheck, build, 553 tests autonomes et 185 intégrations locales, soit
-738 tests dans 89 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète : lint, typecheck, build, 568 tests autonomes et 190 intégrations locales, soit
+758 tests dans 92 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 

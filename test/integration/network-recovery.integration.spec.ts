@@ -104,7 +104,9 @@ describe('Real local dependency recovery through disposable TCP relays', () => {
       await fixture.pool.query(`INSERT INTO user_photo(id,user_id,object_key,status) VALUES ($1,$2,$3,'deleting')`, [id, owner, key]);
       await outbox.enqueue(fixture.database, { eventType: 'photo.delete', aggregateId: id });
       proxy.dropNextReply();
-      expect(await worker.runOnce()).toMatchObject({ retried: 1, completed: 0 });
+      // PostgreSQL keeps microseconds while JavaScript Date stops at milliseconds.
+      // Move the explicit worker clock past the freshly inserted available_at.
+      expect(await worker.runOnce(new Date(Date.now() + 1_000))).toMatchObject({ retried: 1, completed: 0 });
       expect((await fixture.pool.query('SELECT status FROM user_photo WHERE id=$1', [id])).rows).toEqual([{ status: 'deleting' }]);
       await expect(inspector.send(new HeadObjectCommand({ Bucket: config.objectStorage.bucket, Key: key })))
         .rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } });

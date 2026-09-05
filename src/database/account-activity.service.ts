@@ -20,22 +20,35 @@ export class AccountActivityService implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> { await this.pool.end(); }
 
   async run<T>(userIds: string[], work: (assertHeld: AssertActivity) => Promise<T>): Promise<T> {
+    return this.runShared(userIds, false, work);
+  }
+
+  /** Maintenance still protects banned accounts, but never an erased account. */
+  async runExisting<T>(userIds: string[], work: (assertHeld: AssertActivity) => Promise<T>): Promise<T> {
+    return this.runShared(userIds, true, work);
+  }
+
+  tryExclusive<T>(userId: string, work: (assertHeld: AssertActivity) => Promise<T>) {
+    return this.lock([userId], true, work);
+  }
+
+  private async runShared<T>(
+    userIds: string[],
+    allowBanned: boolean,
+    work: (assertHeld: AssertActivity) => Promise<T>,
+  ): Promise<T> {
     const accountIds = canonicalIds(userIds);
     const result = await this.lock(accountIds, false, async (assertHeld, client) => {
       const accounts = await client.query(`
         SELECT user_id FROM user_account WHERE user_id = ANY($1::uuid[])
-          AND deleted_at IS NULL AND NOT is_banned
-      `, [accountIds]);
+          AND deleted_at IS NULL AND ($2 OR NOT is_banned)
+      `, [accountIds, allowBanned]);
       if (accounts.rowCount !== accountIds.length) {
         throw apiError(409, 'account_unavailable', 'An account is no longer available.');
       }
       return work(assertHeld);
     });
     return result.value!;
-  }
-
-  tryExclusive<T>(userId: string, work: (assertHeld: AssertActivity) => Promise<T>) {
-    return this.lock([userId], true, work);
   }
 
   private async lock<T>(

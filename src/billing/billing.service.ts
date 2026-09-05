@@ -11,6 +11,7 @@ import type {
 } from './billing.models';
 import { BillingRepository } from './billing.repository';
 import { StripeGateway } from './stripe.gateway';
+import { CUSTOMER_CREATE_IDEMPOTENCY_SAFETY_MILLIS } from './billing.constants';
 import { AccountActivityService, type AssertActivity } from '../database/account-activity.service';
 import type { CustomerCreation } from './billing.repository';
 
@@ -87,6 +88,9 @@ export class BillingService {
     if (attempt.state === 'not_found') throw apiError(404, 'account_not_found', 'The account could not be found or has been deleted.');
     if (attempt.state === 'already_subscribed') throw apiError(409, 'subscription_already_active', 'A Premium subscription is already active.');
     if (attempt.state === 'in_progress') throw apiError(409, 'checkout_already_in_progress', 'A Checkout session is already being created or is still open.');
+    if (attempt.state === 'customer_reconciliation_required') {
+      throw apiError(409, 'billing_customer_reconciliation_required', 'An earlier Stripe customer creation must be resolved before starting another Checkout.');
+    }
     if (attempt.state === 'idempotency_conflict') throw apiError(409, 'idempotency_key_reused', 'This Idempotency-Key was already used with a different billing period.');
     if (attempt.state === 'idempotency_consumed') throw apiError(409, 'idempotency_key_consumed', 'This Idempotency-Key belongs to a completed or expired Checkout session.');
 
@@ -170,10 +174,10 @@ export class BillingService {
     if (creation.created_customer_id) return creation.created_customer_id;
     // Stripe retains POST idempotency for at least 24h. Keep a safety margin;
     // beyond this window, replay could create a second customer. Fail closed.
-    if (Date.now() - creation.customer_creation_started_at.getTime() >= 23 * 60 * 60_000) {
+    if (Date.now() - creation.customer_creation_started_at.getTime() >= CUSTOMER_CREATE_IDEMPOTENCY_SAFETY_MILLIS) {
       throw apiError(503, 'erasure_stripe_reconciliation_required', 'The Stripe customer creation requires reconciliation.');
     }
-    const customer = await this.stripe.createCustomer(userId, `histae-customer-${creation.id}`);
+    const customer = await this.stripe.createCustomer(userId, creation.id, `histae-customer-${creation.id}`);
     await this.billing.recordCreatedCustomer(creation.id, customer.id);
     return customer.id;
   }

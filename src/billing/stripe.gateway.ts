@@ -14,6 +14,16 @@ type CheckoutInput = {
   idempotencyKey: string;
 };
 
+export type StripeCustomerWindow = {
+  customers: Stripe.Customer[];
+  truncated: boolean;
+};
+
+export type StripeSubscriptionList = {
+  subscriptions: Stripe.Subscription[];
+  truncated: boolean;
+};
+
 @Injectable()
 export class StripeGateway {
   private readonly client: Stripe | undefined;
@@ -36,10 +46,10 @@ export class StripeGateway {
     return this.metrics?.measureSync('stripe', operation) ?? operation();
   }
 
-  createCustomer(userId: string, idempotencyKey: string): Promise<Stripe.Customer> {
+  createCustomer(userId: string, attemptId: string, idempotencyKey: string): Promise<Stripe.Customer> {
     return this.measure(this.requireClient().customers.create({
       description: 'Histae mobile subscriber',
-      metadata: { histae_user_id: userId },
+      metadata: { histae_user_id: userId, histae_customer_attempt_id: attemptId },
     }, { idempotencyKey }));
   }
 
@@ -95,6 +105,34 @@ export class StripeGateway {
 
   retrieveCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
     return this.measure(this.requireClient().customers.retrieve(customerId));
+  }
+
+  async listCustomerSubscriptions(customerId: string): Promise<StripeSubscriptionList> {
+    const page = await this.measure(this.requireClient().subscriptions.list({
+      customer: customerId,
+      status: 'all',
+      limit: 100,
+    }));
+    return { subscriptions: page.data, truncated: page.has_more };
+  }
+
+  async listCustomersCreatedBetween(start: Date, end: Date): Promise<StripeCustomerWindow> {
+    const page = await this.measure(this.requireClient().customers.list({
+      created: {
+        gte: Math.floor(start.getTime() / 1_000),
+        lte: Math.ceil(end.getTime() / 1_000),
+      },
+      limit: 100,
+    }));
+    return { customers: page.data, truncated: page.has_more };
+  }
+
+  async searchCustomersByAttempt(attemptId: string): Promise<StripeCustomerWindow> {
+    const page = await this.measure(this.requireClient().customers.search({
+      query: `metadata['histae_customer_attempt_id']:'${attemptId}'`,
+      limit: 100,
+    }));
+    return { customers: page.data, truncated: page.has_more };
   }
 
   private requireClient(): Stripe {

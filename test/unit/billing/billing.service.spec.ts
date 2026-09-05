@@ -60,6 +60,22 @@ describe('BillingService', () => {
     expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
   });
 
+  it('refuses a new Checkout key while an earlier Customer creation is unresolved', async () => {
+    const repository = {
+      beginCheckout: jest.fn().mockResolvedValue({ state: 'customer_reconciliation_required' }),
+    };
+    const stripe = { createCustomer: jest.fn(), createCheckoutSession: jest.fn() };
+    const service = new BillingService(repository as never, stripe as never, config as never, accountActivityStub);
+
+    await expect(service.createCheckout(USER_ID, 'monthly', '33333333-3333-4333-8333-333333333333'))
+      .rejects.toEqual(expect.objectContaining({
+        status: 409,
+        code: 'billing_customer_reconciliation_required',
+      }));
+    expect(stripe.createCustomer).not.toHaveBeenCalled();
+    expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
   it('deletes a newly created Stripe Customer when the local account mapping fails', async () => {
     const attemptId = '22222222-2222-4222-8222-222222222222';
     const repository = {
@@ -67,7 +83,7 @@ describe('BillingService', () => {
         state: 'created', attemptId, stripeCustomerId: null, trialDays: 30, trialUsed: false,
       }),
       saveCustomer: jest.fn().mockResolvedValue(false),
-      beginCustomerCreation: jest.fn().mockResolvedValue({ id: attemptId, customer_creation_started_at: new Date(), created_customer_id: null, customer_erased_at: null }),
+      beginCustomerCreation: jest.fn().mockResolvedValue({ id: attemptId, user_id: USER_ID, customer_creation_started_at: new Date(), created_customer_id: null, customer_erased_at: null }),
       recordCreatedCustomer: jest.fn(),
       markCreatedCustomerErased: jest.fn(),
       markCheckoutFailed: jest.fn().mockResolvedValue(undefined),

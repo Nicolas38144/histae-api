@@ -19,6 +19,7 @@ const EXPECTED_INTERVAL_MILLIS: Record<MaintenanceJobName, number> = {
   photos: 60 * 60 * 1_000,
   privacy: 24 * 60 * 60 * 1_000,
   outbox: 60 * 1_000,
+  billing: 5 * 60 * 1_000,
 };
 
 @Injectable()
@@ -55,7 +56,14 @@ export class OperationalStatusService {
       outbox,
       sms_delivery: { ...smsDelivery, webhook_enabled: this.config.sms.provider === 'sweego' && !!this.config.sms.webhookSecret,
         callbacks: this.smsWebhooks.snapshot() },
-      maintenance: MAINTENANCE_JOB_NAMES.map((jobName) => maintenanceView(jobName, jobs.get(jobName), now)),
+      maintenance: MAINTENANCE_JOB_NAMES.map((jobName) => maintenanceView(
+        jobName,
+        jobs.get(jobName),
+        now,
+        jobName === 'billing'
+          ? this.config.billing.reconciliationIntervalMillis ?? EXPECTED_INTERVAL_MILLIS.billing
+          : EXPECTED_INTERVAL_MILLIS[jobName],
+      )),
     };
   }
 }
@@ -64,6 +72,7 @@ function maintenanceView(
   jobName: MaintenanceJobName,
   snapshot: MaintenanceJobSnapshot | undefined,
   now: Date,
+  expectedIntervalMillis: number,
 ): MaintenanceJobOperationalView {
   if (!snapshot) return {
     job_name: jobName,
@@ -81,7 +90,7 @@ function maintenanceView(
   return {
     ...snapshot,
     missing: false,
-    overdue: (snapshot.status === 'running' && now.getTime() - snapshot.started_at.getTime() > EXPECTED_INTERVAL_MILLIS[jobName])
-      || now.getTime() - reference.getTime() > EXPECTED_INTERVAL_MILLIS[jobName] * 2,
+    overdue: (snapshot.status === 'running' && now.getTime() - snapshot.started_at.getTime() > expectedIntervalMillis)
+      || now.getTime() - reference.getTime() > expectedIntervalMillis * 2,
   };
 }

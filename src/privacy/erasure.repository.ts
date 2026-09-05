@@ -43,6 +43,11 @@ export class ErasureRepository {
         await client.query('DELETE FROM admin_webauthn_challenge WHERE user_id = $1', [current.user_id]);
         await client.query('DELETE FROM admin_webauthn_bootstrap WHERE user_id = $1', [current.user_id]);
         await client.query('DELETE FROM admin_webauthn_credential WHERE user_id = $1', [current.user_id]);
+        await client.query(`DELETE FROM outbox_event
+          WHERE event_type = 'billing.subscription.reconcile' AND aggregate_id = $1`, [current.user_id]);
+        await client.query(`DELETE FROM outbox_event
+          WHERE event_type = 'billing.customer.reconcile'
+            AND aggregate_id IN (SELECT id FROM billing_checkout_session WHERE user_id = $1)`, [current.user_id]);
         await client.query('SELECT fct_anonymize_user($1)', [current.user_id]);
         await client.query(`UPDATE data_subject_request SET status = 'completed', completed_at = clock_timestamp()
           WHERE id = $1 AND status = 'in_progress'`, [current.request_id]);

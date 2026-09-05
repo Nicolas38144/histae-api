@@ -87,7 +87,8 @@ passkeys, dont idéalement une clé physique de secours.
 
 En production, utiliser `MAINTENANCE_MODE=disabled` sur les processus HTTP, maintenir au moins un worker
 `MAINTENANCE_MODE=worker pnpm run outbox:work` et planifier
-`MAINTENANCE_MODE=worker pnpm run maintenance:run`. API et workers doivent utiliser la même version de code.
+`MAINTENANCE_MODE=worker pnpm run maintenance:run`. Cette passe programme aussi la réconciliation Stripe ; le
+worker outbox effectue les lectures fournisseur. API et workers doivent utiliser la même version de code.
 
 ## Commandes
 
@@ -140,6 +141,7 @@ En production, `TRUST_PROXY=true` est refusé : configurer précisément les IP 
 | [docs/sweego-delivery.md](docs/sweego-delivery.md) | États et callbacks OTP |
 | [docs/durable-notifications.md](docs/durable-notifications.md) | Outbox, push et acquittement |
 | [docs/account-erasure.md](docs/account-erasure.md) | Effacement reprenable |
+| [docs/stripe-reconciliation.md](docs/stripe-reconciliation.md) | Réconciliation des abonnements et créations Customer incertaines |
 | [docs/resilience-tests.md](docs/resilience-tests.md) | Concurrence et pannes contrôlées |
 | [docs/sql-performance.md](docs/sql-performance.md) | Audit et exploitation des requêtes SQL |
 | [docs/logging-policy.md](docs/logging-policy.md) | Format, minimisation, rétention et accès aux logs |

@@ -27,6 +27,8 @@ export type SubscriptionRow = {
   canceled_at: Date | null;
   updated_at: Date;
   stripe_customer_id: string | null;
+  projection_version: number;
+  provider_snapshot_at: Date | null;
 };
 
 export type SubscriptionView = {
@@ -88,4 +90,48 @@ export type WebhookMetadata = {
   livemode: boolean;
   apiVersion: string | null;
   createdAt: Date;
+};
+
+export const BILLING_RECONCILIATION_EVENT_TYPES = [
+  'billing.subscription.reconcile',
+  'billing.customer.reconcile',
+] as const;
+export type BillingReconciliationEventType = typeof BILLING_RECONCILIATION_EVENT_TYPES[number];
+
+export type SubscriptionReconciliationContext = {
+  userId: string;
+  stripeCustomerId: string;
+  projectionVersion: number | null;
+};
+
+export type CustomerCreationReconciliationContext = {
+  attemptId: string;
+  userId: string;
+  startedAt: Date;
+  createdCustomerId: string | null;
+  mappedCustomerId: string | null;
+  customerErasedAt: Date | null;
+};
+
+export type BillingReconciliationKind = 'subscription' | 'customer_creation';
+
+export type BillingReconciliationRow = {
+  id: string;
+  user_id: string;
+  kind: BillingReconciliationKind;
+  attempts: number;
+  last_error_code: string | null;
+  created_at: Date;
+  dead_lettered_at: Date;
+  cursor_at: Date;
+};
+
+export type BillingReconciliationItem = {
+  event_id: string;
+  user_id: string;
+  kind: BillingReconciliationKind;
+  attempts: number;
+  last_error_code: string | null;
+  created_at: Date;
+  dead_lettered_at: Date;
 };

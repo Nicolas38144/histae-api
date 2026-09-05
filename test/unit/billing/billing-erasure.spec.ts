@@ -7,7 +7,7 @@ const ATTEMPT = '22222222-2222-4222-8222-222222222222';
 const KEY = '33333333-3333-4333-8333-333333333333';
 
 function setup(provider = 'stripe') {
-  const creation: CustomerCreation = { id: ATTEMPT, customer_creation_started_at: new Date(), created_customer_id: null, customer_erased_at: null };
+  const creation: CustomerCreation = { id: ATTEMPT, user_id: USER, customer_creation_started_at: new Date(), created_customer_id: null, customer_erased_at: null };
   const repository = {
     beginCheckout: jest.fn().mockResolvedValue({ state: 'created', attemptId: ATTEMPT, stripeCustomerId: null, trialDays: 0, trialUsed: false }),
     beginCustomerCreation: jest.fn().mockResolvedValue(creation),
@@ -50,7 +50,10 @@ describe('Stripe erasure recovery', () => {
     await expect(service.createCheckout(USER, 'monthly', KEY)).rejects.toMatchObject({ code: 'stripe_request_failed' });
     expect(repository.beginCustomerCreation.mock.invocationCallOrder[0]).toBeLessThan(stripe.createCustomer.mock.invocationCallOrder[0]!);
     await expect(service.deleteCustomerForAccount(USER)).resolves.toBe(true);
-    expect(stripe.createCustomer.mock.calls).toEqual([[USER, `histae-customer-${ATTEMPT}`], [USER, `histae-customer-${ATTEMPT}`]]);
+    expect(stripe.createCustomer.mock.calls).toEqual([
+      [USER, ATTEMPT, `histae-customer-${ATTEMPT}`],
+      [USER, ATTEMPT, `histae-customer-${ATTEMPT}`],
+    ]);
     expect(repository.recordCreatedCustomer).toHaveBeenCalledWith(ATTEMPT, 'cus_Test');
     expect(stripe.deleteCustomer).toHaveBeenCalledWith('cus_Test', `histae-delete-orphan-${ATTEMPT}`);
     expect(repository.markCreatedCustomerErased).toHaveBeenCalledTimes(1);

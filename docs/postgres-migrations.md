@@ -4,6 +4,8 @@ Depuis le 4 septembre 2026, `001_baseline_20260904` définit l’état PostgreSQ
 `db/schema_postgres.sql` contient les tables, contraintes, index, séquences, fonctions et triggers.
 Les catalogues et les 400 profils de développement optionnels restent dans `db/insert_postgres.sql`.
 Les anciennes migrations restent accessibles dans Git, mais ne sont plus exécutables par le code courant.
+La première évolution suivante est `015_stripe_reconciliation.sql` ; elle ajoute le suivi optimiste et la
+planification durable de Stripe sans modifier la baseline déjà enregistrée.
 
 ## Migration ordinaire
 
@@ -13,10 +15,10 @@ pnpm run db:migrate
 
 La commande est transactionnelle et sérialisée par verrou consultatif :
 
-- sur un schéma vide, elle applique la baseline et les catalogues sans créer d’utilisateur factice ;
+- sur un schéma vide, elle applique dans l’ordre la baseline, les catalogues et les migrations incrémentales sans créer d’utilisateur factice ;
 - sur une base à jour, elle contrôle le checksum puis ne fait rien ;
 - elle refuse un schéma applicatif non vide sans historique courant, une version inconnue et un checksum absent ou modifié ;
-- les futures évolutions persistantes seront ajoutées au catalogue à partir de `015_<description>`.
+- la prochaine évolution persistante sera `016_<description>` ; une migration enregistrée ne doit plus être modifiée.
 
 Le moteur ne tente plus d’adopter les anciennes chaînes. En développement, reconstruire la base avec le reset
 protégé. Pour une base déjà déployée dans un autre environnement, écrire une migration de transition explicite
@@ -29,8 +31,8 @@ pnpm run db:reset
 ```
 
 Le reset est destructif et autorisé uniquement avec `ENV=development`, un hôte PostgreSQL loopback
-et la base exacte `histae-dev`. Il supprime les objets applicatifs, reconstruit la baseline, enregistre
-son checksum et crée 400 profils factices avec leurs bios en modération `pending`.
+et la base exacte `histae-dev`. Il supprime les objets applicatifs, rejoue toute la chaîne, enregistre
+chaque checksum et crée 400 profils factices avec leurs bios en modération `pending`.
 Les extensions PostgreSQL, partagées au niveau de la base, restent installées.
 
 ## Organisation et validation

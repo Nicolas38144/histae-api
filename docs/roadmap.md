@@ -14,18 +14,20 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R02 | Effacement de compte asynchrone, reprenable et visible dans le dashboard |
 | R03 | Tests de concurrence et de coupure locale, plus correctif du pool Scylla |
 | R04 | Suivi Sweego, callbacks signés et traitement des issues incertaines |
+| R05 (implémentation) | Réconciliation Stripe durable, protection optimiste, watchdog Customer anti-doublon et file opérateur minimale |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
-| PostgreSQL | Baseline unique, 44 tables sans `ALTER TABLE`, reset local effectué sans conservation des anciennes données |
+| PostgreSQL | Baseline figée de 44 tables puis migration incrémentale `015_stripe_reconciliation` |
 
-Dernière validation : lint, typecheck, build, 553 tests autonomes et 185 intégrations locales, soit 738 tests dans
-89 suites. Le second `db:migrate` après reset n’a appliqué aucun changement. Ce résultat ne couvre ni fournisseur
-réel, ni restauration, ni charge, ni pentest indépendant.
+Dernière validation : lint, typecheck, build, 568 tests autonomes et 190 intégrations locales, soit 758 tests dans
+92 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
+aucun changement. Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni
+fournisseur réel, ni restauration, ni charge, ni pentest indépendant.
 
 ## Priorités
 
 | Référence | Travail | Priorité | Périmètre |
 | --- | --- | --- | --- |
-| R05 | Réconcilier Stripe et ses échecs persistants | P1 | API, dashboard éventuel |
+| R05-S | Valider les parcours réels dans la sandbox Stripe | P1 avant production | API, exploitation |
 | R06 | Borner les traitements et les exports | P2 | API |
 | R08 | Raccorder les métriques à des alertes | P1 avant production | API, exploitation |
 | R09 | Calibrer la modération et organiser les recours | P1 avant ouverture | API, dashboard, produit |
@@ -35,18 +37,21 @@ réel, ni restauration, ni charge, ni pentest indépendant.
 | R13 | Obtenir les décisions produit et juridiques | P1 avant production | Produit, DPO/juriste |
 
 <a id="r05-stripe"></a>
-## R05 — Réconciliation Stripe
+## R05-S — Validation Stripe en sandbox
 
-- [ ] Réconcilier périodiquement et par lots Stripe avec `user_subscription`.
-- [ ] Résoudre les créations Customer incertaines trop anciennes pour un rejeu idempotent sûr.
-- [ ] Empêcher une réponse ancienne ou une réconciliation concurrente d’écraser un état plus récent.
-- [ ] Persister uniquement des codes d’erreur normalisés et rendre les anomalies exploitables.
-- [ ] Ajouter une vue dashboard seulement si l’opérateur doit agir ; exiger alors authentification récente,
-  motif et audit.
-- [ ] Valider en sandbox paiement avec authentification renforcée, renouvellement, annulation et remboursement.
+Le code réconcilie désormais par lots `user_subscription`, récupère les créations Customer incertaines sans
+rejouer un `POST` après 23 heures, répare l’arrêt entre persistance et rattachement, bloque une nouvelle clé tant
+que l’intention précédente reste incertaine, protège la projection par version/snapshot et rend les dead letters
+actionnables avec WebAuthn récent, motif et audit. Les tests synthétiques couvrent webhook perdu/retardé/rejoué,
+ambiguïtés et concurrence. Voir [le protocole](stripe-reconciliation.md).
 
-Terminé lorsque webhook perdu, retardé ou rejoué et réconciliation concurrente convergent sans privilège indu
-ni doublon d’effet.
+- [ ] Valider dans la sandbox du projet un paiement avec authentification renforcée, puis un renouvellement.
+- [ ] Valider annulation immédiate, annulation en fin de période, échec de paiement et remboursement.
+- [ ] Retarder ou perdre les webhooks de chaque parcours et confirmer la convergence après maintenance/outbox.
+- [ ] Vérifier l’absence de doublon de notification ou d’effet et archiver les preuves sans donnée de paiement.
+
+Terminé lorsque ces parcours réels convergent vers la même projection que les webhooks nominaux et que la
+procédure opérateur a été répétée depuis le dashboard.
 
 <a id="r06-volumes"></a>
 ## R06 — Volumes, lots et exports
@@ -130,7 +135,7 @@ les tests et la documentation concernés. Voir [politique de conservation](reten
 
 ## Ordre conseillé
 
-1. R05 : risque métier directement actionnable.
+1. R05-S : validation fournisseur avant toute facturation réelle.
 2. R06 et R08 : capacité et exploitation avant montée en charge.
 3. R09 à R12 : préparation complète avant ouverture publique.
 4. R13 : à mener en parallèle avec les responsables produit et juridiques.

@@ -59,6 +59,11 @@ Ne jamais afficher ce fichier ou ses secrets dans les sorties de test.
 | Redis | Local ; tests dédiés exclusivement dans la base logique 15. |
 | S3 compatible | Bucket local préparé ; endpoint HTTP loopback pour les tests de panne. SeaweedFS `weed mini` convient en développement. |
 
+Stripe n’est jamais appelé par la suite automatisée. `postgres.billing-reconciliation.integration.spec.ts`
+vérifie dans un schéma isolé la planification outbox, la récupération d’une intention, l’arrêt entre persistance et
+rattachement du Customer, la barrière anti-doublon et le refus d’écraser une projection plus récente. Le parcours
+réel reste un contrôle sandbox séparé.
+
 ```powershell
 pnpm run db:migrate
 pnpm run scylla:migrate
@@ -67,6 +72,8 @@ pnpm run test:integration
 
 Les suites réelles sont activées directement, sans flag de contournement. Une dépendance indisponible est un
 échec à diagnostiquer, pas une raison de désactiver silencieusement les tests. Aucun reset n’est nécessaire.
+La commande complète lance PostgreSQL, Scylla, Redis puis les coupures réseau dans quatre processus Jest successifs :
+les connexions et pilotes natifs sont ainsi libérés entre groupes, sans réduire la couverture.
 
 Commandes ciblées :
 
@@ -74,6 +81,7 @@ Commandes ciblées :
 pnpm run test:integration:postgres
 pnpm run test:integration:scylla
 pnpm run test:integration:redis
+pnpm run test:integration:network
 pnpm exec jest --runInBand --testPathPatterns='postgres.business-concurrency|postgres.crash-recovery|network-recovery'
 ```
 
@@ -117,10 +125,11 @@ réelles constituent deux scénarios distincts ; ils ne prouvent pas une transac
 
 Pour un parcours Stripe manuel, utiliser uniquement une sandbox, ses clés de test et les Products/Prices Histae.
 Stripe CLI peut relayer vers `/api/billing/stripe/webhook` ; utiliser le secret de signature de cette session,
-ouvrir le Checkout créé par l’API puis vérifier l’abonnement et le portail. Un événement générique de
+ouvrir le Checkout créé par l’API puis vérifier l’abonnement et le portail. Retarder ensuite le webhook, exécuter
+`maintenance:run` puis `outbox:work`, et contrôler la convergence via la route admin. Un événement générique de
 `stripe trigger` ne garantit pas les métadonnées et prix requis par Histae. Ne jamais modifier une base partagée
-ou employer une clé live pour ce parcours. La validation complète reste suivie dans la
-[section Stripe de la roadmap](docs/roadmap.md#r05-stripe).
+ou employer une clé live pour ce parcours. Les scénarios SCA, renouvellement, annulation et remboursement restant
+à exécuter sont suivis dans la [section Stripe de la roadmap](docs/roadmap.md#r05-stripe).
 
 ## Avant livraison et limites
 
@@ -138,6 +147,7 @@ Guides spécialisés :
 - [Sessions mobiles et rotation](docs/mobile-sessions.md)
 - [Notifications durables](docs/durable-notifications.md)
 - [Effacement reprenable](docs/account-erasure.md)
+- [Réconciliation Stripe](docs/stripe-reconciliation.md)
 - [Concurrence et pannes locales](docs/resilience-tests.md)
 - [Callbacks et reprises OTP Sweego](docs/sweego-delivery.md) : signatures/réponses synthétiques, PostgreSQL isolé, aucun SMS réel.
 - [Baseline PostgreSQL](docs/postgres-migrations.md) : initialisation, checksums, reset local protégé et évolutions suivantes.

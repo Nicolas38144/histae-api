@@ -74,15 +74,17 @@ tentatives lors de l’anonymisation, sans nouvelle durée de conservation.
 
 Si la réponse de création s’est perdue, le worker peut rejouer exactement le POST et sa clé d’origine pendant
 23 heures, puis supprimer le Customer retrouvé. La marge précède le minimum de 24 heures de conservation des
-clés indiqué par [Stripe](https://docs.stripe.com/api/idempotent_requests). Une clé trop ancienne pourrait créer
-un autre Customer : dans ce cas, le code refuse le rejeu avec `erasure_stripe_reconciliation_required` et ne
-déclare pas la demande achevée. Un identifiant déjà connu reste supprimable après cette fenêtre. Les DELETE
+clés indiqué par [Stripe](https://docs.stripe.com/api/idempotent_requests). Après ce seuil, le code refuse le
+rejeu avec `erasure_stripe_reconciliation_required` et attend le watchdog `billing.customer.reconcile`. Celui-ci
+recherche en lecture l’identifiant de tentative : il restaure le Customer trouvé ou libère l’intention après une
+absence non ambiguë. Un identifiant déjà connu reste supprimable après cette fenêtre. Les DELETE
 sont intrinsèquement idempotents ; la clé passée par l’adaptateur n’ajoute pas de garantie. Les erreurs fournisseur
 ne sont pas assimilées aveuglément à « déjà supprimé » : après un DELETE en erreur, un GET doit confirmer le même
 identifiant et le marqueur `deleted: true` documenté par [Stripe](https://docs.stripe.com/api/customers/delete).
 
-Ce cas requiert un diagnostic fournisseur et la procédure de réconciliation Stripe suivie dans la
-[roadmap](roadmap.md#r05-stripe), pas un changement manuel de l’étape vers `completed`.
+Une réponse ambiguë devient une dead letter visible dans la procédure de
+[réconciliation Stripe](stripe-reconciliation.md). L’opérateur peut demander une nouvelle lecture auditée, jamais
+changer manuellement l’étape d’effacement vers `completed`.
 
 ## Exploitation et suivi admin
 

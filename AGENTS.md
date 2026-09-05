@@ -71,6 +71,8 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
 - Les notifications match/message/Stripe et leurs tâches `notification.push` par appareil sont écrites dans la transaction métier via `notification-outbox.ts`. Ne jamais réintroduire une programmation après commit. Conserver la clé source/type/destinataire, le `notification_id` stable, les contrôles d’éligibilité avant envoi et les erreurs FCM normalisées. Le trigger final d’effacement nettoie les notifications intercalées ; préserver le verrou partagé du destinataire et ce nettoyage. Les alertes Stripe doivent respecter le prédicat partagé `notification-billing.ts` à la programmation et à l’envoi ; ne pas exposer leur contexte interne. SSE reste best-effort ; les issues FCM incertaines peuvent produire un doublon externe. Voir `docs/durable-notifications.md`.
+- Les webhooks Stripe restent le chemin rapide mais non fiable en ordre/livraison. `billing.subscription.reconcile` relit périodiquement le fournisseur ; `projection_version` et `provider_snapshot_at` doivent empêcher tout snapshot ou webhook ancien d’écraser une projection plus récente. Un Customer supprimé ferme sa relation locale.
+- Une création Customer persiste son intention et programme `billing.customer.reconcile` avant le POST. Conserver le watchdog jusqu'au rattachement transactionnel du Customer déjà persisté. Rejouer la même clé est permis moins de 23 heures ; ensuite, ne faire que des lectures par métadonnée de tentative et fenêtre historique. Une ambiguïté doit devenir une dead letter, jamais déclencher un nouveau POST ni une association choisie arbitrairement. Voir `docs/stripe-reconciliation.md`.
 - Un utilisateur conserve au plus trois réponses de profil ordonnées, sur des questions distinctes. Leur remplacement reste atomique et leurs textes normalisés, sans caractères de contrôle, entre 10 et 300 caractères et 1 000 octets maximum.
 - Supprimer une question de profil supprime volontairement toutes ses réponses par cascade PostgreSQL. Le dashboard doit afficher `answer_count` et demander une confirmation explicite avant cette opération irréversible.
 - Une photo reçue ne peut dépasser 500 000 octets et doit porter l’une des extensions `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.webp`. Vérifier aussi MIME, signature et dimensions ; ne stocker qu’un WebP privé sans métadonnées, lui-même limité à 500 000 octets.
@@ -78,6 +80,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Une photo publique doit être à la fois `ready` et modérée `approved` ; l’URL signée courte n’est produite qu’au dernier moment.
 - Préserver le protocole photo inter-stockages : créer `processing` et la demande idempotente dans une transaction, persister les métadonnées, écrire l’objet, puis activer atomiquement la nouvelle ligne, terminer la demande, passer l’ancienne à `deleting` et émettre `photo.delete` dans l’outbox. Une issue S3 incertaine doit rester réconciliable ; ne jamais supprimer la trace PostgreSQL avant la suppression confirmée de l’objet.
 - Les effets outbox doivent être idempotents, revendiqués avec verrouillage PostgreSQL, bornés en lot/concurrence et réessayés sans persister de détail sensible. Ne pas contourner l’outbox par un appel réseau entre une mutation métier et son commit.
+- Une création Customer Stripe incertaine interdit toute nouvelle tentative avec une autre clé. Rejouer uniquement la clé et la tentative d'origine avant 23 heures ; passé ce seuil, ne faire que des recherches Stripe en lecture jusqu'à résolution.
 - Une décision opérateur sur une dead letter exige une authentification admin récente, un motif et un audit dans la transaction verrouillée. Ne jamais exposer payload, agrégat ou clé objet dans la liste. Interdire l’abandon de `photo.delete` tant que la ligne `user_photo` existe.
 - Les métriques HTTP et dépendances restent agrégées, à cardinalité bornée et sans identifiant utilisateur. L’état persistant de maintenance ne conserve qu’un code d’erreur normalisé, jamais le message ou la stack.
 - Une collection administrative ou de blocages ne signe aucune photo. Seul un accès métier explicitement autorisé peut produire un lien signé ; le détail admin exige un motif et une trace d'audit.
@@ -101,9 +104,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 
 ## Base de données et migrations
 
-- PostgreSQL utilise la baseline `001_baseline_20260904` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 014 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
+- PostgreSQL utilise la baseline `001_baseline_20260904` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 014 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. `015_stripe_reconciliation.sql` est la première évolution incrémentale. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les fichiers 002 à 014 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. Ne pas modifier une baseline enregistrée ; la prochaine migration persistante doit être `015_<description>`.
+- Les fichiers 002 à 014 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. Ne modifier aucune migration enregistrée ; la prochaine migration persistante doit être `016_<description>`.
 - La baseline définit ses contraintes et colonnes auto-incrémentées dans les `CREATE TABLE`, parents avant dépendants ; les index suivent leur table, les fonctions/triggers terminent le fichier. Ne pas y concaténer de nouveaux `ALTER TABLE` : les évolutions déployées vont dans une migration incrémentale.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
@@ -141,8 +144,8 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État de référence
 
-La baseline PostgreSQL courante est `001_baseline_20260904`; toute nouvelle évolution persistante commence à
-`015_<description>`. Les capacités livrées et la dernière validation connue sont résumées dans `resume.md`. Les
+La chaîne PostgreSQL courante est `001_baseline_20260904` puis `015_stripe_reconciliation`; toute nouvelle évolution
+persistante commence à `016_<description>`. Les capacités livrées et la dernière validation connue sont résumées dans `resume.md`. Les
 travaux ouverts, leur ordre et leurs critères de fin vivent uniquement dans `docs/roadmap.md`.
 
 SeaweedFS `weed mini` reste une cible de développement mono-machine. Avant la production, éprouver une cible

@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { isUUID } from 'class-validator';
 import type Stripe from 'stripe';
 import { apiError } from '../common/api-error';
 import { ConfigService } from '../config/config.service';
@@ -7,10 +6,17 @@ import type { Queryable } from '../database/database.service';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
 import { enqueueNotification } from '../mobile/notification-outbox';
 import type { BillingNotificationIntent } from '../mobile/notification-billing';
-import type { BillingPeriod, InvoiceProjection, StripeSubscriptionStatus, SubscriptionProjection, WebhookMetadata } from './billing.models';
-import { STRIPE_SUBSCRIPTION_STATUSES } from './billing.models';
-import { BillingAccountInactiveError, BillingMappingError, BillingRepository } from './billing.repository';
+import type { StripeSubscriptionStatus, WebhookMetadata } from './billing.models';
+import { BillingAccountInactiveError, BillingMappingError } from './billing.errors';
+import { BillingRepository } from './billing.repository';
 import { StripeGateway } from './stripe.gateway';
+import {
+  StripeProjectionMapper,
+  stripeCustomerId,
+  stripeObjectId,
+  stripeSubscriptionIdForInvoice,
+  type ParsedSubscription,
+} from './stripe-projection.mapper';
 
 const SUBSCRIPTION_EVENT_TYPES = new Set<string>([
   'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted',
@@ -29,18 +35,19 @@ type WebhookEffect = {
   notification?: BillingNotificationIntent;
   subscriptionStatus?: StripeSubscriptionStatus;
 };
-type ParsedSubscription = Omit<SubscriptionProjection, 'userId' | 'eventCreatedAt'> & { metadataUserId: string | null };
-
 @Injectable()
 export class StripeWebhookService {
   private readonly logger = new Logger(StripeWebhookService.name);
+  private readonly projections: StripeProjectionMapper;
 
   constructor(
     private readonly billing: BillingRepository,
     private readonly stripe: StripeGateway,
     private readonly config: ConfigService,
     private readonly delivery: MobileDeliveryService,
-  ) {}
+  ) {
+    this.projections = new StripeProjectionMapper(config.billing);
+  }
 
   async handle(rawBody: Buffer | undefined, signature: string | undefined): Promise<void> {
     const event = this.verifiedEvent(rawBody, signature);
@@ -48,7 +55,7 @@ export class StripeWebhookService {
     const invoice = INVOICE_EVENT_TYPES.has(event.type) ? event.data.object as Stripe.Invoice : undefined;
     const prefetchedSubscription = invoice ? await this.subscriptionForInvoice(invoice) : undefined;
     const metadata: WebhookMetadata = {
-      id: event.id, type: event.type, objectId: objectId(event.data.object), livemode: event.livemode,
+      id: event.id, type: event.type, objectId: stripeObjectId(event.data.object), livemode: event.livemode,
       apiVersion: event.api_version, createdAt: new Date(event.created * 1_000),
     };
     let processed: { duplicate: boolean; result?: WebhookEffect };
@@ -89,9 +96,9 @@ export class StripeWebhookService {
   }
 
   private async subscriptionForInvoice(invoice: Stripe.Invoice): Promise<ParsedSubscription | undefined> {
-    const subscriptionId = subscriptionIdForInvoice(invoice);
+    const subscriptionId = stripeSubscriptionIdForInvoice(invoice);
     if (!subscriptionId) return undefined;
-    try { return this.parseSubscription(await this.stripe.retrieveSubscription(subscriptionId)); }
+    try { return this.projections.subscription(await this.stripe.retrieveSubscription(subscriptionId)); }
     catch (error) {
       if (error instanceof BillingMappingError) throw apiError(400, 'invalid_stripe_event', error.message, error);
       throw apiError(503, 'stripe_request_failed', 'Stripe could not process the billing request at this time.', error);
@@ -106,7 +113,7 @@ export class StripeWebhookService {
     database: Queryable,
   ): Promise<WebhookEffect | undefined> {
     if (SUBSCRIPTION_EVENT_TYPES.has(event.type)) {
-      const parsed = this.parseSubscription(event.data.object as Stripe.Subscription);
+      const parsed = this.projections.subscription(event.data.object as Stripe.Subscription);
       const userId = await this.resolveUser(parsed, database, 'Stripe subscription has no Histae customer mapping');
       await this.billing.upsertSubscription({ ...parsed, userId, eventCreatedAt: metadata.createdAt }, database);
       return {
@@ -117,12 +124,12 @@ export class StripeWebhookService {
       };
     }
     if (invoice && prefetchedSubscription) {
-      if (prefetchedSubscription.stripeCustomerId !== customerId(invoice.customer)) {
+      if (prefetchedSubscription.stripeCustomerId !== stripeCustomerId(invoice.customer)) {
         throw new BillingMappingError('Stripe invoice customer does not own its subscription');
       }
       const userId = await this.resolveUser(prefetchedSubscription, database, 'Stripe invoice has no Histae customer mapping');
       await this.billing.upsertSubscription({ ...prefetchedSubscription, userId, eventCreatedAt: metadata.createdAt }, database);
-      await this.billing.upsertInvoice(userId, parseInvoice(invoice, metadata.createdAt), database);
+      await this.billing.upsertInvoice(userId, this.projections.invoice(invoice, metadata.createdAt), database);
       return {
         userId, subscriptionStatus: prefetchedSubscription.status,
         notification: event.type === 'invoice.payment_failed' || event.type === 'invoice.payment_action_required'
@@ -137,7 +144,7 @@ export class StripeWebhookService {
       return userId ? { userId } : undefined;
     }
     if (event.type === 'customer.deleted') {
-      const deletedCustomerId = objectId(event.data.object);
+      const deletedCustomerId = stripeObjectId(event.data.object);
       if (!deletedCustomerId) throw new BillingMappingError('Stripe Customer deletion has no object ID');
       const userId = await this.billing.markCustomerDeleted(deletedCustomerId, metadata.createdAt, database);
       return userId ? { userId, subscriptionStatus: 'canceled' } : undefined;
@@ -151,33 +158,6 @@ export class StripeWebhookService {
     return userId;
   }
 
-  private parseSubscription(subscription: Stripe.Subscription): ParsedSubscription {
-    if (!STRIPE_SUBSCRIPTION_STATUSES.includes(subscription.status as StripeSubscriptionStatus)) {
-      throw new BillingMappingError(`Unsupported Stripe subscription status: ${subscription.status}`);
-    }
-    if (subscription.items.data.length !== 1) throw new BillingMappingError('Histae subscriptions must contain exactly one Stripe Price');
-    const item = subscription.items.data[0]!;
-    const productId = objectId(item.price.product);
-    if (productId !== this.config.billing.premiumProductId) throw new BillingMappingError('Stripe subscription does not use the configured Premium product');
-    const metadataUserId = subscription.metadata.histae_user_id;
-    return {
-      metadataUserId: typeof metadataUserId === 'string' && isUUID(metadataUserId, 'all') ? metadataUserId : null,
-      stripeCustomerId: customerId(subscription.customer), stripeSubscriptionId: subscription.id,
-      stripePriceId: item.price.id, billingPeriod: this.periodForPrice(item.price.id),
-      status: subscription.status as StripeSubscriptionStatus, cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      currentPeriodStartsAt: new Date(item.current_period_start * 1_000),
-      currentPeriodEndsAt: new Date(item.current_period_end * 1_000),
-      trialStartsAt: unixDate(subscription.trial_start), trialEndsAt: unixDate(subscription.trial_end),
-      canceledAt: unixDate(subscription.canceled_at),
-    };
-  }
-
-  private periodForPrice(priceId: string): BillingPeriod {
-    if (priceId === this.config.billing.premiumMonthlyPriceId) return 'monthly';
-    if (priceId === this.config.billing.premiumAnnualPriceId) return 'annual';
-    throw new BillingMappingError('Stripe subscription uses an unknown Price');
-  }
-
   private async deliverEffect(effect: WebhookEffect): Promise<void> {
     try {
       if (effect.subscriptionStatus) await this.delivery.subscriptionUpdated(effect.userId, effect.subscriptionStatus);
@@ -185,29 +165,4 @@ export class StripeWebhookService {
       this.logger.warn('billing_realtime_delivery_failed');
     }
   }
-}
-
-function parseInvoice(invoice: Stripe.Invoice, eventCreatedAt: Date): InvoiceProjection {
-  return {
-    stripeInvoiceId: invoice.id, stripeCustomerId: customerId(invoice.customer),
-    stripeSubscriptionId: subscriptionIdForInvoice(invoice), status: invoice.status,
-    currency: invoice.currency.toUpperCase(), amountDue: invoice.amount_due, amountPaid: invoice.amount_paid,
-    amountRemaining: invoice.amount_remaining, periodStartsAt: new Date(invoice.period_start * 1_000),
-    periodEndsAt: new Date(invoice.period_end * 1_000), paidAt: unixDate(invoice.status_transitions.paid_at),
-    createdAt: new Date(invoice.created * 1_000), eventCreatedAt,
-  };
-}
-
-function unixDate(value: number | null): Date | null { return value === null ? null : new Date(value * 1_000); }
-function objectId(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string' ? value.id : null;
-}
-function customerId(value: Stripe.Subscription['customer'] | Stripe.Invoice['customer']): string {
-  const id = objectId(value);
-  if (!id) throw new BillingMappingError('Stripe object has no customer ID');
-  return id;
-}
-function subscriptionIdForInvoice(invoice: Stripe.Invoice): string | null {
-  return objectId(invoice.parent?.subscription_details?.subscription);
 }

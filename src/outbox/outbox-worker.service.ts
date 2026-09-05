@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { ConfigService } from '../config/config.service';
 import { PhotosRepository } from '../photos/photos.repository';
@@ -17,6 +17,9 @@ import { NotificationPushService } from '../mobile/notification-push.service';
 import { PushDeliveryError } from '../mobile/push.service';
 import { ErasureService, ErasureStepError } from '../privacy/erasure.service';
 import { formatLogEvent } from '../common/logging/safe-logging';
+import { BillingReconciliationError } from '../billing/billing.errors';
+import { BillingReconciliationService } from '../billing/billing-reconciliation.service';
+import type { BillingReconciliationEventType } from '../billing/billing.models';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -44,6 +47,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     private readonly tracker: MaintenanceTrackerService,
     private readonly notifications: NotificationPushService,
     private readonly erasures: ErasureService,
+    @Optional() private readonly billingReconciliation?: BillingReconciliationService,
   ) {}
 
   onModuleInit(): void {
@@ -111,12 +115,13 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         result.completed += 1;
       }
     } catch (error: unknown) {
+      const failure = outboxFailure(error);
       const retry = await this.outbox.reschedule(
         event.id,
         this.workerId,
         new Date(Date.now() + retryDelayMillis(event.attempts)),
-        outboxErrorCode(error),
-        MAX_ATTEMPTS,
+        failure.code,
+        failure.permanent ? 1 : MAX_ATTEMPTS,
       );
       if (retry === 'pending') result.retried += 1;
       if (retry === 'dead_letter') {
@@ -131,6 +136,15 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async dispatch(event: OutboxEvent): Promise<boolean> {
     if (event.eventType === 'account.erase') return this.erasures.process(event.id, this.workerId);
+    if (event.eventType === 'billing.subscription.reconcile'
+      || event.eventType === 'billing.customer.reconcile') {
+      if (!this.billingReconciliation) throw new BillingReconciliationError('billing_reconciliation_unavailable');
+      await this.billingReconciliation.process(
+        event.eventType as BillingReconciliationEventType,
+        event.aggregateId,
+      );
+      return true;
+    }
     if (event.eventType === 'notification.push') {
       await this.notifications.deliver(event.aggregateId);
       return true;
@@ -179,12 +193,15 @@ function retryDelayMillis(attempts: number): number {
   return Math.min(1_000 * (2 ** Math.max(0, attempts - 1)), MAX_RETRY_DELAY_MILLIS);
 }
 
-function outboxErrorCode(error: unknown): string {
-  if (error instanceof ErasureStepError) return error.code;
-  if (error instanceof PushDeliveryError) return 'push_delivery_unavailable';
+function outboxFailure(error: unknown): { code: string; permanent: boolean } {
+  if (error instanceof BillingReconciliationError) {
+    return { code: error.code, permanent: error.permanent };
+  }
+  if (error instanceof ErasureStepError) return { code: error.code, permanent: false };
+  if (error instanceof PushDeliveryError) return { code: 'push_delivery_unavailable', permanent: false };
   return error instanceof ObjectStorageUnavailableError
-    ? 'object_storage_unavailable'
-    : 'handler_failed';
+    ? { code: 'object_storage_unavailable', permanent: false }
+    : { code: 'handler_failed', permanent: false };
 }
 
 function waitForNextPoll(signal: AbortSignal): Promise<void> {

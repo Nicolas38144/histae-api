@@ -49,6 +49,9 @@ export type BillingConfig = {
   allowPromotionCodes: boolean;
   timeoutMillis: number;
   maxNetworkRetries: number;
+  reconciliationIntervalMillis: number;
+  reconciliationFreshnessMillis: number;
+  reconciliationBatchSize: number;
 };
 
 export type ObjectStorageConfig = {
@@ -461,6 +464,21 @@ export class ConfigService {
     }
     const stripeTimeoutMillis = duration(envOr('STRIPE_TIMEOUT', '10s'), 'STRIPE_TIMEOUT');
     if (stripeTimeoutMillis > 30_000) throw new Error('config: STRIPE_TIMEOUT must not exceed 30s');
+    const stripeReconciliationIntervalMillis = duration(
+      envOr('STRIPE_RECONCILIATION_INTERVAL', '5m'),
+      'STRIPE_RECONCILIATION_INTERVAL',
+    );
+    const stripeReconciliationFreshnessMillis = duration(
+      envOr('STRIPE_RECONCILIATION_FRESHNESS', '1h'),
+      'STRIPE_RECONCILIATION_FRESHNESS',
+    );
+    if (stripeReconciliationIntervalMillis < 60_000 || stripeReconciliationIntervalMillis > 24 * 60 * 60_000) {
+      throw new Error('config: STRIPE_RECONCILIATION_INTERVAL must be between 1m and 24h');
+    }
+    if (stripeReconciliationFreshnessMillis < stripeReconciliationIntervalMillis
+      || stripeReconciliationFreshnessMillis > 7 * 24 * 60 * 60_000) {
+      throw new Error('config: STRIPE_RECONCILIATION_FRESHNESS must be between the reconciliation interval and 7d');
+    }
     this.billing = {
       provider: billingProviderValue,
       stripeSecretKey,
@@ -475,6 +493,14 @@ export class ConfigService {
       allowPromotionCodes: optionalBoolean('STRIPE_ALLOW_PROMOTION_CODES', false),
       timeoutMillis: stripeTimeoutMillis,
       maxNetworkRetries: integer(envOr('STRIPE_MAX_NETWORK_RETRIES', '2'), 'STRIPE_MAX_NETWORK_RETRIES', 0, 5),
+      reconciliationIntervalMillis: stripeReconciliationIntervalMillis,
+      reconciliationFreshnessMillis: stripeReconciliationFreshnessMillis,
+      reconciliationBatchSize: integer(
+        envOr('STRIPE_RECONCILIATION_BATCH_SIZE', '25'),
+        'STRIPE_RECONCILIATION_BATCH_SIZE',
+        1,
+        100,
+      ),
     };
     this.rateLimit = {
       store,

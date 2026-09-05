@@ -12,7 +12,7 @@ export const DEPENDENCY_NAMES = [
 ] as const;
 export type DependencyName = typeof DEPENDENCY_NAMES[number];
 
-export const MAINTENANCE_JOB_NAMES = ['matches', 'photos', 'privacy', 'outbox'] as const;
+export const MAINTENANCE_JOB_NAMES = ['matches', 'photos', 'privacy', 'outbox', 'billing'] as const;
 export type MaintenanceJobName = typeof MAINTENANCE_JOB_NAMES[number];
 export type MaintenanceStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 

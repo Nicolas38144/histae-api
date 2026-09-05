@@ -17,6 +17,7 @@ Ce document fixe les frontières internes à préserver lors d’un refactor. Il
 | Administration | `AdminPhotoRepository` | Liste et remise en file des photos réconciliables, sans accès S3 ni signature d'URL. |
 | Facturation | `BillingService` | Projection utilisateur, Checkout, portail et suppression du Customer pour l'effacement. |
 | Facturation | `StripeWebhookService` | Vérification du webhook, mapping fournisseur, projection et notifications transactionnelles ; SSE après commit. |
+| Facturation | `BillingReconciliationService` / `BillingReconciliationRepository` | Lecture Stripe bornée et sélection métier / planification, projection optimiste et file admin minimale. |
 | RGPD | `erasure-enqueue.ts` | Acceptation durable et désactivation dans la transaction de l’appelant, sans réseau. |
 | RGPD | `ErasureRepository` / `ErasureService` | Checkpoints/finalisation transactionnels / enchaînement Stripe, photos, Scylla, PostgreSQL via l’outbox. |
 | Concurrence | `AccountActivityService` | Verrous de session sur les écrivains externes et l’effacement, dans un pool dédié borné ; aucune transaction longue. |
@@ -50,6 +51,9 @@ leur progression et les reprises, sans piloter directement les étapes internes.
   aussi partie de cette transaction ; seul le réseau est différé au worker. Un doublon ne recrée pas de tâche.
   `notification-billing.ts` partage le prédicat de pertinence Stripe entre programmation et envoi ; le contexte
   reste interne. Voir [notifications durables](durable-notifications.md) pour le schéma et les limites d’acquittement.
+- La réconciliation Stripe prend le verrou d’activité avant le réseau, puis vérifie la version de projection sous
+  verrou PostgreSQL. Un snapshot perdant n’écrase pas le webhook concurrent. Les événements outbox ne contiennent
+  qu’un identifiant local et leur abandon est interdit. Voir [réconciliation Stripe](stripe-reconciliation.md).
 - L’effacement ne fournit plus de callback réseau à `PrivacyRepository`. Le worker prend un verrou de session,
   effectue un lot externe, puis enregistre sa progression avec contrôle du propriétaire outbox. Les écrivains
   locaux sont coordonnés par les triggers de la baseline ; les webhooks ignorent un compte désactivé en

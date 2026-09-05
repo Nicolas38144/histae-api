@@ -4,4 +4,5 @@ import type { AccountActivityService, AssertActivity } from '../src/database/acc
 // postgres.erasure.integration.spec.ts, not simulated by this explicit stub.
 export const accountActivityStub = {
   run: <T>(_ids: string[], work: (assertHeld: AssertActivity) => Promise<T>): Promise<T> => work(() => {}),
+  runExisting: <T>(_ids: string[], work: (assertHeld: AssertActivity) => Promise<T>): Promise<T> => work(() => {}),
 } as AccountActivityService;

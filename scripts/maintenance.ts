@@ -8,6 +8,7 @@ import { PrivacyMaintenanceService } from '../src/privacy/privacy-maintenance.se
 import { PhotosMaintenanceService } from '../src/photos/photos-maintenance.service';
 import { formatLogEvent } from '../src/common/logging/safe-logging';
 import { writeCliFailure } from './cli-output';
+import { BillingReconciliationService } from '../src/billing/billing-reconciliation.service';
 
 async function run(): Promise<void> {
   const config = applicationConfig();
@@ -16,10 +17,11 @@ async function run(): Promise<void> {
   }
   const context = await NestFactory.createApplicationContext(AppModule, { logger: ['error', 'warn', 'log'] });
   try {
-    const [matches, privacy, photos] = await Promise.all([
+    const [matches, privacy, photos, billing] = await Promise.all([
       context.get(MatchMaintenanceService).runOnce(),
       context.get(PrivacyMaintenanceService).runOnce(),
       context.get(PhotosMaintenanceService).runOnce(),
+      context.get(BillingReconciliationService).runOnce(),
     ]);
     new Logger('Maintenance').log(formatLogEvent('maintenance_completed', {
       matches_processed: matches ? matches.opened + matches.expired + matches.purged : 0,
@@ -27,6 +29,7 @@ async function run(): Promise<void> {
       photos_cleaned: photos.cleaned,
       photo_failures: photos.failed,
       photos_expired_requests: photos.expiredIdempotencyRecords,
+      billing_processed: billing ?? 0,
     }));
   } finally {
     await context.close();

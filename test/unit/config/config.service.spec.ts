@@ -259,7 +259,20 @@ describe('ConfigService SMS configuration', () => {
       checkoutSuccessUrl: 'https://app.histae.test/billing/success?session_id={CHECKOUT_SESSION_ID}',
       timeoutMillis: 10_000,
       maxNetworkRetries: 2,
+      reconciliationIntervalMillis: 300_000,
+      reconciliationFreshnessMillis: 3_600_000,
+      reconciliationBatchSize: 25,
     }));
+  });
+
+  it('validates bounded Stripe reconciliation scheduling', () => {
+    process.env = baseEnvironment({ ...stripeEnvironment(), STRIPE_RECONCILIATION_INTERVAL: '30s' });
+    expect(() => new ConfigService()).toThrow('config: STRIPE_RECONCILIATION_INTERVAL');
+
+    process.env = baseEnvironment({
+      ...stripeEnvironment(), STRIPE_RECONCILIATION_INTERVAL: '2h', STRIPE_RECONCILIATION_FRESHNESS: '1h',
+    });
+    expect(() => new ConfigService()).toThrow('config: STRIPE_RECONCILIATION_FRESHNESS');
   });
 
   it('requires Stripe identifiers, signed webhook secret, and HTTPS return URLs when enabled', () => {

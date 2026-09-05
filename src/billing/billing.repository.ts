@@ -9,6 +9,7 @@ import type {
   SubscriptionRow,
   WebhookMetadata,
 } from './billing.models';
+import { BillingAccountInactiveError, BillingMappingError } from './billing.errors';
 
 type CheckoutAttemptRow = {
   id: string;
@@ -33,18 +34,18 @@ export type BeginCheckoutResult =
   | { state: 'not_found' }
   | { state: 'already_subscribed' }
   | { state: 'in_progress' }
+  | { state: 'customer_reconciliation_required' }
   | { state: 'idempotency_conflict' }
   | { state: 'idempotency_consumed' };
 
-export class BillingMappingError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'BillingMappingError';
-  }
-}
-
-export class BillingAccountInactiveError extends Error {}
-export type CustomerCreation = { id: string; customer_creation_started_at: Date; created_customer_id: string | null; customer_erased_at: Date | null };
+export { BillingAccountInactiveError, BillingMappingError } from './billing.errors';
+export type CustomerCreation = {
+  id: string;
+  user_id: string;
+  customer_creation_started_at: Date;
+  created_customer_id: string | null;
+  customer_erased_at: Date | null;
+};
 
 @Injectable()
 export class BillingRepository {
@@ -56,7 +57,8 @@ export class BillingRepository {
         subscription.provider_price_id, subscription.billing_period, subscription.status,
         subscription.cancel_at_period_end, subscription.current_period_starts_at,
         subscription.current_period_ends_at, subscription.trial_ends_at, subscription.canceled_at,
-        subscription.updated_at, customer.stripe_customer_id
+        subscription.updated_at, customer.stripe_customer_id,
+        subscription.projection_version, subscription.provider_snapshot_at
       FROM user_subscription AS subscription
       LEFT JOIN billing_customer AS customer ON customer.user_id = subscription.user_id
       WHERE subscription.user_id = $1
@@ -120,6 +122,25 @@ export class BillingRepository {
       `, [userId]);
       if (otherLive.rows[0]) return { state: 'in_progress' };
 
+      // A new idempotency key must not start a second Customer POST while the
+      // outcome of an earlier attempt is unknown. Retrying that earlier key is
+      // safe because it reuses both the local attempt and Stripe key.
+      const unresolvedCustomer = await client.query(`
+        SELECT 1
+        FROM billing_checkout_session AS checkout
+        WHERE checkout.user_id = $1
+          AND checkout.customer_creation_started_at IS NOT NULL
+          AND checkout.customer_erased_at IS NULL
+          AND ($2::uuid IS NULL OR checkout.id <> $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM billing_customer AS customer
+            WHERE customer.user_id = checkout.user_id
+              AND customer.stripe_customer_deleted_at IS NULL
+          )
+        LIMIT 1
+      `, [userId, previous?.id ?? null]);
+      if (unresolvedCustomer.rows[0]) return { state: 'customer_reconciliation_required' };
+
       const context = await this.checkoutContext(userId, client);
       if (!context) throw new Error('active Premium subscription plan is missing');
       if (previous) {
@@ -141,35 +162,70 @@ export class BillingRepository {
   }
 
   async saveCustomer(userId: string, stripeCustomerId: string): Promise<boolean> {
-    return (await this.database.query(`
-      INSERT INTO billing_customer (user_id, stripe_customer_id)
-      SELECT user_id, $2 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
-      ON CONFLICT (user_id) DO UPDATE SET
-        stripe_customer_id = EXCLUDED.stripe_customer_id,
-        stripe_customer_deleted_at = NULL,
-        updated_at = clock_timestamp()
-      WHERE billing_customer.stripe_customer_id = EXCLUDED.stripe_customer_id
-        OR billing_customer.stripe_customer_deleted_at IS NOT NULL
-      RETURNING user_id
-    `, [userId, stripeCustomerId])).rowCount === 1;
+    return this.database.transaction(async (client) => {
+      const saved = await client.query(`
+        INSERT INTO billing_customer (user_id, stripe_customer_id)
+        SELECT user_id, $2 FROM user_account WHERE user_id = $1 AND deleted_at IS NULL
+        ON CONFLICT (user_id) DO UPDATE SET
+          stripe_customer_id = EXCLUDED.stripe_customer_id,
+          stripe_customer_deleted_at = NULL,
+          stripe_reconciliation_due_at = clock_timestamp(),
+          updated_at = clock_timestamp()
+        WHERE billing_customer.stripe_customer_id = EXCLUDED.stripe_customer_id
+          OR billing_customer.stripe_customer_deleted_at IS NOT NULL
+        RETURNING user_id
+      `, [userId, stripeCustomerId]);
+      if (saved.rowCount !== 1) return false;
+      await client.query(`
+        DELETE FROM outbox_event AS event
+        USING billing_checkout_session AS checkout
+        WHERE event.event_type = 'billing.customer.reconcile'
+          AND event.aggregate_id = checkout.id
+          AND checkout.user_id = $1
+          AND checkout.created_customer_id = $2
+          AND event.status IN ('pending', 'completed', 'discarded')
+      `, [userId, stripeCustomerId]);
+      return true;
+    });
   }
 
   async beginCustomerCreation(attemptId: string): Promise<CustomerCreation> {
-    const row = (await this.database.query<CustomerCreation>(`UPDATE billing_checkout_session
-      SET customer_creation_started_at = COALESCE(customer_creation_started_at, clock_timestamp())
-      WHERE id = $1 RETURNING id, customer_creation_started_at, created_customer_id, customer_erased_at`, [attemptId])).rows[0];
-    if (!row) throw new Error('checkout_attempt_missing');
-    return row;
+    return this.database.transaction(async (client) => {
+      const row = (await client.query<CustomerCreation>(`UPDATE billing_checkout_session
+        SET customer_creation_started_at = COALESCE(customer_creation_started_at, clock_timestamp())
+        WHERE id = $1
+        RETURNING id, user_id, customer_creation_started_at, created_customer_id, customer_erased_at`, [attemptId])).rows[0];
+      if (!row) throw new Error('checkout_attempt_missing');
+      await client.query(`
+        INSERT INTO outbox_event (id, event_type, aggregate_id, available_at)
+        VALUES (uuid_generate_v4(), 'billing.customer.reconcile', $1, $2::timestamptz + interval '23 hours')
+        ON CONFLICT (event_type, aggregate_id) DO UPDATE
+        SET status = 'pending', attempts = 0,
+          available_at = EXCLUDED.available_at, locked_at = NULL, locked_by = NULL,
+          last_error_code = NULL, processed_at = NULL, dead_lettered_at = NULL,
+          resolved_at = NULL, resolved_by = NULL, resolution_reason = NULL
+        WHERE outbox_event.status IN ('completed', 'discarded')
+      `, [row.id, row.customer_creation_started_at]);
+      return row;
+    });
   }
 
   async recordCreatedCustomer(attemptId: string, customerId: string): Promise<void> {
-    const result = await this.database.query(`UPDATE billing_checkout_session SET created_customer_id = $2
-      WHERE id = $1 AND (created_customer_id IS NULL OR created_customer_id = $2)`, [attemptId, customerId]);
-    if (result.rowCount !== 1) throw new Error('checkout_customer_conflict');
+    await this.database.transaction(async (client) => {
+      const result = await client.query(`UPDATE billing_checkout_session SET created_customer_id = $2
+        WHERE id = $1 AND (created_customer_id IS NULL OR created_customer_id = $2)`, [attemptId, customerId]);
+      if (result.rowCount !== 1) throw new Error('checkout_customer_conflict');
+      await client.query(`
+        UPDATE outbox_event
+        SET available_at = clock_timestamp()
+        WHERE event_type = 'billing.customer.reconcile'
+          AND aggregate_id = $1 AND status = 'pending'
+      `, [attemptId]);
+    });
   }
 
   async customerCreationsForErasure(userId: string): Promise<CustomerCreation[]> {
-    return (await this.database.query<CustomerCreation>(`SELECT id, customer_creation_started_at, created_customer_id, customer_erased_at
+    return (await this.database.query<CustomerCreation>(`SELECT id, user_id, customer_creation_started_at, created_customer_id, customer_erased_at
       FROM billing_checkout_session WHERE user_id = $1 AND customer_creation_started_at IS NOT NULL
         AND customer_erased_at IS NULL ORDER BY id LIMIT 50`, [userId])).rows;
   }
@@ -247,8 +303,9 @@ export class BillingRepository {
       INSERT INTO user_subscription (
         user_id, plan, provider, provider_subscription_id, provider_price_id,
         billing_period, status, cancel_at_period_end, current_period_starts_at,
-        current_period_ends_at, trial_ends_at, canceled_at, provider_event_created_at, updated_at
-      ) VALUES ($1, 'premium', 'stripe', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, clock_timestamp())
+        current_period_ends_at, trial_ends_at, canceled_at, provider_event_created_at,
+        projection_version, provider_snapshot_at, updated_at
+      ) VALUES ($1, 'premium', 'stripe', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $11, clock_timestamp())
       ON CONFLICT (user_id) DO UPDATE SET
         plan = 'premium', provider = 'stripe', provider_subscription_id = EXCLUDED.provider_subscription_id,
         provider_price_id = EXCLUDED.provider_price_id, billing_period = EXCLUDED.billing_period,
@@ -257,6 +314,8 @@ export class BillingRepository {
         current_period_ends_at = EXCLUDED.current_period_ends_at,
         trial_ends_at = EXCLUDED.trial_ends_at, canceled_at = EXCLUDED.canceled_at,
         provider_event_created_at = EXCLUDED.provider_event_created_at,
+        provider_snapshot_at = GREATEST(user_subscription.provider_snapshot_at, EXCLUDED.provider_snapshot_at),
+        projection_version = user_subscription.projection_version + 1,
         updated_at = clock_timestamp()
       WHERE (
           user_subscription.provider_subscription_id IS NULL
@@ -273,6 +332,10 @@ export class BillingRepository {
               OR EXCLUDED.status IN ('canceled', 'unpaid', 'incomplete_expired')
             )
           )
+        )
+        AND (
+          user_subscription.provider_snapshot_at IS NULL
+          OR user_subscription.provider_snapshot_at <= EXCLUDED.provider_snapshot_at
         )
       RETURNING user_id
     `, [
@@ -369,8 +432,11 @@ export class BillingRepository {
       UPDATE user_subscription
       SET status = 'canceled', cancel_at_period_end = false,
         canceled_at = COALESCE(canceled_at, $2), provider_event_created_at = GREATEST(provider_event_created_at, $2),
+        provider_snapshot_at = GREATEST(provider_snapshot_at, $2),
+        projection_version = projection_version + 1,
         updated_at = clock_timestamp()
       WHERE user_id = $1 AND provider = 'stripe'
+        AND (provider_snapshot_at IS NULL OR provider_snapshot_at <= $2)
     `, [userId, eventCreatedAt]);
     await database.query(`
       UPDATE billing_checkout_session
