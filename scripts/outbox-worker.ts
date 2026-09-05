@@ -6,6 +6,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module';
 import { applicationConfig } from '../src/config/config.service';
 import { OutboxWorkerService } from '../src/outbox/outbox-worker.service';
+import { formatLogEvent } from '../src/common/logging/safe-logging';
+import { writeCliFailure } from './cli-output';
 
 async function run(): Promise<void> {
   const config = applicationConfig();
@@ -22,7 +24,7 @@ async function run(): Promise<void> {
   process.once('SIGTERM', stop);
 
   try {
-    new Logger('OutboxWorker').log('Outbox worker started.');
+    new Logger('OutboxWorker').log(formatLogEvent('outbox_worker_started'));
     await context.get(OutboxWorkerService).runUntilStopped(controller.signal);
   } finally {
     process.removeListener('SIGINT', stop);
@@ -32,6 +34,6 @@ async function run(): Promise<void> {
 }
 
 void run().catch((error: unknown) => {
-  console.error('Outbox worker failed:', error);
+  writeCliFailure('outbox_worker_failed', error);
   process.exitCode = 1;
 });

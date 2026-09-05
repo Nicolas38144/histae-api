@@ -23,7 +23,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     this.unsubscribe = await this.redis.subscribe(CHANNEL, (message) => {
       const event = parseEvent(message);
       if (event) this.events.next(event);
-      else this.logger.warn('Ignored an invalid realtime event from Redis');
+      else this.logger.warn('realtime_event_invalid');
     });
   }
 

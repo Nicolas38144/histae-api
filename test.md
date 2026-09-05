@@ -43,6 +43,10 @@ Les tests autonomes ne doivent dépendre ni des secrets du développeur ni de co
 Les échecs fournisseur simulés peuvent produire des logs attendus ; juger le résultat Jest et le code de sortie,
 pas la seule présence d’une ligne ERROR.
 
+`logging-policy.spec.ts` inspecte statiquement `src/` et `scripts/` : il refuse les stacks, les sorties d’erreur
+directes et les appels au logger qui ne passent pas par un code ou un formateur sûr. Les valeurs interdites sont
+également exercées par `safe-logging.spec.ts`. Voir [la politique de journalisation](docs/logging-policy.md).
+
 ## Validation avec les stockages locaux
 
 Préparer les services décrits dans le [README](README.md), puis vérifier la cible de `.env` avant les migrations.

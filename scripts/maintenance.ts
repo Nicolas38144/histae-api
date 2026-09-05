@@ -6,6 +6,8 @@ import { applicationConfig } from '../src/config/config.service';
 import { MatchMaintenanceService } from '../src/matches/match-maintenance.service';
 import { PrivacyMaintenanceService } from '../src/privacy/privacy-maintenance.service';
 import { PhotosMaintenanceService } from '../src/photos/photos-maintenance.service';
+import { formatLogEvent } from '../src/common/logging/safe-logging';
+import { writeCliFailure } from './cli-output';
 
 async function run(): Promise<void> {
   const config = applicationConfig();
@@ -19,10 +21,12 @@ async function run(): Promise<void> {
       context.get(PrivacyMaintenanceService).runOnce(),
       context.get(PhotosMaintenanceService).runOnce(),
     ]);
-    new Logger('Maintenance').log(JSON.stringify({
-      matches: matches ?? null,
-      privacy: privacy ?? null,
-      photos,
+    new Logger('Maintenance').log(formatLogEvent('maintenance_completed', {
+      matches_processed: matches ? matches.opened + matches.expired + matches.purged : 0,
+      privacy_processed: privacy ? Object.values(privacy).reduce((total, count) => total + count, 0) : 0,
+      photos_cleaned: photos.cleaned,
+      photo_failures: photos.failed,
+      photos_expired_requests: photos.expiredIdempotencyRecords,
     }));
   } finally {
     await context.close();
@@ -30,6 +34,6 @@ async function run(): Promise<void> {
 }
 
 void run().catch((error: unknown) => {
-  console.error('Maintenance failed:', error);
+  writeCliFailure('maintenance_failed', error);
   process.exitCode = 1;
 });

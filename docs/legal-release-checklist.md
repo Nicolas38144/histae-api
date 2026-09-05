@@ -43,6 +43,7 @@ prouve seulement qu’une référence a été fournie, pas qu’elle est valable
 
 - [ ] Exiger deux passkeys distinctes par administrateur et encadrer l’enrôlement/récupération hors bande.
 - [ ] Définir révocation lors d’un départ, revue des événements et conservation des traces.
+- [ ] Valider la durée, les habilitations et le gel d’incident définis dans la [politique de journalisation](logging-policy.md).
 - [ ] Enregistrer chaque approbation dans un support durable indiquant auteur, date, périmètre et contenu.
 - [ ] Placer son identifiant vérifiable dans `LEGAL_REVIEW_REFERENCE`.
 - [ ] Incrémenter toute version juridique modifiée afin que le mobile la représente à l’utilisateur.

@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 import { Pool, type PoolClient } from 'pg';
 import { ConfigService } from '../src/config/config.service';
 import { loadMigration, migrations } from './migration-catalog';
+import { writeCliFailure } from './cli-output';
 
 const MIGRATION_LOCK = 86_302_003;
 
@@ -87,7 +88,7 @@ async function transaction(client: PoolClient, operation: () => Promise<void>): 
 
 if (require.main === module) {
   void migrate().catch((error: unknown) => {
-    console.error('PostgreSQL migration failed:', error);
+    writeCliFailure('postgres_migration_failed', error);
     process.exitCode = 1;
   });
 }

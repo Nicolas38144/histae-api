@@ -142,6 +142,7 @@ En production, `TRUST_PROXY=true` est refusé : configurer précisément les IP 
 | [docs/account-erasure.md](docs/account-erasure.md) | Effacement reprenable |
 | [docs/resilience-tests.md](docs/resilience-tests.md) | Concurrence et pannes contrôlées |
 | [docs/sql-performance.md](docs/sql-performance.md) | Audit et exploitation des requêtes SQL |
+| [docs/logging-policy.md](docs/logging-policy.md) | Format, minimisation, rétention et accès aux logs |
 | [docs/retention-policy.md](docs/retention-policy.md) | Conservation technique à faire valider |
 | [docs/legal-release-checklist.md](docs/legal-release-checklist.md) | Validation juridique avant production |
 

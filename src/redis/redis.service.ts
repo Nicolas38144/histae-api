@@ -3,6 +3,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { createClient } from 'redis';
 import { ConfigService } from '../config/config.service';
 import { OperationalMetricsService } from '../operations/operational-metrics.service';
+import { formatErrorEvent } from '../common/logging/safe-logging';
 
 type RedisClient = ReturnType<typeof createClient>;
 
@@ -26,7 +27,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         reconnectStrategy: (retries) => retries >= 5 ? new Error('Redis reconnect attempts exhausted') : Math.min(100 * 2 ** retries, 2_000),
       },
     });
-    this.client.on('error', (error: Error) => this.logger.error('Redis client error', error.stack));
+    this.client.on('error', (error: Error) => this.logger.error(formatErrorEvent('redis_client_failed', error)));
   }
 
   get enabled(): boolean {
@@ -67,7 +68,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async subscribe(channel: string, listener: (message: string) => void): Promise<() => Promise<void>> {
     if (!this.enabled) throw new Error('Redis is disabled');
     const subscriber = this.client.duplicate();
-    subscriber.on('error', (error: Error) => this.logger.error('Redis subscriber error', error.stack));
+    subscriber.on('error', (error: Error) => this.logger.error(formatErrorEvent('redis_subscriber_failed', error)));
     await subscriber.connect();
     await subscriber.subscribe(channel, listener);
     this.subscribers.add(subscriber);

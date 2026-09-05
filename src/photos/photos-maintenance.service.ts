@@ -6,6 +6,7 @@ import { ObjectStorageService } from '../storage/object-storage.service';
 import { PHOTO_PROCESSING_STALE_AFTER_MILLIS } from './photos.constants';
 import { PhotosRepository } from './photos.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
+import { formatErrorEvent, formatLogEvent } from '../common/logging/safe-logging';
 
 const HOUR = 60 * 60 * 1_000;
 const DELETION_RETRY_AFTER = 5 * 60 * 1_000;
@@ -83,9 +84,9 @@ export class PhotosMaintenanceService
       if (photos.length < BATCH_SIZE) return totals;
     }
 
-    this.logger.warn(
-      `Photo maintenance stopped after ${MAX_BATCHES_PER_RUN} full batches.`,
-    );
+    this.logger.warn(formatLogEvent('photo_maintenance_batch_limit', {
+      batches: MAX_BATCHES_PER_RUN,
+    }));
     return totals;
   }
 
@@ -93,15 +94,12 @@ export class PhotosMaintenanceService
     try {
       const result = await this.runOnce();
       if (result.failed > 0) {
-        this.logger.warn(
-          `Photo maintenance left ${result.failed} object(s) for retry.`,
-        );
+        this.logger.warn(formatLogEvent('photo_maintenance_retry_pending', {
+          failures: result.failed,
+        }));
       }
     } catch (error: unknown) {
-      this.logger.error(
-        'Photo maintenance failed',
-        error instanceof Error ? error.stack : undefined,
-      );
+      this.logger.error(formatErrorEvent('photo_maintenance_failed', error));
     }
   }
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { MaintenanceJobName } from './operations.models';
 import { MaintenanceStatusRepository } from './maintenance-status.repository';
+import { safeErrorCode } from '../common/logging/safe-logging';
 
 @Injectable()
 export class MaintenanceTrackerService {
@@ -59,15 +60,11 @@ export class MaintenanceTrackerService {
     try {
       await operation();
     } catch {
-      this.logger.warn('Maintenance status could not be recorded.');
+      this.logger.warn('maintenance_status_record_failed');
     }
   }
 }
 
 function maintenanceErrorCode(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error
-    && typeof error.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)) {
-    return error.code;
-  }
-  return 'maintenance_execution_failed';
+  return safeErrorCode(error, 'maintenance_execution_failed');
 }

@@ -19,6 +19,7 @@ import {
 import { type PhotoObject, PhotosRepository } from './photos.repository';
 import { PhotoModerationService } from '../moderation/photo-moderation.service';
 import type { AutomatedPhotoModeration, ModerationReasonCode, ModerationStatus } from '../moderation/moderation.models';
+import { formatErrorEvent, formatLogEvent } from '../common/logging/safe-logging';
 
 export type UploadedPhotoResult = {
   photo: string;
@@ -198,7 +199,7 @@ export class PhotosService {
         await this.removePhoto(photo);
       } catch (error: unknown) {
         failures += 1;
-        this.logPhotoOperationFailure(error, 'account deletion');
+        this.logPhotoOperationFailure(error, 'account_deletion');
       }
     }
 
@@ -218,7 +219,7 @@ export class PhotosService {
     }
 
     if (!PROFILE_PHOTO_KEY_PATTERN.test(objectKey)) {
-      this.logger.warn('Refused to sign an invalid profile photo key');
+      this.logger.warn('photo_signing_invalid_key');
       return null;
     }
 
@@ -252,7 +253,7 @@ export class PhotosService {
     }
   }
 
-  private throwStorageUnavailable(error: unknown, operation: string): never {
+  private throwStorageUnavailable(error: unknown, operation: PhotoStorageOperation): never {
     this.logPhotoOperationFailure(error, operation);
     throw apiError(
       503,
@@ -261,15 +262,17 @@ export class PhotosService {
     );
   }
 
-  private logPhotoOperationFailure(error: unknown, operation: string): void {
+  private logPhotoOperationFailure(error: unknown, operation: PhotoStorageOperation): void {
     if (error instanceof ObjectStorageUnavailableError) {
-      this.logger.warn(`Photo storage ${operation} failed`);
+      this.logger.warn(formatLogEvent('photo_storage_failed', { operation }));
       return;
     }
 
-    this.logger.error(`Unexpected photo ${operation} failure`);
+    this.logger.error(formatErrorEvent('photo_storage_unexpected_failure', error, { operation }));
   }
 }
+
+type PhotoStorageOperation = 'account_deletion' | 'sign' | 'upload';
 
 function uploadRequestHash(upload: UploadedPhoto): Buffer {
   const hash = createHash('sha256');

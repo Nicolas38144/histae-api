@@ -16,6 +16,7 @@ import { MaintenanceTrackerService } from '../operations/maintenance-tracker.ser
 import { NotificationPushService } from '../mobile/notification-push.service';
 import { PushDeliveryError } from '../mobile/push.service';
 import { ErasureService, ErasureStepError } from '../privacy/erasure.service';
+import { formatLogEvent } from '../common/logging/safe-logging';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -120,9 +121,10 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       if (retry === 'pending') result.retried += 1;
       if (retry === 'dead_letter') {
         result.deadLettered += 1;
-        this.logger.error(
-          `Outbox event ${event.id} (${event.eventType}) moved to dead letter`,
-        );
+        this.logger.error(formatLogEvent('outbox_event_dead_lettered', {
+          event_id: event.id,
+          event_type: event.eventType,
+        }));
       }
     }
   }

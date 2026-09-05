@@ -6,7 +6,8 @@ import { ApiError } from '../api-error';
 import type { ConfigService } from '../../config/config.service';
 import type { RateLimitService } from '../../ratelimit/rate-limit.service';
 import type { OperationalMetricsService } from '../../operations/operational-metrics.service';
-import { requestPath } from './request-path';
+import { formatLogEvent } from '../logging/safe-logging';
+import { requestPath, requestRoute } from './request-path';
 
 type HttpRuntimeConfig = Pick<ConfigService, 'env' | 'rateLimit'>;
 
@@ -46,9 +47,15 @@ export function registerHttpLifecycle(
       reply.statusCode,
       durationMs,
     );
-    const details = `${request.method} ${requestPath(request.url)} ${reply.statusCode} request_id=${request.id} duration_ms=${durationMs.toFixed(1)}`;
-    if (reply.statusCode >= 500) logger.error(details);
-    else if (reply.statusCode >= 400) logger.warn(details);
+    const fields = {
+      method: request.method,
+      route: requestRoute(request),
+      status: reply.statusCode,
+      request_id: request.id,
+      duration_ms: Math.round(durationMs * 10) / 10,
+    };
+    if (reply.statusCode >= 500) logger.error(formatLogEvent('http_request_failed', fields));
+    else if (reply.statusCode >= 400) logger.warn(formatLogEvent('http_request_failed', fields));
   });
 }
 

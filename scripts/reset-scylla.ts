@@ -1,5 +1,6 @@
 import { ConfigService } from '../src/config/config.service';
 import { createScyllaClient } from '../src/scylla/scylla.client';
+import { writeCliFailure } from './cli-output';
 
 const DEVELOPMENT_KEYSPACE = 'histae_discovery';
 const APPLICATION_TABLES = ['swipes_by_actor_bucket', 'swipes_by_target_bucket'] as const;
@@ -57,7 +58,7 @@ export function assertResetAllowed(input: ResetSafetyInput): void {
 
 if (require.main === module) {
   void resetScylla().catch((error: unknown) => {
-    console.error('ScyllaDB reset failed:', error);
+    writeCliFailure('scylla_reset_failed', error);
     process.exitCode = 1;
   });
 }

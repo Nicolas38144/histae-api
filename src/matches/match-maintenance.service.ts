@@ -4,6 +4,7 @@ import { ConfigService } from '../config/config.service';
 import type { MaintenanceResult } from './matches.models';
 import { MatchMaintenanceRepository } from './match-maintenance.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
+import { formatErrorEvent } from '../common/logging/safe-logging';
 
 const HOUR = 60 * 60 * 1_000;
 
@@ -41,7 +42,7 @@ export class MatchMaintenanceService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.runOnce();
     } catch (error) {
-      this.logger.error('Match maintenance failed', error instanceof Error ? error.stack : undefined);
+      this.logger.error(formatErrorEvent('match_maintenance_failed', error));
     }
   }
 }

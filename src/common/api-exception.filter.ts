@@ -2,7 +2,8 @@ import type { ArgumentsHost, ExceptionFilter} from '@nestjs/common';
 import { Catch, HttpException, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError } from './api-error';
-import { requestPath } from './http/request-path';
+import { requestRoute } from './http/request-path';
+import { formatErrorEvent } from './logging/safe-logging';
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -47,9 +48,11 @@ export class ApiExceptionFilter implements ExceptionFilter {
   }
 
   private logException(exception: unknown, request: FastifyRequest): void {
-    const context = `${request.method} ${requestPath(request.url)} request_id=${request.id}`;
-    if (exception instanceof Error) this.logger.error(context, exception.stack);
-    else this.logger.error(`${context} non_error_exception=${String(exception)}`);
+    this.logger.error(formatErrorEvent('http_exception', exception, {
+      method: request.method,
+      route: requestRoute(request),
+      request_id: request.id,
+    }));
   }
 }
 

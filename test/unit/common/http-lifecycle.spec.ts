@@ -67,6 +67,23 @@ describe('HTTP lifecycle security', () => {
     expect(metrics.recordHttp).toHaveBeenCalledWith('GET', '/api/users/:id', 200, expect.any(Number));
     await app.close();
   });
+
+  it('logs the route template without concrete path or query values', async () => {
+    const app = Fastify();
+    const logger = { error: jest.fn(), warn: jest.fn() };
+    registerHttpLifecycle(app, limits(), config(), undefined, logger as never);
+    app.get('/api/admin/users/:id', async (_request, reply) => reply.status(503).send());
+
+    await app.inject({
+      method: 'GET',
+      url: '/api/admin/users/private-user-id?phone=%2B33600000000&token=private-token',
+    });
+
+    const output = String(logger.error.mock.calls[0]?.[0]);
+    expect(output).toContain('route=/api/admin/users/:id');
+    expect(output).not.toMatch(/private-user-id|33600000000|private-token|phone|token/);
+    await app.close();
+  });
 });
 
 function limits(enforce = jest.fn().mockResolvedValue(undefined)): never {

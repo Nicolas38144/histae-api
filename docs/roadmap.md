@@ -1,6 +1,6 @@
 # Histae API — feuille de route
 
-État au 4 septembre 2026.
+État au 5 septembre 2026.
 
 Ce document contient uniquement les travaux encore ouverts et leurs critères de fin. L’état fonctionnel courant
 est dans [resume.md](../resume.md), les contrats dans [routes.md](../routes.md) et les procédures de validation
@@ -14,10 +14,11 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R02 | Effacement de compte asynchrone, reprenable et visible dans le dashboard |
 | R03 | Tests de concurrence et de coupure locale, plus correctif du pool Scylla |
 | R04 | Suivi Sweego, callbacks signés et traitement des issues incertaines |
+| R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
 | PostgreSQL | Baseline unique, 44 tables sans `ALTER TABLE`, reset local effectué sans conservation des anciennes données |
 
-Dernière validation : lint, typecheck, build, 537 tests autonomes et 185 intégrations locales, soit 722 tests dans
-87 suites. Le second `db:migrate` après reset n’a appliqué aucun changement. Ce résultat ne couvre ni fournisseur
+Dernière validation : lint, typecheck, build, 553 tests autonomes et 185 intégrations locales, soit 738 tests dans
+89 suites. Le second `db:migrate` après reset n’a appliqué aucun changement. Ce résultat ne couvre ni fournisseur
 réel, ni restauration, ni charge, ni pentest indépendant.
 
 ## Priorités
@@ -26,7 +27,6 @@ réel, ni restauration, ni charge, ni pentest indépendant.
 | --- | --- | --- | --- |
 | R05 | Réconcilier Stripe et ses échecs persistants | P1 | API, dashboard éventuel |
 | R06 | Borner les traitements et les exports | P2 | API |
-| R07 | Réduire les données exposées dans les logs | P1 avant production | API |
 | R08 | Raccorder les métriques à des alertes | P1 avant production | API, exploitation |
 | R09 | Calibrer la modération et organiser les recours | P1 avant ouverture | API, dashboard, produit |
 | R10 | Tester sauvegarde, restauration et déploiement | P1 avant production | Infrastructure |
@@ -59,17 +59,6 @@ ni doublon d’effet.
 - [ ] Mesurer volumes, mémoire, durée et verrouillage avant de fixer les tailles de lots.
 
 Terminé lorsque chaque traitement possède une borne, une progression, une reprise et un test de volume représentatif.
-
-<a id="r07-logs"></a>
-## R07 — Minimisation des logs
-
-- [ ] Inventorier tous les logs et supprimer téléphone, token, URL signée, payload fournisseur et motif sensible.
-- [ ] Encadrer les logs directs qui ne passent pas par le logger HTTP central.
-- [ ] Définir niveau, destination, durée et accès pour chaque environnement.
-- [ ] Ajouter des tests empêchant la réintroduction de valeurs sensibles dans les erreurs et logs.
-
-Terminé lorsque des parcours réels et simulés montrent uniquement identifiants techniques nécessaires et codes
-normalisés.
 
 <a id="r08-alertes"></a>
 ## R08 — Alertes et supervision
@@ -141,7 +130,7 @@ les tests et la documentation concernés. Voir [politique de conservation](reten
 
 ## Ordre conseillé
 
-1. R05 et R07 : risques métier et de confidentialité directement actionnables.
+1. R05 : risque métier directement actionnable.
 2. R06 et R08 : capacité et exploitation avant montée en charge.
 3. R09 à R12 : préparation complète avant ouverture publique.
 4. R13 : à mener en parallèle avec les responsables produit et juridiques.

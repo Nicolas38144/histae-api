@@ -4,6 +4,7 @@ import { ConfigService } from '../config/config.service';
 import type { PrivacyMaintenanceResult } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
 import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
+import { formatErrorEvent, formatLogEvent } from '../common/logging/safe-logging';
 
 const DAY = 24 * 60 * 60 * 1_000;
 const BATCH_SIZE = 1_000;
@@ -47,7 +48,7 @@ export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy 
       totals = merge(totals, result);
       if (Math.max(...Object.values(result)) < BATCH_SIZE) return totals;
     }
-    this.logger.warn(`Privacy maintenance stopped after ${MAX_BATCHES_PER_RUN} full batches.`);
+    this.logger.warn(formatLogEvent('privacy_maintenance_batch_limit', { batches: MAX_BATCHES_PER_RUN }));
     return totals;
   }
 
@@ -55,7 +56,7 @@ export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy 
     try {
       await this.runOnce();
     } catch (error) {
-      this.logger.error('Privacy maintenance failed', error instanceof Error ? error.stack : undefined);
+      this.logger.error(formatErrorEvent('privacy_maintenance_failed', error));
     }
   }
 }

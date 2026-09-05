@@ -11,6 +11,7 @@ import { applicationConfig } from './config/config.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 import { MAX_PHOTO_UPLOAD_BYTES } from './photos/photo-processor.service';
 import { OperationalMetricsService } from './operations/operational-metrics.service';
+import { formatErrorEvent, formatLogEvent } from './common/logging/safe-logging';
 
 async function bootstrap(): Promise<void> {
   // Build config before Fastify so trust-proxy and the 1 MiB body cap apply to every route.
@@ -42,12 +43,11 @@ async function bootstrap(): Promise<void> {
   const fastify = app.getHttpAdapter().getInstance();
   registerHttpLifecycle(fastify, limits, config, metrics, logger);
   await app.listen(config.port, '0.0.0.0');
-  logger.log(`Histae API listening on port ${config.port} (${config.env})`);
+  logger.log(formatLogEvent('api_started', { port: config.port, environment: config.env }));
 }
 
 void bootstrap().catch((error: unknown) => {
   const logger = new Logger('Bootstrap');
-  if (error instanceof Error) logger.error('Histae API failed to start.', error.stack);
-  else logger.error(`Histae API failed to start: ${String(error)}`);
+  logger.error(formatErrorEvent('api_bootstrap_failed', error));
   process.exitCode = 1;
 });

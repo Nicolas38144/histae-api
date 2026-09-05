@@ -45,7 +45,7 @@ export class PhotoModerationService {
         nsfwScore: analysis.nsfw_score,
       };
     } catch {
-      this.logger.warn('Photo moderation analysis failed; manual review required');
+      this.logger.warn('photo_moderation_analysis_failed');
       return unavailableDecision();
     }
   }

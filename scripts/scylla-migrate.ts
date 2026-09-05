@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ConfigService } from '../src/config/config.service';
 import { createScyllaClient } from '../src/scylla/scylla.client';
+import { writeCliFailure } from './cli-output';
 
 const migrations = [{ version: '001_discovery.cql', filename: '001_discovery.cql' }] as const;
 
@@ -56,6 +57,6 @@ function statements(sql: string): string[] {
 }
 
 void migrate().catch((error: unknown) => {
-  console.error('ScyllaDB migration failed:', error);
+  writeCliFailure('scylla_migration_failed', error);
   process.exitCode = 1;
 });

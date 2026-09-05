@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
 import { loadMigration, migrations } from './migration-catalog';
+import { writeCliFailure } from './cli-output';
 
 const DEVELOPMENT_DATABASE = 'histae-dev';
 
@@ -23,7 +24,7 @@ async function reset(): Promise<void> {
   const pool = new Pool(config.postgres);
   try {
     await pool.query('SELECT 1');
-    console.warn(`Resetting PostgreSQL database ${JSON.stringify(config.postgres.database)} on ${JSON.stringify(config.postgres.host)}.`);
+    console.warn('Resetting the protected local PostgreSQL development database.');
 
     const dropSql = await readSql('drop_postgres.sql');
     const migrationFiles = await Promise.all(migrations.map(loadMigration));
@@ -75,7 +76,7 @@ export function assertResetAllowed(input: ResetSafetyInput): void {
 
 if (require.main === module) {
   void reset().catch((error: unknown) => {
-    console.error('PostgreSQL reset failed:', error);
+    writeCliFailure('postgres_reset_failed', error);
     process.exitCode = 1;
   });
 }

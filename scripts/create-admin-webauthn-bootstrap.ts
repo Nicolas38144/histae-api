@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { isUUID } from 'class-validator';
 import { ConfigService } from '../src/config/config.service';
 import { DatabaseService } from '../src/database/database.service';
+import { writeCliFailure } from './cli-output';
 
 async function main(): Promise<void> {
   const userId = process.argv[2]?.trim();
@@ -47,6 +48,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : 'administrator bootstrap failed'}\n`);
+  writeCliFailure('admin_webauthn_bootstrap_failed', error);
   process.exitCode = 1;
 });

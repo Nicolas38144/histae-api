@@ -1,6 +1,6 @@
 # Histae API — état du projet
 
-Mise à jour : 4 septembre 2026.
+Mise à jour : 5 septembre 2026.
 
 Ce document permet de reprendre rapidement le contexte technique et métier. Il ne duplique ni les routes
 ([routes.md](routes.md)), ni les procédures de test ([test.md](test.md)), ni le backlog
@@ -91,6 +91,10 @@ Les DTO rejettent les champs inconnus. Les erreurs suivent `{ "error": { "code",
 Les réponses portent les en-têtes défensifs centralisés et un identifiant de requête. Les limites globales et
 sensibles utilisent Redis en production et échouent fermement si la protection distribuée est indisponible.
 
+Les logs ne contiennent ni message/stack d’exception, ni chemin HTTP concret, ni contenu, secret ou réponse
+fournisseur. Ils utilisent des événements et codes normalisés ; rétention et accès sont définis dans
+[docs/logging-policy.md](docs/logging-policy.md).
+
 ## Règles métier structurantes
 
 ### Consentements et profil
@@ -147,8 +151,8 @@ La prochaine évolution persistante utilisera `015_<description>`. Voir
 maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
 dashboard sont agrégées, bornées et sans identifiant utilisateur.
 
-Dernière validation complète : lint, typecheck, build, 537 tests autonomes et 185 intégrations locales, soit
-722 tests dans 87 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète : lint, typecheck, build, 553 tests autonomes et 185 intégrations locales, soit
+738 tests dans 89 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 

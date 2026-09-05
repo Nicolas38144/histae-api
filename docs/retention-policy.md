@@ -1,6 +1,6 @@
 # Politique de conservation technique
 
-État technique vérifié le 4 septembre 2026. Propriétaire pressenti : responsable de traitement Histae.
+État technique vérifié le 5 septembre 2026. Propriétaire pressenti : responsable de traitement Histae.
 Approbateur requis : juriste ou DPO mandaté.
 
 Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue pas un avis juridique. Toute mise en production exige une validation documentée et une valeur `LEGAL_REVIEW_REFERENCE` correspondant à cette validation.
@@ -21,6 +21,7 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 | Credentials WebAuthn admin | Authentification forte et récupération | Vie du compte administratif ou révocation explicite | Clé publique, compteur, transports et métadonnées minimales seulement ; les clés privées restent dans l’authenticator. La dernière passkey active et celle de la session courante ne sont pas révocables |
 | Sessions administrateur | Session du dashboard | 30 minutes d’inactivité, 8 heures absolues par défaut ; session révoquée conservée au plus 24 heures | Jeton aléatoire de 256 bits stocké uniquement sous forme de hash SHA-256 ; cookie `HttpOnly`; purge par lots après expiration absolue ou délai de révocation |
 | Journal d’authentification administrateur | Traçabilité de sécurité | 1 an glissant | Événements sans secret ni clé publique ; suppression par lots |
+| Logs techniques de processus | Diagnostic et corrélation d’incident | Développement/test : 7 jours maximum si conservés ; production : 30 jours glissants, sauf gel d’incident approuvé | stdout/stderr uniquement côté application ; messages/stacks/causes, données utilisateur, secrets, contenus, URLs signées et payloads fournisseur interdits. Accès production limité à l’exploitation d’astreinte et à la sécurité |
 | Notifications | Information de l’utilisateur | Jusqu’à `expires_at` (90 jours par défaut dans le schéma) | Suppression par lots et nettoyage final à la désactivation du compte, y compris pour une écriture concurrente ; clé de déduplication hashée, référence de facture/abonnement et fin d’essai internes pour écarter les alertes obsolètes, aucune copie de texte privé |
 | Références de livraison push | Reprise indépendante des envois par appareil | Jusqu’à la suppression de la notification, de l’appareil ou de l’événement outbox résolu, selon le premier déclencheur | Cascade PostgreSQL sur ces trois références ; UUID techniques et session ciblée uniquement, aucun token FCM recopié. Une référence disparue rend la tâche inopérante, même après relance administrative |
 | Preuves de choix juridiques | Preuve des choix et du consentement explicite | Accord actif pendant le traitement ; événement retiré conservé 5 ans après retrait | IP et user-agent supprimés lors de l’effacement du compte ; événement supprimé par lots après 5 ans |

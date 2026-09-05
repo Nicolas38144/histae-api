@@ -13,6 +13,7 @@ Les sources de référence à consulter avant une modification importante sont :
 - `routes.md` pour le contrat HTTP existant ;
 - `test.md` pour les commandes, prérequis, règles d’isolation et limites de validation ; les scénarios détaillés restent dans les tests, les bilans de lots dans la roadmap ;
 - `docs/retention-policy.md` et `docs/legal-release-checklist.md` pour la rétention et les contraintes juridiques ;
+- `docs/logging-policy.md` pour les données autorisées, niveaux et règles d’exploitation des logs ;
 - `.env.example` pour la configuration prise en charge.
 
 Si le code et la documentation divergent, vérifier le comportement par les tests et signaler explicitement la divergence. Toute modification de contrat, d'architecture, de commande ou de couverture doit mettre à jour les documents concernés dans le même changement.
@@ -93,6 +94,10 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Préserver les guards SQL contre les écritures tardives et les verrous de session `AccountActivityService` des uploads, Checkout et swipes. Normaliser/trier les UUID ; ce pool dédié ajoute quatre connexions maximum et exige un pooling de session. Les lots d’effacement sont bornés et les checkpoints vérifient la propriété du worker. Les intentions Stripe inconnues de plus de 23 heures exigent une réconciliation, jamais un nouveau POST aveugle. Voir `docs/account-erasure.md`.
 - Ne pas modifier les durées de rétention sans mettre à jour la politique, les migrations, la maintenance et les tests correspondants.
 - Ne pas exposer de secret, `.env`, clé fournisseur, token FCM, téléphone ou justification sensible dans les logs ou les réponses.
+- Les logs utilisent un code d’événement stable et les formateurs de `common/logging/safe-logging.ts`. Ne jamais
+  journaliser message, stack ou cause d’exception, chemin HTTP concret, query string ou champ refusé par la
+  politique. Les erreurs CLI passent par `scripts/cli-output.ts`; la sortie volontaire du bootstrap WebAuthn est
+  un secret à usage unique, pas un log. Voir `docs/logging-policy.md`.
 
 ## Base de données et migrations
 

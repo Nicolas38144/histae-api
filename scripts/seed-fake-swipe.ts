@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Pool } from 'pg';
 import { ConfigService } from '../src/config/config.service';
+import { writeCliFailure } from './cli-output';
 
 type SeedConfig = {
   apiUrl: string;
@@ -98,7 +99,7 @@ async function seed(): Promise<void> {
   const client = new ApiClient(config.apiUrl, metrics);
   const startedAt = performance.now();
 
-  console.log(`Target: ${config.apiUrl} | database: ${config.app.postgres.database} | concurrency: ${config.concurrency}`);
+  console.log(`Target: protected local development services | concurrency: ${config.concurrency}`);
   const users = await loadSeedUsers(config.app);
   console.log(`Loaded ${users.length} deterministic PostgreSQL users.`);
 
@@ -323,7 +324,7 @@ function errorMessage(error: unknown): string {
 
 if (require.main === module) {
   void seed().catch((error: unknown) => {
-    console.error('Fake swipe seed failed:', error);
+    writeCliFailure('fake_swipe_seed_failed', error);
     process.exitCode = 1;
   });
 }

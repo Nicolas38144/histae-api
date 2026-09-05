@@ -56,6 +56,8 @@ leur progression et les reprises, sans piloter directement les étapes internes.
   conservant la sérialisation de la relation Customer. Voir [effacement reprenable](account-erasure.md).
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.
+- Les contrôleurs et services ne sérialisent jamais directement une exception dans les logs. Les événements et
+  codes passent par `common/logging/safe-logging.ts`; les règles complètes sont dans [la politique](logging-policy.md).
 
 ## Découpage volontairement limité
 
