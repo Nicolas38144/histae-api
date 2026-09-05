@@ -74,7 +74,7 @@ Sauf indication contraire, `limit` vaut 20, entre 1 et 100. Les collections pagi
 
 `offset` est déprécié ; seules les routes qui le mentionnent l’acceptent. Avec un curseur, il doit être nul. Les curseurs évitent les décalages d’offset, mais **ne figent pas un instantané** : un nouveau message, un changement de statut ou de position peut modifier l’ordre ou l’éligibilité pendant le parcours. Dédupliquer les identifiants côté client et rafraîchir la liste si nécessaire.
 
-Les listes non paginées ne doivent pas recevoir arbitrairement `limit` ou `cursor`. Les listes administratives RGPD et journaux d’accès restent plafonnées à 500 résultats, sans curseur.
+Les listes non paginées ne doivent pas recevoir arbitrairement `limit` ou `cursor`.
 
 ### Idempotence et réponses perdues
 
@@ -315,7 +315,7 @@ Onboarding incomplet accepté pour les jetons/effacement, demandes RGPD et expor
 | DELETE | `/api/users/me` | `{ confirmation_token }` → `202 { request_id, status: "in_progress" }`. |
 | POST | `/api/users/me/data-subject-requests` | `{ type }` → `201` avec la demande. |
 | GET | `/api/users/me/data-subject-requests` | `200 { requests: [...] }`. |
-| GET | `/api/users/me/data-export` | `200` avec l’export portable du demandeur. |
+| GET | `/api/users/me/data-export` | `200 application/json` en pièce jointe avec l’export portable du demandeur. |
 | GET | `/api/users/me/blocks` | `200 { blocks: [...] }`, toujours `photo: null`. |
 | POST | `/api/users/me/blocks/:userId` | UUID → `204`, clôt les matchs entre les comptes et empêche leur recréation. |
 | DELETE | `/api/users/me/blocks/:userId` | UUID → `204`. |
@@ -332,7 +332,7 @@ Onboarding incomplet accepté pour les jetons/effacement, demandes RGPD et expor
 
 Le `202` désactive immédiatement le compte ; fermer la session mobile. **Ne pas afficher que toutes les données ont déjà été supprimées.** Le nettoyage continue en arrière-plan malgré une panne externe. Jeton invalide/expiré : `401 invalid_or_expired_deletion_token`. Si la réponse est perdue après acceptation, le Bearer devient invalide : un retry n’est pas une route publique de suivi et ne rend pas forcément le même `202`. Voir [effacement et limites de reprise](docs/account-erasure.md).
 
-**Droits.** Types de demande : `access | erasure | portability | rectification | restriction | objection` ; une seule demande ouverte par type/utilisateur. L’export contient profil/réponses, abonnement/factures liés, métadonnées des sessions sans secrets et uniquement les décisions de swipe sortantes. Il n’expose jamais les décisions entrantes d’autrui. Limite 5/h/utilisateur : `429 data_export_rate_limit_exceeded` ; source indisponible : `503 data_export_unavailable`. L’accès est journalisé.
+**Droits.** Types de demande : `access | erasure | portability | rectification | restriction | objection` ; une seule demande ouverte par type/utilisateur. L’export contient profil/réponses, abonnement/factures liés, métadonnées des sessions sans secrets et uniquement les décisions de swipe sortantes. Il n’expose jamais les décisions entrantes d’autrui. Le JSON est préparé par pages dans un fichier temporaire privé, transmis comme flux puis supprimé. Ses données PostgreSQL partagent un instantané `REPEATABLE READ` ; le bloc `consistency` documente séparément la fenêtre de lecture des partitions Scylla, sans prétendre à un instantané inter-stockages. Limite 5/h/utilisateur : `429 data_export_rate_limit_exceeded` ; export au-delà de la borne configurée : `413 data_export_too_large` ; toutes les places de préparation occupées : `503 data_export_busy` avec `Retry-After` ; source indisponible avant envoi : `503 data_export_unavailable`. L’accès réussi est journalisé.
 
 **Signalements.** `reason = inappropriate_content | fake_profile | harassment | spam | other` ; description au plus 2 000 octets ; `match_id` et description peuvent être nuls. Auto-signalement interdit, cible existante et match éventuel reliant les deux comptes. Limite 5/h/utilisateur.
 
@@ -388,9 +388,9 @@ Erreurs : `invalid_or_expired_admin_bootstrap`, `invalid_or_expired_webauthn_cha
 | GET | `/api/admin/matches/:id/messages` | UUID match + `reason, limit, cursor` (offset déprécié) → conversation auditée. |
 | GET | `/api/admin/reports` | `status?, limit, cursor` (offset déprécié) → `200 { reports, next_cursor }`. |
 | PATCH | `/api/admin/reports/:id` | `{ status }` → `200 { message: "report updated" }` ; `404 report_not_found`. |
-| GET | `/api/admin/data-subject-requests` | `status?` → liste plafonnée à 500, avec progression `erasure` éventuelle. |
+| GET | `/api/admin/data-subject-requests` | `status?, limit, cursor` (offset déprécié) → `200 { requests, next_cursor }`, avec progression `erasure` éventuelle. |
 | PATCH | `/api/admin/data-subject-requests/:id` | **Récente** ; `{ status, notes? }` → transition contrôlée et auditée. |
-| GET | `/api/admin/data-access-logs` | Query `user_id` → `200 { logs: [...] }`, au plus 500. |
+| GET | `/api/admin/data-access-logs` | `user_id, limit, cursor` (offset déprécié) → `200 { logs, next_cursor }`. |
 
 Recherche utilisateurs : prénom ou UUID exact ; `status = active | banned`, `role = user | admin | superadmin`. La liste ne signe aucune photo (`photo: null`). Le détail expose compte, profil, préférences, traits, consentements et fraîcheur de présence ; jamais téléphone, empreinte ou coordonnées précises. Les consultations sensibles requièrent un motif de 3–500 caractères ; une conversation est auditée pour les deux participants.
 
@@ -436,7 +436,7 @@ La décision est `approved | rejected`, avec la `version` lue au préalable. Une
 
 `revenue_period = last_7_days | last_30_days | month_to_date | previous_month | year_to_date | all_time`, défaut `month_to_date`. Le revenu est une estimation : abonnements Premium mis à jour sur la période × tarif mensuel actuel ; **ni encaissements ni bénéfice comptable**.
 
-`operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `operations.outbox.billing_reconciliation` fournit les mêmes états utiles sans `discarded`. `completed` signifie tâche acquittée encore conservée, pas réception par un terminal ni validation d’un paiement.
+`operations` expose latences/compteurs HTTP et `401/403/429/5xx`, mémoire/event loop, résultats des dépendances, pool, outbox et maintenances. Les mesures du processus repartent à zéro au redémarrage ; les états outbox/maintenance sont persistants. Chaque maintenance fournit notamment `processed_count, batch_count, duration_ms, work_remaining` ; ce dernier signale qu’une passe a consommé son budget borné et doit être reprise. `operations.outbox.notification_push` détaille `pending, processing, completed, dead_letter, discarded, oldest_pending_at` ; `operations.outbox.billing_reconciliation` fournit les mêmes états utiles sans `discarded`. `completed` signifie tâche acquittée encore conservée, pas réception par un terminal ni validation d’un paiement. Voir [volumes et exports](docs/volume-and-export.md).
 
 `operations.sms_delivery` expose `states` (`pending, accepted, sent, failed, unknown`), `awaiting_callback`,
 `oldest_unresolved_age_seconds`, `average_acceptance_ms`, `average_sent_callback_ms`, `average_failure_ms`,

@@ -173,7 +173,7 @@ describe('PostgreSQL resumable account erasure', () => {
     expect(await state()).toMatchObject({ step: 'completed', request_status: 'completed', event_status: 'completed' });
     expect((await pool.query('SELECT * FROM user_profile WHERE user_id = $1', [owner])).rows).toHaveLength(0);
     expect((await pool.query("SELECT * FROM data_access_log WHERE accessed_user_id = $1 AND action = 'system_anonymize'", [owner])).rowCount).toBe(1);
-    expect((await privacy.requestsForAdmin(undefined)).find((row) => row.id === requestId)?.erasure?.step).toBe('completed');
+    expect((await privacy.requestsForAdmin(undefined, 100, 0)).find((row) => row.id === requestId)?.erasure?.step).toBe('completed');
   }, 30_000);
 
   it.each(['stripe', 'photos', 'scylla'] as const)('retries %s after an effect succeeds but its checkpoint is lost', async (step) => {

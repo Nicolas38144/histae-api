@@ -12,8 +12,6 @@ import { DiscoveryStore, uuidBucket } from '../../src/discovery/discovery.store'
 import { MatchesRepository } from '../../src/matches/matches.repository';
 import { MatchMessageRepository } from '../../src/matches/match-message.repository';
 import { MatchesService } from '../../src/matches/matches.service';
-import { PrivacyRepository } from '../../src/privacy/privacy.repository';
-import { PrivacyService } from '../../src/privacy/privacy.service';
 import { createScyllaClient } from '../../src/scylla/scylla.client';
 import { ScyllaUnavailableError } from '../../src/scylla/scylla.service';
 
@@ -60,7 +58,6 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
   let pool: Pool;
   let store: DiscoveryStore;
   let discovery: DiscoveryService;
-  let privacy: PrivacyService;
   let createdUserIds: string[];
 
   beforeAll(async () => {
@@ -78,7 +75,6 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
       new MatchesService(new MatchesRepository(database as never), new MatchMessageRepository(database as never), photos as never),
       legalConfig() as never,
     );
-    privacy = new PrivacyService(new PrivacyRepository(database as never), store, photos as never);
   });
 
   beforeEach(async () => {
@@ -206,13 +202,13 @@ describe('Discovery with real ScyllaDB and PostgreSQL development stores', () =>
     await store.recordSwipe(exportedId, outgoingTargetId, 'pass');
     await store.recordSwipe(incomingActorId, exportedId, 'like');
 
-    const exported = await privacy.exportUserData(exportedId);
-    const actions = exported.discovery_actions as { outgoing: Array<{ actor_id: string; target_id: string; decision: string }> };
+    const outgoing: Array<{ actor_id: string; target_id: string; decision: string }> = [];
+    await store.forEachOwnAction(exportedId, (action) => { outgoing.push(action); }, 1);
 
-    expect(actions.outgoing).toEqual([
+    expect(outgoing).toEqual([
       expect.objectContaining({ actor_id: exportedId, target_id: outgoingTargetId, decision: 'pass' }),
     ]);
-    expect(JSON.stringify(actions)).not.toContain(incomingActorId);
+    expect(JSON.stringify(outgoing)).not.toContain(incomingActorId);
   });
 
   it('drains a full erasure partition in bounded batches without losing mirror references', async () => {

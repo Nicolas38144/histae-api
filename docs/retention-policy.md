@@ -30,6 +30,7 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 | Demandes d’exercice des droits | Traitement et preuve de la demande | 5 ans après clôture ou rejet | Suppression par lots |
 | Progression d’effacement (`account_erasure`) | Reprise et preuve de terminaison | Même rétention que la DSR associée : suppression en cascade, 5 ans après clôture | Étape, progression et dates uniquement ; aucune réponse fournisseur. Une demande inachevée n’est pas purgée comme terminée. `account.erase` suit la rétention outbox et ne peut jamais être abandonné |
 | Journal des accès et actions RGPD/modération | Traçabilité et sécurité | 1 an glissant | Suppression par lots |
+| Fichier temporaire d’export | Réponse au droit d’accès sans assembler les collections en mémoire | Durée de la réponse HTTP uniquement | Fichier privé, taille bornée, suppression à la fermeture/erreur du flux ; la politique temporaire de l’hôte élimine les reliquats après arrêt brutal |
 | Empreinte d’un compte banni effacé | Empêcher le contournement immédiat d’une mesure de sécurité | 3 ans après effacement, seulement si le compte était banni | Empreinte HMAC isolée dans `account_tombstone`, puis suppression par lots |
 | Compte technique anonymisé | Intégrité référentielle pendant les délais ci-dessus | Sans téléphone, profil, préférences, position, tokens ni appareil ; les relations résiduelles sont purgées selon leur propre durée | UUID pseudonyme conservé tant qu’une relation légitime le référence |
 
@@ -81,10 +82,10 @@ communique que les décisions prises par cet utilisateur, jamais l’identité n
 
 ## Exécution
 
-Le seuil de purge de l’outbox résolue reste de 7 jours. Le worker continu ne purge actuellement que 50 événements
-par heure : le délai effectif peut dépasser ce seuil si le flux excède sa capacité. La
-[roadmap](roadmap.md#r06-volumes) suit
-ce défaut de débit, sans décision de prolonger la rétention.
+Le seuil de purge de l’outbox résolue reste de 7 jours. Le worker purge chaque heure un nombre configurable de
+lots bornés, soit jusqu’à 10 000 événements avec les valeurs par défaut. `work_remaining` signale un budget épuisé ;
+la passe suivante reprend depuis les lignes persistantes. Cette capacité n’est pas une promesse de délai si le flux
+résolu dépasse durablement le débit configuré.
 
 En développement, `MAINTENANCE_MODE=api` lance la maintenance et le consommateur outbox dans l’API. En production,
 utilisez `MAINTENANCE_MODE=disabled` pour l’API, exécutez périodiquement

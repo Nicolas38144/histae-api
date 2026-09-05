@@ -1,14 +1,15 @@
-import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, HttpStatus, Patch, Post, Req, StreamableFile, UseGuards } from '@nestjs/common';
 import { JwtActiveGuard, userId } from '../auth/auth.guard';
 import { AdminSessionGuard, RecentAdminAuthenticationGuard } from '../admin-auth/admin-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { AllowIncompleteOnboarding } from '../auth/onboarding.decorator';
 import { ValidatedBody, ValidatedParams, ValidatedQuery } from '../common/http/validated-request.decorator';
 import { CreateDataSubjectRequestDto, DataAccessLogQueryDto, ListDataSubjectRequestsDto, PrivacyRequestIdParamDto, UpdateDataSubjectRequestDto, UserIdParamDto } from './dto/privacy.dto';
-import type { BlockedUser, DataAccessLogRow, DataSubjectRequestRow, PortableUserData } from './privacy.models';
+import type { BlockedUser, DataAccessLogRow, DataSubjectRequestRow } from './privacy.models';
 import { PrivacyService } from './privacy.service';
 import { RateLimitService } from '../ratelimit/rate-limit.service';
 import { ConfigService } from '../config/config.service';
+import { DataExportService } from './data-export.service';
 
 @Controller('api')
 @UseGuards(JwtActiveGuard)
@@ -16,6 +17,7 @@ import { ConfigService } from '../config/config.service';
 export class PrivacyController {
   constructor(
     private readonly privacy: PrivacyService,
+    private readonly exports: DataExportService,
     private readonly limits: RateLimitService,
     private readonly config: ConfigService,
   ) {}
@@ -40,9 +42,9 @@ export class PrivacyController {
   @Get('users/me/data-export')
   @AllowIncompleteOnboarding()
 
-  async export(@Req() request: AuthenticatedRequest): Promise<PortableUserData> {
+  async export(@Req() request: AuthenticatedRequest): Promise<StreamableFile> {
     await this.limits.enforce('data-export', userId(request), this.config.rateLimit.dataExport, 'data_export_rate_limit_exceeded');
-    return this.privacy.exportUserData(userId(request));
+    return this.exports.prepare(userId(request));
   }
 
   @Get('users/me/blocks')
@@ -81,8 +83,14 @@ export class AdminPrivacyController {
   @Get('data-subject-requests')
   async requests(
     @ValidatedQuery({ code: 'invalid_data_request_query', message: 'The data subject request query is invalid.' }) query: ListDataSubjectRequestsDto,
-  ): Promise<{ requests: DataSubjectRequestRow[] }> {
-    return { requests: await this.privacy.requestsForAdmin(query.status) };
+  ): Promise<{ requests: DataSubjectRequestRow[]; next_cursor: string | null }> {
+    const page = await this.privacy.requestsForAdmin(
+      query.status,
+      query.limit,
+      query.offset,
+      query.cursor,
+    );
+    return { requests: page.items, next_cursor: page.next_cursor };
   }
 
   @Patch('data-subject-requests/:id')
@@ -99,7 +107,13 @@ export class AdminPrivacyController {
   @Get('data-access-logs')
   async logs(
     @ValidatedQuery({ code: 'invalid_data_access_query', message: 'The data access query is invalid.' }) query: DataAccessLogQueryDto,
-  ): Promise<{ logs: DataAccessLogRow[] }> {
-    return { logs: await this.privacy.accessLogs(query.user_id) };
+  ): Promise<{ logs: DataAccessLogRow[]; next_cursor: string | null }> {
+    const page = await this.privacy.accessLogs(
+      query.user_id,
+      query.limit,
+      query.offset,
+      query.cursor,
+    );
+    return { logs: page.items, next_cursor: page.next_cursor };
   }
 }

@@ -1,5 +1,6 @@
 
 import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 import type { DataRequestStatus, DataRequestType } from '../privacy.models';
 import { DATA_REQUEST_STATUSES, DATA_REQUEST_TYPES } from '../privacy.models';
 
@@ -9,7 +10,7 @@ export class CreateDataSubjectRequestDto {
   type!: DataRequestType;
 }
 
-export class ListDataSubjectRequestsDto {
+export class ListDataSubjectRequestsDto extends PaginationDto {
 
   @IsOptional()
   @IsIn([...DATA_REQUEST_STATUSES])
@@ -39,7 +40,7 @@ export class PrivacyRequestIdParamDto {
   id!: string;
 }
 
-export class DataAccessLogQueryDto {
+export class DataAccessLogQueryDto extends PaginationDto {
 
   @IsUUID('all')
   user_id!: string;

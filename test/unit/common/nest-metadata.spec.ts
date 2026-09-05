@@ -36,6 +36,8 @@ import { PrivacyMaintenanceService } from '../../../src/privacy/privacy-maintena
 import { AdminPrivacyController, PrivacyController } from '../../../src/privacy/privacy.controller';
 import { PrivacyRepository } from '../../../src/privacy/privacy.repository';
 import { PrivacyService } from '../../../src/privacy/privacy.service';
+import { DataExportRepository } from '../../../src/privacy/data-export.repository';
+import { DataExportService } from '../../../src/privacy/data-export.service';
 import { RateLimitService } from '../../../src/ratelimit/rate-limit.service';
 import { ReportsController } from '../../../src/reports/reports.controller';
 import { ReportsRepository } from '../../../src/reports/reports.repository';
@@ -90,6 +92,7 @@ const injectedClasses = [
   MatchesController, MatchesRepository, MatchMessageRepository, MatchMaintenanceRepository, MatchesService, MatchMaintenanceService,
   MobileController, MobileRepository, MobileService, RealtimeService, PushService, MobileDeliveryService,
   PrivacyController, PrivacyRepository, PrivacyService, PrivacyMaintenanceService,
+  DataExportRepository, DataExportService,
   AdminPrivacyController,
   TraitsController, TraitsRepository, TraitsService,
   ProfileQuestionsController, ProfileQuestionsRepository, ProfileQuestionsService,

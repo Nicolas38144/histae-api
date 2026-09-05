@@ -37,6 +37,8 @@ export type OutboxWorkerResult = {
   retried: number;
   deadLettered: number;
   purged: number;
+  purgeBatches: number;
+  workRemaining: boolean;
 };
 
 export type DeadLetterRow = {

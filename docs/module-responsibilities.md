@@ -11,7 +11,7 @@ Ce document fixe les frontières internes à préserver lors d’un refactor. Il
 | SMS | `SweegoSmsService` / `SweegoWebhookService` | POST borné sans retry / signature brute, validation et projection minimale du callback. |
 | Matchs | `MatchesRepository` | Création, listes et projections, révélation, continuation et quotas. |
 | Matchs | `MatchMessageRepository` | Pagination des messages, envoi idempotent et accusés de lecture. |
-| Matchs | `MatchMaintenanceRepository` | Élection transactionnelle du worker puis transitions et purge. Le timer et le suivi opérationnel restent dans `MatchMaintenanceService`. |
+| Matchs | `MatchMaintenanceRepository` | Élection par verrou de session, transactions bornées, nettoyage des enfants puis transitions/purge. Le timer, les budgets configurés et le suivi restent dans `MatchMaintenanceService`. |
 | Administration | `AdminRepository` | Recherche/détail des comptes, bannissement et accès audité aux conversations. |
 | Administration | `AdminMetricsRepository` | Agrégats de consultation et estimation de revenu, sans mutation métier. |
 | Administration | `AdminPhotoRepository` | Liste et remise en file des photos réconciliables, sans accès S3 ni signature d'URL. |
@@ -20,6 +20,7 @@ Ce document fixe les frontières internes à préserver lors d’un refactor. Il
 | Facturation | `BillingReconciliationService` / `BillingReconciliationRepository` | Lecture Stripe bornée et sélection métier / planification, projection optimiste et file admin minimale. |
 | RGPD | `erasure-enqueue.ts` | Acceptation durable et désactivation dans la transaction de l’appelant, sans réseau. |
 | RGPD | `ErasureRepository` / `ErasureService` | Checkpoints/finalisation transactionnels / enchaînement Stripe, photos, Scylla, PostgreSQL via l’outbox. |
+| RGPD | `DataExportRepository` / `DataExportService` | Pages PostgreSQL sous instantané / orchestration du fichier privé, lecture Scylla, limite de taille, réponse en flux et nettoyage. |
 | Concurrence | `AccountActivityService` | Verrous de session sur les écrivains externes et l’effacement, dans un pool dédié borné ; aucune transaction longue. |
 | Mobile | `notification-outbox.ts` | Notifications et tâches par appareil dans la transaction métier de l’appelant. |
 | Mobile | `NotificationPushRepository` / `NotificationPushService` | Éligibilité courante et métadonnées minimales avant envoi FCM. |
@@ -58,6 +59,9 @@ leur progression et les reprises, sans piloter directement les étapes internes.
   effectue un lot externe, puis enregistre sa progression avec contrôle du propriétaire outbox. Les écrivains
   locaux sont coordonnés par les triggers de la baseline ; les webhooks ignorent un compte désactivé en
   conservant la sérialisation de la relation Customer. Voir [effacement reprenable](account-erasure.md).
+- L’export garde la transaction PostgreSQL `REPEATABLE READ, READ ONLY` dans `DataExportRepository`; aucune signature
+  photo ni lecture Scylla n’est effectuée sous cette transaction. `DataExportService` ne transmet le fichier qu’après
+  sa préparation complète et publie explicitement les deux niveaux de cohérence. Voir [volumes et export](volume-and-export.md).
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.
 - Les contrôleurs et services ne sérialisent jamais directement une exception dans les logs. Les événements et

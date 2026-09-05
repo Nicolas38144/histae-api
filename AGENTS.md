@@ -14,6 +14,7 @@ Les sources de référence à consulter avant une modification importante sont :
 - `test.md` pour les commandes, prérequis, règles d’isolation et limites de validation ; les scénarios détaillés restent dans les tests, les bilans de lots dans la roadmap ;
 - `docs/retention-policy.md` et `docs/legal-release-checklist.md` pour la rétention et les contraintes juridiques ;
 - `docs/logging-policy.md` pour les données autorisées, niveaux et règles d’exploitation des logs ;
+- `docs/volume-and-export.md` pour les lots, leur progression et la cohérence de l’export ;
 - `.env.example` pour la configuration prise en charge.
 
 Si le code et la documentation divergent, vérifier le comportement par les tests et signaler explicitement la divergence. Toute modification de contrat, d'architecture, de commande ou de couverture doit mettre à jour les documents concernés dans le même changement.
@@ -67,6 +68,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Le sexe et les préférences exigent le consentement aux données sensibles ; la présence exige le consentement de localisation. Leur retrait doit déclencher l'effacement immédiat documenté.
 - Les écritures profil/préférences/présence doivent verrouiller le compte puis relire les versions requises des consentements dans la même transaction. Un précontrôle du service ne suffit pas face à un retrait concurrent.
 - Les transitions de match, la continuation, les quotas, l'expiration et l'envoi idempotent des messages doivent rester atomiques.
+- La maintenance des matchs conserve un verrou de leader au niveau session, mais valide chaque lot séparément. Nettoyer les messages et détacher les signalements par lots avant de supprimer le match ; ne pas réintroduire une cascade volumineuse dans la transaction du parent.
 - Lire l’horloge d’expiration après l’acquisition du verrou de match, dans le SELECT extérieur à la CTE matérialisée. Une attente de verrou ne doit pas prolonger la fenêtre ; une limite de continuation à zéro ne doit pas allouer le premier usage.
 - Une décision de swipe est immuable pendant sa rétention. Deux likes réciproques ne doivent créer qu'un match PostgreSQL, même en concurrence.
 - Le texte privé d'un message ne doit être ni persisté dans une notification mobile ni transmis à FCM.
@@ -80,6 +82,7 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - PostgreSQL ne conserve jamais une URL photo externe ou signée. `user_photo` suit les objets versionnés `profile-photos/<user_uuid>/<photo_uuid>.webp`, leur état et leurs métadonnées techniques vérifiées. Une photo publique doit être à la fois `ready` et modérée `approved` ; l’URL signée courte n’est produite qu’au dernier moment.
 - Préserver le protocole photo inter-stockages : créer `processing` et la demande idempotente dans une transaction, persister les métadonnées, écrire l’objet, puis activer atomiquement la nouvelle ligne, terminer la demande, passer l’ancienne à `deleting` et émettre `photo.delete` dans l’outbox. Une issue S3 incertaine doit rester réconciliable ; ne jamais supprimer la trace PostgreSQL avant la suppression confirmée de l’objet.
 - Les effets outbox doivent être idempotents, revendiqués avec verrouillage PostgreSQL, bornés en lot/concurrence et réessayés sans persister de détail sensible. Ne pas contourner l’outbox par un appel réseau entre une mutation métier et son commit.
+- La purge des événements outbox résolus est bornée par taille et nombre de lots configurables. Conserver `processed_count`, `batch_count` et `work_remaining` dans le suivi des maintenances sans y ajouter d’identifiant personnel.
 - Une création Customer Stripe incertaine interdit toute nouvelle tentative avec une autre clé. Rejouer uniquement la clé et la tentative d'origine avant 23 heures ; passé ce seuil, ne faire que des recherches Stripe en lecture jusqu'à résolution.
 - Une décision opérateur sur une dead letter exige une authentification admin récente, un motif et un audit dans la transaction verrouillée. Ne jamais exposer payload, agrégat ou clé objet dans la liste. Interdire l’abandon de `photo.delete` tant que la ligne `user_photo` existe.
 - Les métriques HTTP et dépendances restent agrégées, à cardinalité bornée et sans identifiant utilisateur. L’état persistant de maintenance ne conserve qu’un code d’erreur normalisé, jamais le message ou la stack.
@@ -91,7 +94,8 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Une revue photo exige les trois contrôles explicites `face_detectable`, `sharp_enough` et `content_allowed`. Une approbation exige trois valeurs vraies ; un rejet exige au moins une valeur fausse. Rejeter une photo `ready` doit la passer à `deleting` et écrire `photo.delete` dans l’outbox de la même transaction.
 - L’accès au stockage doit rester derrière `ObjectStorageService` et les six variables `OBJECT_STORAGE_*`; ne jamais dépendre d’une API SeaweedFS, MinIO, Garage ou fournisseur cloud spécifique.
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
-- Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers.
+- Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers. Les collections PostgreSQL sont paginées sous un instantané `REPEATABLE READ`; Scylla reste une lecture partitionnée datée, sans promesse d’instantané inter-stockages.
+- Construire l’export dans un fichier temporaire privé et borné, jamais dans un grand objet en RAM. Ne commencer la réponse qu’après préparation complète, supprimer le fichier à la fermeture du flux et normaliser tout échec avant envoi.
 - La suppression de compte est protégée par un jeton dédié à usage unique et doit nettoyer Stripe/Scylla/PostgreSQL dans l'ordre documenté.
 - L’effacement est asynchrone : consommer le jeton, créer DSR/checkpoint/outbox `account.erase` et désactiver le compte dans une seule transaction, puis répondre `202`. `ErasureService` reprend Stripe → photos → Scylla → PostgreSQL hors transaction réseau. Ne terminer la DSR qu’avec l’anonymisation locale ; ne jamais autoriser l’abandon d’un `account.erase`.
 - Préserver les guards SQL contre les écritures tardives et les verrous de session `AccountActivityService` des uploads, Checkout et swipes. Normaliser/trier les UUID ; ce pool dédié ajoute quatre connexions maximum et exige un pooling de session. Les lots d’effacement sont bornés et les checkpoints vérifient la propriété du worker. Les intentions Stripe inconnues de plus de 23 heures exigent une réconciliation, jamais un nouveau POST aveugle. Voir `docs/account-erasure.md`.
@@ -104,9 +108,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 
 ## Base de données et migrations
 
-- PostgreSQL utilise la baseline `001_baseline_20260904` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 014 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. `015_stripe_reconciliation.sql` est la première évolution incrémentale. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
+- PostgreSQL utilise la baseline `001_baseline_20260905` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 016 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. Il n’existe actuellement aucune migration incrémentale exécutable. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
 - Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les fichiers 002 à 014 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. Ne modifier aucune migration enregistrée ; la prochaine migration persistante doit être `016_<description>`.
+- Les fichiers 002 à 016 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. La baseline reconstruite en développement est désormais figée ; la prochaine migration persistante doit être `017_<description>`.
 - La baseline définit ses contraintes et colonnes auto-incrémentées dans les `CREATE TABLE`, parents avant dépendants ; les index suivent leur table, les fonctions/triggers terminent le fichier. Ne pas y concaténer de nouveaux `ALTER TABLE` : les évolutions déployées vont dans une migration incrémentale.
 - Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
 - Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
@@ -144,8 +148,9 @@ Des commandes ciblées existent : `test:integration:postgres`, `test:integration
 
 ## État de référence
 
-La chaîne PostgreSQL courante est `001_baseline_20260904` puis `015_stripe_reconciliation`; toute nouvelle évolution
-persistante commence à `016_<description>`. Les capacités livrées et la dernière validation connue sont résumées dans `resume.md`. Les
+La chaîne PostgreSQL courante contient uniquement `001_baseline_20260905`, qui consolide l’état jusqu’à 016 ;
+toute nouvelle évolution persistante commence à `017_<description>`. Les capacités livrées
+et la dernière validation connue sont résumées dans `resume.md`. Les
 travaux ouverts, leur ordre et leurs critères de fin vivent uniquement dans `docs/roadmap.md`.
 
 SeaweedFS `weed mini` reste une cible de développement mono-machine. Avant la production, éprouver une cible

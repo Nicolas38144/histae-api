@@ -75,12 +75,29 @@ export class DiscoveryStore {
   }
 
   async exportOwnActions(userId: string): Promise<DiscoveryAction[]> {
-    if (!this.available) return [];
-    const outgoingRows = await Promise.all(Array.from({ length: BUCKET_COUNT }, (_, bucket) => this.scylla.execute(`
-      SELECT actor_id, target_id, decision, swiped_at
-      FROM swipes_by_actor_bucket WHERE actor_id = ? AND bucket = ?
-    `, [userId, bucket], { isIdempotent: true })));
-    return outgoingRows.flatMap((result) => result.rows.map(actorRow));
+    const actions: DiscoveryAction[] = [];
+    await this.forEachOwnAction(userId, (action) => { actions.push(action); });
+    return actions;
+  }
+
+  async forEachOwnAction(
+    userId: string,
+    visit: (action: DiscoveryAction) => void | Promise<void>,
+    pageSize = 500,
+  ): Promise<number> {
+    if (!this.available) return 0;
+    let count = 0;
+    for (let bucket = 0; bucket < BUCKET_COUNT; bucket += 1) {
+      const result = await this.scylla.execute(`
+        SELECT actor_id, target_id, decision, swiped_at
+        FROM swipes_by_actor_bucket WHERE actor_id = ? AND bucket = ?
+      `, [userId, bucket], { isIdempotent: true, fetchSize: pageSize });
+      for await (const row of result) {
+        await visit(actorRow(row));
+        count += 1;
+      }
+    }
+    return count;
   }
 
   async deleteUserData(userId: string): Promise<void> {

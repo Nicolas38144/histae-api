@@ -24,6 +24,8 @@ export type DataSubjectRequestRow = {
   } | null;
 };
 
+export type CursorDataSubjectRequestRow = DataSubjectRequestRow & { cursor_at: string };
+
 type DataAccessAction = 'view_profile' | 'view_messages' | 'view_matches' | 'export_data'
   | 'admin_ban' | 'admin_unban' | 'admin_review_report' | 'admin_review_dsr'
   | 'system_anonymize' | 'system_export_portability';
@@ -38,14 +40,14 @@ export type DataAccessLogRow = {
   accessed_at: Date;
 };
 
+export type CursorDataAccessLogRow = DataAccessLogRow & { cursor_at: string };
+
 export type BlockedUser = {
   user_id: string;
   firstname: string | null;
   photo: string | null;
   blocked_at: Date;
 };
-
-export type PortableUserData = Record<string, unknown>;
 
 export type PrivacyMaintenanceResult = {
   stale_presences: number;

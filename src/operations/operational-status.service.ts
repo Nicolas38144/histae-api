@@ -82,6 +82,8 @@ function maintenanceView(
     last_succeeded_at: null,
     duration_ms: null,
     processed_count: 0,
+    batch_count: 0,
+    work_remaining: false,
     last_error_code: null,
     missing: true,
     overdue: true,

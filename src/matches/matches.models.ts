@@ -65,7 +65,18 @@ export type MessageCreationResult = MatchCommandResult<MessageCreation>
 
 export type CursorMessageRow = MessageRow & { cursor_at: string };
 
-export type MaintenanceResult = { opened: number; expired: number; purged: number };
+export type MaintenanceBatchResult = {
+  opened: number;
+  expired: number;
+  deleted_messages: number;
+  detached_reports: number;
+  purged: number;
+};
+
+export type MaintenanceResult = MaintenanceBatchResult & {
+  batches: number;
+  work_remaining: boolean;
+};
 export type EffectivePlan = { plan: string; weeklyLimit: number | null };
 export type MatchAvailabilityFailure = 'not_found' | 'invalid_state' | 'expired';
 export type MatchCommandResult<T> = { ok: true; value: T } | { ok: false; reason: MatchAvailabilityFailure };

@@ -24,7 +24,11 @@ async function run(): Promise<void> {
       context.get(BillingReconciliationService).runOnce(),
     ]);
     new Logger('Maintenance').log(formatLogEvent('maintenance_completed', {
-      matches_processed: matches ? matches.opened + matches.expired + matches.purged : 0,
+      matches_processed: matches
+        ? matches.opened + matches.expired + matches.deleted_messages + matches.detached_reports + matches.purged
+        : 0,
+      match_batches: matches?.batches ?? 0,
+      match_work_remaining: matches?.work_remaining ?? false,
       privacy_processed: privacy ? Object.values(privacy).reduce((total, count) => total + count, 0) : 0,
       photos_cleaned: photos.cleaned,
       photo_failures: photos.failed,

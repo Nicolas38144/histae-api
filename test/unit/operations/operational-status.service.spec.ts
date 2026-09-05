@@ -18,6 +18,8 @@ describe('OperationalStatusService', () => {
       last_succeeded_at: new Date('2030-01-01T00:01:00.000Z'),
       duration_ms: 60_000,
       processed_count: 2,
+      batch_count: 1,
+      work_remaining: true,
       last_error_code: null,
     }]) };
     const config = {
@@ -36,7 +38,8 @@ describe('OperationalStatusService', () => {
     expect(snapshot.sms_delivery).toEqual({ states: { unknown: 2 }, webhook_enabled: false, callbacks: { applied: 3 } });
     expect(snapshot.maintenance).toEqual(expect.arrayContaining([
       expect.objectContaining({ job_name: 'matches', missing: false, overdue: true }),
-      expect.objectContaining({ job_name: 'photos', missing: true, overdue: true }),
+      expect.objectContaining({ job_name: 'matches', batch_count: 1, work_remaining: true }),
+      expect.objectContaining({ job_name: 'photos', missing: true, overdue: true, batch_count: 0, work_remaining: false }),
     ]));
   });
 });

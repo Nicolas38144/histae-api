@@ -4,6 +4,12 @@ import type { MaintenanceJobName } from './operations.models';
 import { MaintenanceStatusRepository } from './maintenance-status.repository';
 import { safeErrorCode } from '../common/logging/safe-logging';
 
+export type MaintenanceProgress = {
+  processedCount: number;
+  batchCount?: number;
+  workRemaining?: boolean;
+};
+
 @Injectable()
 export class MaintenanceTrackerService {
   private readonly logger = new Logger(MaintenanceTrackerService.name);
@@ -13,17 +19,35 @@ export class MaintenanceTrackerService {
   async track<T>(
     jobName: MaintenanceJobName,
     work: () => Promise<T>,
-    processedCount: (result: T) => number,
+    progress: (result: T) => number | MaintenanceProgress,
   ): Promise<T> {
     const runId = randomUUID();
     const startedAt = new Date();
     await this.record(() => this.repository.start(jobName, runId, startedAt));
     try {
       const result = await work();
-      await this.finish(jobName, runId, startedAt, result === undefined ? 'skipped' : 'succeeded', processedCount(result), null);
+      const skipped = result === undefined;
+      const outcome = skipped
+        ? { processedCount: 0, batchCount: 0, workRemaining: false }
+        : normalizeProgress(progress(result));
+      await this.finish(
+        jobName,
+        runId,
+        startedAt,
+        skipped ? 'skipped' : 'succeeded',
+        outcome,
+        null,
+      );
       return result;
     } catch (error) {
-      await this.finish(jobName, runId, startedAt, 'failed', 0, maintenanceErrorCode(error));
+      await this.finish(
+        jobName,
+        runId,
+        startedAt,
+        'failed',
+        { processedCount: 0, batchCount: 0, workRemaining: true },
+        maintenanceErrorCode(error),
+      );
       throw error;
     }
   }
@@ -41,7 +65,7 @@ export class MaintenanceTrackerService {
     runId: string,
     startedAt: Date,
     status: 'succeeded' | 'failed' | 'skipped',
-    processedCount: number,
+    progress: Required<MaintenanceProgress>,
     errorCode: string | null,
   ): Promise<void> {
     const finishedAt = new Date();
@@ -51,7 +75,9 @@ export class MaintenanceTrackerService {
       status,
       finishedAt,
       durationMs: Math.min(Math.max(0, finishedAt.getTime() - startedAt.getTime()), 86_400_000),
-      processedCount: Math.max(0, Math.trunc(processedCount)),
+      processedCount: progress.processedCount,
+      batchCount: progress.batchCount,
+      workRemaining: progress.workRemaining,
       errorCode,
     }));
   }
@@ -63,6 +89,15 @@ export class MaintenanceTrackerService {
       this.logger.warn('maintenance_status_record_failed');
     }
   }
+}
+
+function normalizeProgress(progress: number | MaintenanceProgress): Required<MaintenanceProgress> {
+  const value = typeof progress === 'number' ? { processedCount: progress } : progress;
+  return {
+    processedCount: Math.max(0, Math.trunc(value.processedCount)),
+    batchCount: Math.max(0, Math.trunc(value.batchCount ?? 1)),
+    workRemaining: value.workRemaining ?? false,
+  };
 }
 
 function maintenanceErrorCode(error: unknown): string {

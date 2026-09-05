@@ -3,7 +3,7 @@ import { CONSOLIDATED_BASELINE_VERSION, loadMigration, migrations } from '../../
 
 describe('PostgreSQL migration catalog', () => {
   it('loads the consolidated baseline with portable checksums and reference data', async () => {
-    expect(migrations).toHaveLength(2);
+    expect(migrations).toHaveLength(1);
     expect(migrations[0].version).toBe(CONSOLIDATED_BASELINE_VERSION);
     const { sql, checksum } = await loadMigration(migrations[0]);
     for (const table of ['user_account', 'user_photo', 'photo_upload_request', 'outbox_event',
@@ -19,16 +19,25 @@ describe('PostgreSQL migration catalog', () => {
     expect(checksum).toMatch(/^[0-9a-f]{64}$/);
     expect((await loadMigration(migrations[0])).checksum).toBe(checksum);
     expect((await readdir('db')).filter(name => name.endsWith('.sql')).sort())
-      .toEqual(['015_stripe_reconciliation.sql', 'drop_postgres.sql', 'insert_postgres.sql', 'schema_postgres.sql']);
+      .toEqual(['drop_postgres.sql', 'insert_postgres.sql', 'schema_postgres.sql']);
   });
 
-  it('keeps Stripe reconciliation incremental after the frozen baseline', async () => {
-    expect(migrations[1].version).toBe('015_stripe_reconciliation');
-    const { sql, checksum } = await loadMigration(migrations[1]);
+  it('defines Stripe reconciliation directly in the consolidated baseline', async () => {
+    const { sql, checksum } = await loadMigration(migrations[0]);
     expect(sql).toContain('projection_version');
     expect(sql).toContain('stripe_reconciliation_due_at');
-    expect(sql).toContain("'billing.customer.reconcile'");
-    expect(sql).toContain("'outbox', 'billing']::text[]");
+    expect(sql).toContain("'billing'::text");
+    expect(checksum).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('defines bounded workload progress and export indexes directly in the baseline', async () => {
+    const { sql, checksum } = await loadMigration(migrations[0]);
+    expect(sql).toContain('batch_count');
+    expect(sql).toContain('work_remaining');
+    expect(sql).toContain('idx_match_init_user1_created');
+    expect(sql).toContain('idx_user_report_match_created');
+    expect(sql).toContain('idx_user_consent_user_event');
+    expect(sql).toContain('idx_billing_invoice_user_created_id');
     expect(checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 

@@ -90,6 +90,12 @@ En production, utiliser `MAINTENANCE_MODE=disabled` sur les processus HTTP, main
 `MAINTENANCE_MODE=worker pnpm run maintenance:run`. Cette passe programme aussi la réconciliation Stripe ; le
 worker outbox effectue les lectures fournisseur. API et workers doivent utiliser la même version de code.
 
+Les budgets `MATCH_MAINTENANCE_*` et `OUTBOX_PURGE_*` bornent le travail et les transactions de chaque passe.
+`DATA_EXPORT_PAGE_SIZE` borne les lectures d’un export ; `DATA_EXPORT_MAX_BYTES` et
+`DATA_EXPORT_MAX_CONCURRENCY` protègent le disque temporaire.
+Ne modifier ces valeurs qu’après observation de `operations.maintenance`, de la mémoire, du pool PostgreSQL et des
+temps d’attente, selon [le guide volumes et exports](docs/volume-and-export.md).
+
 ## Commandes
 
 | Commande | Usage |

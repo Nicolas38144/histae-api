@@ -76,12 +76,11 @@ Les lectures par clé primaire ou contrainte unique, les écritures `ON CONFLICT
 transitions Stripe et photo, ainsi que les agrégats sur les catalogues très petits étaient déjà sur un chemin borné.
 Elles n’ont pas été condensées au prix d’une perte d’atomicité ou d’un index supplémentaire à chaque écriture.
 
-Les exports RGPD restent séquentiels sur un même client PostgreSQL et ne construisent pas un énorme document
-JSON dans la mémoire du serveur. L’isolation actuelle ne garantit pas un snapshot commun à toutes les requêtes ;
-leur cohérence et leur assemblage en mémoire côté API restent à traiter dans la
-[roadmap](roadmap.md#r06-volumes). Les tableaux d’un seul
-utilisateur dont la cardinalité métier est faible — trois réponses de profil, quelques traits, quatre types de
-consentement, quelques appareils et passkeys — conservent leurs requêtes simples.
+Les exports RGPD restent séquentiels sur un même client PostgreSQL, mais leurs collections sont désormais paginées
+sous un instantané `REPEATABLE READ, READ ONLY` et écrites dans un fichier temporaire borné. La lecture Scylla est
+explicitement séparée de cet instantané. Les tableaux dont la cardinalité métier est strictement faible — trois
+réponses de profil et le catalogue de traits — conservent leurs requêtes simples. Voir
+[volumes et export](volume-and-export.md).
 
 L’index global historique `idx_match_init_activity` est conservé pour l’instant : les nouveaux index participant
 servent la route mobile, mais retirer un index déployé sans statistiques de production serait prématuré. Son usage
@@ -120,9 +119,8 @@ un prédicat partiel. Les checkpoints accèdent à la clé primaire de la demand
 `(event_type, aggregate_id)`. Les photos/Customers sont bornés à 50 par passage. Les listes de matchs vérifient
 l’activité du partenaire avant le `LIMIT`, pour ne pas créer de pages incomplètes à cause du filtrage ultérieur.
 Les guards d’écriture ajoutent un accès verrouillé à la clé primaire du compte ; ces nouveaux chemins sont
-testés sur PostgreSQL réel, mais leur coût sous charge n’a pas été mesuré. Le suivi admin conserve sa limite
-actuelle de 500 demandes, sans nouveau curseur ; cette limite est suivie dans la
-[roadmap](roadmap.md#r06-volumes).
+testés sur PostgreSQL réel, mais leur coût sous charge n’a pas été mesuré. Les demandes RGPD et journaux d’accès
+administratifs suivent maintenant des curseurs date/UUID à précision microseconde, sans plafond implicite.
 
 ## Recommandations d’exploitation
 
@@ -133,5 +131,5 @@ actuelle de 500 demandes, sans nouveau curseur ; cette limite est suivie dans la
   tests ne représentent pas la production.
 - Comparer des paramètres réalistes avec `EXPLAIN (ANALYZE, BUFFERS)` sur une copie non sensible. Ne jamais analyser
   une écriture de production sans transaction annulée et procédure explicite.
-- Les index issus de l’audit figurent dans la [baseline](postgres-migrations.md). Pour tout nouvel index
+- Les index issus de l’audit et de R06 figurent directement dans la [baseline](postgres-migrations.md). Pour tout nouvel index
   sur une base volumineuse, prévoir une fenêtre de migration ou une stratégie `CREATE INDEX CONCURRENTLY` séparée.

@@ -89,6 +89,11 @@ La suite PostgreSQL de démarrage initialise aussi le graphe Nest : Redis doit �
 configuration. La suite d’intégration Scylla utilise aussi PostgreSQL. L’analyseur photo local n’est pas requis par
 ces suites ; il est nécessaire pour un smoke test manuel du parcours photo avec analyse automatique activée.
 
+`postgres.r06-volumes.integration.spec.ts` exerce la reprise de la maintenance des matchs, une purge outbox de plus
+d’un millier de lignes, les curseurs administratifs à précision microseconde et un export de plusieurs pages sous
+instantané PostgreSQL. Il vérifie les bornes et la complétude, pas la capacité de production : calibrer mémoire,
+durée et verrous avec [le guide dédié](docs/volume-and-export.md) avant d’augmenter les budgets.
+
 ### Isolation et nettoyage
 
 - Utiliser des UUID temporaires, transactions annulées ou schémas dédiés ; ne pas consommer les jobs du développeur.
@@ -148,6 +153,7 @@ Guides spécialisés :
 - [Notifications durables](docs/durable-notifications.md)
 - [Effacement reprenable](docs/account-erasure.md)
 - [Réconciliation Stripe](docs/stripe-reconciliation.md)
+- [Volumes, lots et export](docs/volume-and-export.md)
 - [Concurrence et pannes locales](docs/resilience-tests.md)
 - [Callbacks et reprises OTP Sweego](docs/sweego-delivery.md) : signatures/réponses synthétiques, PostgreSQL isolé, aucun SMS réel.
 - [Baseline PostgreSQL](docs/postgres-migrations.md) : initialisation, checksums, reset local protégé et évolutions suivantes.

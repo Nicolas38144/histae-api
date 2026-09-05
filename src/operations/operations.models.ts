@@ -24,6 +24,8 @@ export type MaintenanceJobSnapshot = {
   last_succeeded_at: Date | null;
   duration_ms: number | null;
   processed_count: number;
+  batch_count: number;
+  work_remaining: boolean;
   last_error_code: string | null;
 };
 
@@ -46,6 +48,8 @@ export type MaintenanceJobOperationalView = {
   last_succeeded_at: Date | null;
   duration_ms: number | null;
   processed_count: number;
+  batch_count: number;
+  work_remaining: boolean;
   last_error_code: string | null;
   missing: boolean;
   overdue: boolean;

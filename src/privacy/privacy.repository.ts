@@ -2,7 +2,16 @@ import { Injectable } from '@nestjs/common';
 import type { Queryable } from '../database/database.service';
 import { DatabaseService } from '../database/database.service';
 import { enqueueAccountErasure } from './erasure-enqueue';
-import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData, PrivacyMaintenanceResult } from './privacy.models';
+import type { KeysetCursor } from '../common/pagination';
+import type {
+  BlockedUser,
+  CursorDataAccessLogRow,
+  CursorDataSubjectRequestRow,
+  DataRequestStatus,
+  DataRequestType,
+  DataSubjectRequestRow,
+  PrivacyMaintenanceResult,
+} from './privacy.models';
 
 const ENDED_MATCH_RETENTION_DAYS = 30;
 const PRIVACY_MAINTENANCE_LOCK = 61_202_608;
@@ -28,10 +37,16 @@ export class PrivacyRepository {
     `, [userId])).rows;
   }
 
-  async requestsForAdmin(status: DataRequestStatus | undefined): Promise<DataSubjectRequestRow[]> {
-    return (await this.database.query<DataSubjectRequestRow>(`
+  async requestsForAdmin(
+    status: DataRequestStatus | undefined,
+    limit: number,
+    offset: number,
+    cursor?: KeysetCursor,
+  ): Promise<CursorDataSubjectRequestRow[]> {
+    return (await this.database.query<CursorDataSubjectRequestRow>(`
       SELECT request.id, request.user_id, request.type, request.status, request.requested_at,
         request.completed_at, request.handled_by, request.notes,
+        to_char(request.requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,
         CASE WHEN erasure.request_id IS NOT NULL THEN jsonb_build_object(
           'step', erasure.step, 'scylla_partition', erasure.scylla_partition, 'updated_at', erasure.updated_at,
           'event_id', event.id, 'status', event.status, 'attempts', COALESCE(event.attempts, 0),
@@ -40,9 +55,10 @@ export class PrivacyRepository {
       LEFT JOIN account_erasure erasure ON erasure.request_id = request.id
       LEFT JOIN outbox_event event ON event.aggregate_id = request.id AND event.event_type = 'account.erase'
       WHERE ($1::text IS NULL OR request.status = $1)
-      ORDER BY request.requested_at, request.id
-      LIMIT 500
-    `, [status ?? null])).rows;
+        AND ($4::timestamptz IS NULL OR (request.requested_at, request.id) < ($4::timestamptz, $5::uuid))
+      ORDER BY request.requested_at DESC, request.id DESC
+      LIMIT $2 OFFSET $3
+    `, [status ?? null, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
   async updateRequest(
@@ -92,73 +108,11 @@ export class PrivacyRepository {
     });
   }
 
-  async exportUserData(userId: string): Promise<PortableUserData> {
-    return this.database.transaction(async (client) => {
-      const account = (await client.query(`
-        SELECT user_id, role, is_banned, deleted_at, anonymized_at, created_at
-        FROM user_account WHERE user_id = $1
-      `, [userId])).rows[0];
-      // A single PostgreSQL client executes one query at a time. Keeping these
-      // reads sequential also preserves their shared transactional snapshot.
-      const profile = await client.query(`
-        SELECT profile.firstname, profile.birthdate, profile.sex, profile.bio,
-          photo.object_key AS photo
-        FROM user_profile AS profile
-        LEFT JOIN user_photo AS photo
-          ON photo.user_id = profile.user_id AND photo.status = 'ready'
-        WHERE profile.user_id = $1
-      `, [userId]);
-      const preferences = await client.query('SELECT min_age, max_age, max_distance_km, looking_for FROM user_preferences WHERE user_id = $1', [userId]);
-      const traits = await client.query(`SELECT trait.id, trait.name FROM trait JOIN user_trait ON user_trait.trait_id = trait.id WHERE user_trait.user_id = $1 ORDER BY trait.name`, [userId]);
-      const profileAnswers = await client.query(`
-        SELECT answer.question_id, question.code, question.prompt AS question,
-          answer.answer, answer.position
-        FROM user_profile_answer AS answer
-        JOIN profile_question AS question ON question.id = answer.question_id
-        WHERE answer.user_id = $1 ORDER BY answer.position
-      `, [userId]);
-      const consents = await client.query(`SELECT consent_type, granted, document_version, granted_at, withdrawn_at FROM user_consent WHERE user_id = $1 ORDER BY event_sequence`, [userId]);
-      const matches = await client.query(`SELECT id, user1_id, user2_id, status, expires_at, created_at, last_message_at FROM match_init WHERE user1_id = $1 OR user2_id = $1 ORDER BY created_at`, [userId]);
-      const messages = await client.query(`SELECT id, match_id, content, created_at, read_at FROM chat_message WHERE sender_id = $1 ORDER BY created_at`, [userId]);
-      const reports = await client.query(`SELECT id, reported_id, match_id, reason, description, status, created_at, resolved_at FROM user_report WHERE reporter_id = $1 ORDER BY created_at`, [userId]);
-      const blocks = await client.query(`SELECT blocked_id, created_at FROM user_block WHERE blocker_id = $1 ORDER BY created_at`, [userId]);
-      const subscription = await client.query(`
-        SELECT plan, provider, provider_subscription_id, provider_price_id, billing_period, status,
-          cancel_at_period_end, current_period_starts_at, current_period_ends_at,
-          trial_ends_at, canceled_at, provider_event_created_at, updated_at
-        FROM user_subscription WHERE user_id = $1
-      `, [userId]);
-      const billingInvoices = await client.query(`
-        SELECT stripe_invoice_id, stripe_subscription_id, status, currency, amount_due,
-          amount_paid, amount_remaining, period_starts_at, period_ends_at, paid_at,
-          created_at, provider_event_created_at
-        FROM billing_invoice WHERE user_id = $1 ORDER BY created_at
-      `, [userId]);
-      const mobileSessions = await client.query(`
-        SELECT id, created_at, last_refreshed_at, expires_at, revoked_at, revocation_reason
-        FROM refresh_token_family WHERE user_id = $1 ORDER BY created_at, id
-      `, [userId]);
-      await client.query(`
-        INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
-        VALUES ($1, $1, 'user', 'export_data', 'Self-service data export')
-      `, [userId]);
-      return {
-        exported_at: new Date().toISOString(),
-        account: account ?? null,
-        profile: profile.rows[0] ?? null,
-        preferences: preferences.rows[0] ?? null,
-        traits: traits.rows,
-        profile_answers: profileAnswers.rows,
-        legal_choices: consents.rows,
-        matches: matches.rows,
-        authored_messages: messages.rows,
-        submitted_reports: reports.rows,
-        blocked_users: blocks.rows,
-        subscription: subscription.rows[0] ?? null,
-        billing_invoices: billingInvoices.rows,
-        mobile_sessions: mobileSessions.rows,
-      };
-    });
+  async recordSelfExport(userId: string): Promise<void> {
+    await this.database.query(`
+      INSERT INTO data_access_log (accessed_user_id, accessor_id, accessor_role, action, reason)
+      VALUES ($1, $1, 'user', 'export_data', 'Self-service data export')
+    `, [userId]);
   }
 
   async blockUser(blockerId: string, blockedId: string): Promise<boolean> {
@@ -196,12 +150,19 @@ export class PrivacyRepository {
     `, [blockerId])).rows;
   }
 
-  async accessLogs(accessedUserId: string): Promise<DataAccessLogRow[]> {
-    return (await this.database.query<DataAccessLogRow>(`
-      SELECT id, accessed_user_id, accessor_id, accessor_role, action, reason, accessed_at
+  async accessLogs(
+    accessedUserId: string,
+    limit: number,
+    offset: number,
+    cursor?: KeysetCursor,
+  ): Promise<CursorDataAccessLogRow[]> {
+    return (await this.database.query<CursorDataAccessLogRow>(`
+      SELECT id, accessed_user_id, accessor_id, accessor_role, action, reason, accessed_at,
+        to_char(accessed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
       FROM data_access_log WHERE accessed_user_id = $1
-      ORDER BY accessed_at DESC, id DESC LIMIT 500
-    `, [accessedUserId])).rows;
+        AND ($4::timestamptz IS NULL OR (accessed_at, id) < ($4::timestamptz, $5::uuid))
+      ORDER BY accessed_at DESC, id DESC LIMIT $2 OFFSET $3
+    `, [accessedUserId, limit, offset, cursor?.at ?? null, cursor?.id ?? null])).rows;
   }
 
   async runMaintenanceAsLeader(now: Date, batchSize: number): Promise<PrivacyMaintenanceResult | undefined> {

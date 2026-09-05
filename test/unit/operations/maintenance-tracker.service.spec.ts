@@ -10,7 +10,8 @@ describe('MaintenanceTrackerService', () => {
 
     expect(repository.start).toHaveBeenCalledWith('photos', expect.any(String), expect.any(Date));
     expect(repository.finish).toHaveBeenCalledWith(expect.objectContaining({
-      jobName: 'photos', status: 'succeeded', processedCount: 2, errorCode: null,
+      jobName: 'photos', status: 'succeeded', processedCount: 2,
+      batchCount: 1, workRemaining: false, errorCode: null,
     }));
   });
 
@@ -24,7 +25,23 @@ describe('MaintenanceTrackerService', () => {
 
     expect(repository.finish).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'skipped' }));
     expect(repository.finish).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      status: 'failed', errorCode: 'maintenance_execution_failed',
+      status: 'failed', batchCount: 0, workRemaining: true,
+      errorCode: 'maintenance_execution_failed',
+    }));
+  });
+
+  it('persists explicit bounded-run progress', async () => {
+    const repository = { start: jest.fn(), finish: jest.fn() };
+    const tracker = new MaintenanceTrackerService(repository as never);
+    await tracker.track('matches', async () => 'done', () => ({
+      processedCount: 250,
+      batchCount: 5,
+      workRemaining: true,
+    }));
+    expect(repository.finish).toHaveBeenCalledWith(expect.objectContaining({
+      processedCount: 250,
+      batchCount: 5,
+      workRemaining: true,
     }));
   });
 

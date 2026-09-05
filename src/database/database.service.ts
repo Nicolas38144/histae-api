@@ -46,6 +46,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  withClient<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.measure(async () => {
+      const client = await this.pool.connect();
+      try {
+        return await work(client);
+      } finally {
+        client.release();
+      }
+    });
+  }
+
   poolStats(): { total: number; idle: number; waiting: number } {
     return {
       total: this.pool.totalCount,

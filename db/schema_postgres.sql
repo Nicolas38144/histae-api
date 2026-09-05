@@ -1,5 +1,5 @@
--- Consolidated PostgreSQL schema through 014_sweego_delivery_tracking (2026-09-04).
--- Fresh schemas only; use pnpm db:migrate to adopt an existing complete history.
+-- Consolidated PostgreSQL schema through 016_bounded_workloads (2026-09-05).
+-- Fresh schemas only; rebuild the protected development database after consolidation.
 -- Reference data and opt-in development fixtures: insert_postgres.sql.
 -- Retention and cross-storage invariants: docs/retention-policy.md and AGENTS.md.
 
@@ -215,6 +215,8 @@ CREATE UNIQUE INDEX idx_consent_active ON user_consent USING btree (user_id, con
 CREATE UNIQUE INDEX idx_consent_event_sequence ON user_consent USING btree (event_sequence);
 
 CREATE INDEX idx_consent_type ON user_consent USING btree (user_id, consent_type, event_sequence DESC);
+
+CREATE INDEX idx_user_consent_user_event ON user_consent USING btree (user_id, event_sequence);
 
 CREATE INDEX idx_consent_withdrawn ON user_consent USING btree (withdrawn_at, id) WHERE (withdrawn_at IS NOT NULL);
 
@@ -444,11 +446,14 @@ CREATE TABLE user_subscription (
     trial_ends_at timestamp with time zone,
     canceled_at timestamp with time zone,
     provider_event_created_at timestamp with time zone,
+    projection_version bigint DEFAULT 0 NOT NULL,
+    provider_snapshot_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT user_subscription_billing_period_check CHECK (((billing_period IS NULL) OR (billing_period = ANY (ARRAY['monthly'::text, 'annual'::text])))),
     CONSTRAINT user_subscription_provider_check CHECK (((provider IS NULL) OR (provider = 'stripe'::text))),
     CONSTRAINT user_subscription_provider_price_id_check CHECK (((provider_price_id IS NULL) OR (provider_price_id ~ '^price_[A-Za-z0-9]+$'::text))),
     CONSTRAINT user_subscription_provider_subscription_id_check CHECK (((provider_subscription_id IS NULL) OR (provider_subscription_id ~ '^sub_[A-Za-z0-9]+$'::text))),
+    CONSTRAINT user_subscription_projection_version_check CHECK ((projection_version >= 0)),
     CONSTRAINT user_subscription_status_check CHECK (((status IS NULL) OR (status = ANY (ARRAY['incomplete'::text, 'incomplete_expired'::text, 'trialing'::text, 'active'::text, 'past_due'::text, 'canceled'::text, 'unpaid'::text, 'paused'::text])))),
     CONSTRAINT user_subscription_pkey PRIMARY KEY (user_id),
     CONSTRAINT user_subscription_provider_subscription_id_key UNIQUE (provider_subscription_id),
@@ -463,8 +468,11 @@ CREATE TABLE billing_customer (
     stripe_customer_id text NOT NULL,
     stripe_customer_deleted_at timestamp with time zone,
     trial_used_at timestamp with time zone,
+    stripe_reconciliation_due_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    stripe_reconciled_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT billing_customer_reconciliation_order_check CHECK (((stripe_reconciled_at IS NULL) OR (stripe_reconciliation_due_at >= stripe_reconciled_at))),
     CONSTRAINT billing_customer_stripe_customer_id_check CHECK ((stripe_customer_id ~ '^cus_[A-Za-z0-9]+$'::text)),
     CONSTRAINT billing_customer_pkey PRIMARY KEY (user_id),
     CONSTRAINT billing_customer_stripe_customer_id_key UNIQUE (stripe_customer_id),
@@ -472,6 +480,8 @@ CREATE TABLE billing_customer (
 );
 
 CREATE INDEX idx_billing_customer_active_stripe_id ON billing_customer USING btree (stripe_customer_id) WHERE (stripe_customer_deleted_at IS NULL);
+
+CREATE INDEX idx_billing_customer_reconciliation_due ON billing_customer USING btree (stripe_reconciliation_due_at, user_id) WHERE (stripe_customer_deleted_at IS NULL);
 
 CREATE TABLE billing_checkout_session (
     id uuid NOT NULL,
@@ -489,6 +499,7 @@ CREATE TABLE billing_checkout_session (
     customer_erased_at timestamp with time zone,
     CONSTRAINT billing_checkout_session_billing_period_check CHECK ((billing_period = ANY (ARRAY['monthly'::text, 'annual'::text]))),
     CONSTRAINT billing_checkout_session_checkout_url_check CHECK (((checkout_url IS NULL) OR (octet_length(checkout_url) <= 4096))),
+    CONSTRAINT billing_checkout_created_customer_id_check CHECK (((created_customer_id IS NULL) OR (created_customer_id ~ '^cus_[A-Za-z0-9]+$'::text))),
     CONSTRAINT billing_checkout_session_status_check CHECK ((status = ANY (ARRAY['creating'::text, 'open'::text, 'completed'::text, 'expired'::text, 'failed'::text]))),
     CONSTRAINT billing_checkout_session_stripe_session_id_check CHECK (((stripe_session_id IS NULL) OR (stripe_session_id ~ '^cs_(test_|live_)?[A-Za-z0-9]+$'::text))),
     CONSTRAINT billing_checkout_session_pkey PRIMARY KEY (id),
@@ -531,6 +542,8 @@ CREATE TABLE billing_invoice (
 );
 
 CREATE INDEX idx_billing_invoice_user_created ON billing_invoice USING btree (user_id, created_at DESC) WHERE (user_id IS NOT NULL);
+
+CREATE INDEX idx_billing_invoice_user_created_id ON billing_invoice USING btree (user_id, created_at, stripe_invoice_id) WHERE (user_id IS NOT NULL);
 
 CREATE TABLE stripe_webhook_event (
     id text NOT NULL,
@@ -576,9 +589,13 @@ CREATE INDEX idx_match_init_to_purge ON match_init USING btree (purge_after) WHE
 
 CREATE INDEX idx_match_init_user1 ON match_init USING btree (user1_id);
 
+CREATE INDEX idx_match_init_user1_created ON match_init USING btree (user1_id, created_at, id);
+
 CREATE INDEX idx_match_init_user1_activity ON match_init USING btree (user1_id, COALESCE(last_message_at, created_at) DESC, id DESC) WHERE (status <> 'ended'::text);
 
 CREATE INDEX idx_match_init_user2 ON match_init USING btree (user2_id);
+
+CREATE INDEX idx_match_init_user2_created ON match_init USING btree (user2_id, created_at, id);
 
 CREATE INDEX idx_match_init_user2_activity ON match_init USING btree (user2_id, COALESCE(last_message_at, created_at) DESC, id DESC) WHERE (status <> 'ended'::text);
 
@@ -658,6 +675,8 @@ CREATE TABLE user_report (
 );
 
 CREATE INDEX idx_user_report_created_desc ON user_report USING btree (created_at DESC, id DESC);
+
+CREATE INDEX idx_user_report_match_created ON user_report USING btree (match_id, created_at, id) WHERE (match_id IS NOT NULL);
 
 CREATE UNIQUE INDEX idx_user_report_one_pending ON user_report USING btree (reporter_id, reported_id) WHERE (status = 'pending'::text);
 
@@ -791,12 +810,15 @@ CREATE TABLE maintenance_job_status (
     last_succeeded_at timestamp with time zone,
     duration_ms integer,
     processed_count bigint DEFAULT 0 NOT NULL,
+    batch_count integer DEFAULT 0 NOT NULL,
+    work_remaining boolean DEFAULT false NOT NULL,
     last_error_code text,
     updated_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     CONSTRAINT chk_maintenance_job_error CHECK ((((status = 'failed'::text) AND (last_error_code IS NOT NULL)) OR ((status <> 'failed'::text) AND (last_error_code IS NULL)))),
     CONSTRAINT chk_maintenance_job_finished CHECK ((((status = 'running'::text) AND (finished_at IS NULL) AND (duration_ms IS NULL)) OR ((status <> 'running'::text) AND (finished_at IS NOT NULL) AND (duration_ms IS NOT NULL)))),
     CONSTRAINT maintenance_job_status_duration_ms_check CHECK (((duration_ms IS NULL) OR ((duration_ms >= 0) AND (duration_ms <= 86400000)))),
-    CONSTRAINT maintenance_job_status_job_name_check CHECK ((job_name = ANY (ARRAY['matches'::text, 'photos'::text, 'privacy'::text, 'outbox'::text]))),
+    CONSTRAINT maintenance_job_status_batch_count_check CHECK ((batch_count >= 0)),
+    CONSTRAINT maintenance_job_status_job_name_check CHECK ((job_name = ANY (ARRAY['matches'::text, 'photos'::text, 'privacy'::text, 'outbox'::text, 'billing'::text]))),
     CONSTRAINT maintenance_job_status_last_error_code_check CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z][a-z0-9_]{0,63}$'::text))),
     CONSTRAINT maintenance_job_status_processed_count_check CHECK ((processed_count >= 0)),
     CONSTRAINT maintenance_job_status_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'skipped'::text]))),
@@ -804,6 +826,10 @@ CREATE TABLE maintenance_job_status (
 );
 
 COMMENT ON TABLE maintenance_job_status IS 'Last bounded execution outcome for each in-process maintenance job.';
+
+COMMENT ON COLUMN maintenance_job_status.batch_count IS 'Number of bounded batches committed by the latest run.';
+
+COMMENT ON COLUMN maintenance_job_status.work_remaining IS 'True when the latest bounded run exhausted its work budget and should be resumed.';
 
 -- Droits des personnes et audit
 

@@ -19,6 +19,12 @@ export type PhotoMaintenanceResult = {
   expiredIdempotencyRecords: number;
 };
 
+type PhotoMaintenanceRun = {
+  result: PhotoMaintenanceResult;
+  batchCount: number;
+  workRemaining: boolean;
+};
+
 @Injectable()
 export class PhotosMaintenanceService
   implements OnModuleInit, OnModuleDestroy
@@ -45,25 +51,32 @@ export class PhotosMaintenanceService
   }
 
   async runOnce(): Promise<PhotoMaintenanceResult> {
-    return this.tracker.track(
+    const run = await this.tracker.track(
       'photos',
       () => this.performMaintenance(),
-      (result) => result.cleaned + result.failed + result.expiredIdempotencyRecords,
+      ({ result, batchCount, workRemaining }) => ({
+        processedCount: result.cleaned + result.failed + result.expiredIdempotencyRecords,
+        batchCount,
+        workRemaining,
+      }),
     );
+    return run.result;
   }
 
-  private async performMaintenance(): Promise<PhotoMaintenanceResult> {
+  private async performMaintenance(): Promise<PhotoMaintenanceRun> {
     const totals: PhotoMaintenanceResult = {
       cleaned: 0,
       failed: 0,
-      expiredIdempotencyRecords: await this.photos.purgeExpiredUploadRequests(
-        new Date(),
-        BATCH_SIZE,
-      ),
+      expiredIdempotencyRecords: 0,
     };
 
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch += 1) {
       const now = new Date();
+      const expiredIdempotencyRecords = await this.photos.purgeExpiredUploadRequests(
+        now,
+        BATCH_SIZE,
+      );
+      totals.expiredIdempotencyRecords += expiredIdempotencyRecords;
       const photos = await this.photos.claimCleanupBatch(
         now,
         new Date(now.getTime() - PHOTO_PROCESSING_STALE_AFTER_MILLIS),
@@ -81,13 +94,15 @@ export class PhotosMaintenanceService
         }
       }
 
-      if (photos.length < BATCH_SIZE) return totals;
+      if (photos.length < BATCH_SIZE && expiredIdempotencyRecords < BATCH_SIZE) {
+        return { result: totals, batchCount: batch + 1, workRemaining: false };
+      }
     }
 
     this.logger.warn(formatLogEvent('photo_maintenance_batch_limit', {
       batches: MAX_BATCHES_PER_RUN,
     }));
-    return totals;
+    return { result: totals, batchCount: MAX_BATCHES_PER_RUN, workRemaining: true };
   }
 
   private async execute(): Promise<void> {

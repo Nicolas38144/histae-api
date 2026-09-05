@@ -19,7 +19,7 @@ Histae API est un monolithe modulaire NestJS 11/Fastify 5 en TypeScript strict. 
 - photo privée unique, conversion WebP, stockage S3-compatible et suppression par outbox ;
 - notifications durables par appareil, push optionnel et signaux SSE ;
 - export, demandes RGPD et effacement reprenable ;
-- healthchecks, métriques internes, maintenances et reprise auditée des dead letters.
+- healthchecks, métriques internes, maintenances bornées/reprenables et reprise auditée des dead letters.
 
 Les travaux encore ouverts et leur ordre sont centralisés dans la roadmap.
 
@@ -149,19 +149,28 @@ L’effacement consomme un jeton dédié, désactive le compte et répond `202`.
 Scylla puis PostgreSQL. Les checkpoints ne progressent qu’après effets confirmés ; `account.erase` ne peut
 jamais être abandonné. Voir [docs/account-erasure.md](docs/account-erasure.md).
 
+L’export portable est construit page par page dans un fichier temporaire privé, puis diffusé et supprimé sans
+assembler toutes les collections en RAM. PostgreSQL utilise un instantané `REPEATABLE READ`; Scylla reste une
+lecture partitionnée explicitement datée dans le document, car aucun instantané atomique ne couvre les deux
+stockages. Taille et concurrence des préparations sont bornées. Les demandes RGPD et journaux d’accès
+administratifs sont parcourus par curseur.
+
 ## Base de données et exploitation
 
-`db/schema_postgres.sql` reste la baseline PostgreSQL `001_baseline_20260904`. Les 44 tables définissent leurs
-contraintes sans `ALTER TABLE`. `015_stripe_reconciliation` est la première migration incrémentale ; la prochaine
-évolution persistante utilisera `016_<description>`. Voir
+`db/schema_postgres.sql` est la baseline PostgreSQL unique `001_baseline_20260905`, consolidée jusqu’aux travaux
+R06. Les 44 tables définissent leurs contraintes sans `ALTER TABLE`; la prochaine évolution persistante utilisera
+`017_<description>`. Voir
 [docs/postgres-migrations.md](docs/postgres-migrations.md).
 
 `/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. L’outbox et la
 maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
-dashboard sont agrégées, bornées et sans identifiant utilisateur.
+dashboard sont agrégées, bornées et sans identifiant utilisateur. Les matchs sont entretenus sous un verrou de
+leader mais avec un commit par lot ; leurs messages et signalements sont nettoyés avant le parent pour éviter une
+cascade volumineuse. La purge horaire de l’outbox peut traiter 10 000 lignes par défaut en lots de 500. Les tailles,
+budgets et règles de calibration sont dans [docs/volume-and-export.md](docs/volume-and-export.md).
 
-Dernière validation complète : lint, typecheck, build, 568 tests autonomes et 190 intégrations locales, soit
-758 tests dans 92 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète : lint, typecheck, build, 579 tests autonomes et 194 intégrations locales, soit
+773 tests dans 94 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 
@@ -170,5 +179,6 @@ Dernière validation complète : lint, typecheck, build, 568 tests autonomes et 
 - [test.md](test.md) : validation et isolation ;
 - [AGENTS.md](AGENTS.md) : règles impératives de modification ;
 - [docs/roadmap.md](docs/roadmap.md) : travaux ouverts ;
+- [docs/volume-and-export.md](docs/volume-and-export.md) : budgets de lot, export et calibration ;
 - [docs/retention-policy.md](docs/retention-policy.md) et
   [docs/legal-release-checklist.md](docs/legal-release-checklist.md) : décisions à faire valider.

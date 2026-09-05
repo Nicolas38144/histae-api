@@ -100,6 +100,16 @@ export type ScyllaConfig = {
   requestTimeoutMillis: number;
 };
 
+export type WorkloadConfig = {
+  matchMaintenanceBatchSize: number;
+  matchMaintenanceMaxBatches: number;
+  outboxPurgeBatchSize: number;
+  outboxPurgeMaxBatches: number;
+  dataExportPageSize: number;
+  dataExportMaxBytes: number;
+  dataExportMaxConcurrency: number;
+};
+
 @Injectable()
 export class ConfigService {
   readonly env: Environment;
@@ -152,6 +162,7 @@ export class ConfigService {
   readonly trustProxy: boolean | string[];
   readonly corsOrigins: string[];
   readonly maintenanceMode: MaintenanceMode;
+  readonly workloads: WorkloadConfig;
   readonly rateLimit: {
     store: 'memory' | 'redis';
     global: LimitPolicy;
@@ -397,6 +408,50 @@ export class ConfigService {
     this.trustProxy = trustProxy(envOr('TRUST_PROXY', 'false'), this.env);
     this.corsOrigins = webOrigins(envOr('CORS_ORIGINS', this.env === 'development' ? 'http://localhost:5173' : ''), this.env);
     this.maintenanceMode = maintenanceMode(envOr('MAINTENANCE_MODE', this.env === 'production' ? 'disabled' : 'api'));
+    this.workloads = {
+      matchMaintenanceBatchSize: integer(
+        envOr('MATCH_MAINTENANCE_BATCH_SIZE', '500'),
+        'MATCH_MAINTENANCE_BATCH_SIZE',
+        1,
+        5_000,
+      ),
+      matchMaintenanceMaxBatches: integer(
+        envOr('MATCH_MAINTENANCE_MAX_BATCHES', '20'),
+        'MATCH_MAINTENANCE_MAX_BATCHES',
+        1,
+        1_000,
+      ),
+      outboxPurgeBatchSize: integer(
+        envOr('OUTBOX_PURGE_BATCH_SIZE', '500'),
+        'OUTBOX_PURGE_BATCH_SIZE',
+        1,
+        5_000,
+      ),
+      outboxPurgeMaxBatches: integer(
+        envOr('OUTBOX_PURGE_MAX_BATCHES', '20'),
+        'OUTBOX_PURGE_MAX_BATCHES',
+        1,
+        1_000,
+      ),
+      dataExportPageSize: integer(
+        envOr('DATA_EXPORT_PAGE_SIZE', '250'),
+        'DATA_EXPORT_PAGE_SIZE',
+        10,
+        2_000,
+      ),
+      dataExportMaxBytes: integer(
+        envOr('DATA_EXPORT_MAX_BYTES', '536870912'),
+        'DATA_EXPORT_MAX_BYTES',
+        1_048_576,
+        2_147_483_647,
+      ),
+      dataExportMaxConcurrency: integer(
+        envOr('DATA_EXPORT_MAX_CONCURRENCY', '2'),
+        'DATA_EXPORT_MAX_CONCURRENCY',
+        1,
+        16,
+      ),
+    };
     const store = envOr('RATE_LIMIT_STORE', 'memory').toLowerCase();
     if (store !== 'memory' && store !== 'redis') throw new Error('config: RATE_LIMIT_STORE must be memory or redis');
     if (this.env === 'production' && store !== 'redis') throw new Error('config: production requires RATE_LIMIT_STORE=redis');

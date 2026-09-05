@@ -16,6 +16,7 @@ export class MaintenanceStatusRepository {
       ON CONFLICT (job_name) DO UPDATE
       SET run_id = EXCLUDED.run_id, status = 'running', started_at = EXCLUDED.started_at,
         finished_at = NULL, duration_ms = NULL, processed_count = 0,
+        batch_count = 0, work_remaining = false,
         last_error_code = NULL, updated_at = clock_timestamp()
       WHERE maintenance_job_status.started_at <= EXCLUDED.started_at
     `, [jobName, runId, startedAt]);
@@ -28,12 +29,14 @@ export class MaintenanceStatusRepository {
     finishedAt: Date;
     durationMs: number;
     processedCount: number;
+    batchCount: number;
+    workRemaining: boolean;
     errorCode: string | null;
   }): Promise<void> {
     await this.database.query(`
       UPDATE maintenance_job_status
       SET status = $3, finished_at = $4, duration_ms = $5, processed_count = $6,
-        last_error_code = $7,
+        batch_count = $7, work_remaining = $8, last_error_code = $9,
         last_succeeded_at = CASE WHEN $3 = 'succeeded' THEN $4 ELSE last_succeeded_at END,
         updated_at = clock_timestamp()
       WHERE job_name = $1 AND run_id = $2
@@ -44,6 +47,8 @@ export class MaintenanceStatusRepository {
       input.finishedAt,
       input.durationMs,
       input.processedCount,
+      input.batchCount,
+      input.workRemaining,
       input.errorCode,
     ]);
   }
@@ -51,7 +56,7 @@ export class MaintenanceStatusRepository {
   async list(): Promise<MaintenanceJobSnapshot[]> {
     return (await this.database.query<MaintenanceRow>(`
       SELECT job_name, status, started_at, finished_at, last_succeeded_at,
-        duration_ms, processed_count::int, last_error_code
+        duration_ms, processed_count::int, batch_count::int, work_remaining, last_error_code
       FROM maintenance_job_status
       ORDER BY job_name
     `)).rows;

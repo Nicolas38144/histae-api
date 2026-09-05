@@ -1,18 +1,14 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { apiError } from '../common/api-error';
-import { DiscoveryStore } from '../discovery/discovery.store';
-import { ScyllaUnavailableError } from '../scylla/scylla.service';
-import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow, PortableUserData } from './privacy.models';
+import { cursorPage, decodeCursor, type CursorPage } from '../common/pagination';
+import type { BlockedUser, DataAccessLogRow, DataRequestStatus, DataRequestType, DataSubjectRequestRow } from './privacy.models';
 import { PrivacyRepository } from './privacy.repository';
 import { MobileDeliveryService } from '../mobile/mobile-delivery.service';
-import { PhotosService } from '../photos/photos.service';
 
 @Injectable()
 export class PrivacyService {
   constructor(
     private readonly privacy: PrivacyRepository,
-    private readonly discovery: DiscoveryStore,
-    private readonly photos: PhotosService,
     @Optional() private readonly delivery?: MobileDeliveryService,
   ) {}
 
@@ -26,8 +22,21 @@ export class PrivacyService {
     return this.privacy.requestsForUser(userId);
   }
 
-  requestsForAdmin(status: DataRequestStatus | undefined): Promise<DataSubjectRequestRow[]> {
-    return this.privacy.requestsForAdmin(status);
+  async requestsForAdmin(
+    status: DataRequestStatus | undefined,
+    limit: number,
+    offset: number,
+    rawCursor?: string,
+  ): Promise<CursorPage<DataSubjectRequestRow>> {
+    rejectMixedPagination(offset, rawCursor);
+    const rows = await this.privacy.requestsForAdmin(
+      status,
+      limit + 1,
+      offset,
+      decodeCursor(rawCursor),
+    );
+    const page = cursorPage(rows, limit, (row) => row.cursor_at);
+    return { items: page.items.map(withoutCursor), next_cursor: page.next_cursor };
   }
 
   async updateRequest(
@@ -41,27 +50,6 @@ export class PrivacyService {
     if (result === 'not_found') throw apiError(404, 'data_request_not_found', 'The data subject request was not found.');
     if (result === 'invalid_transition') throw apiError(409, 'invalid_data_request_transition', 'This data subject request transition is not allowed.');
     return result;
-  }
-
-  async exportUserData(userId: string): Promise<PortableUserData> {
-    try {
-      const [postgresData, outgoingDiscoveryActions] = await Promise.all([
-        this.privacy.exportUserData(userId),
-        this.discovery.exportOwnActions(userId),
-      ]);
-      const profile = isRecord(postgresData.profile) ? postgresData.profile : null;
-      const photoKey = profile && (typeof profile.photo === 'string' || profile.photo === null) ? profile.photo : null;
-      return {
-        ...postgresData,
-        profile: profile === null ? postgresData.profile : { ...profile, photo: await this.photos.urlForKey(photoKey) },
-        discovery_actions: { outgoing: outgoingDiscoveryActions },
-      };
-    } catch (error) {
-      if (error instanceof ScyllaUnavailableError) {
-        throw apiError(503, 'data_export_unavailable', 'The complete data export is temporarily unavailable.', error);
-      }
-      throw error;
-    }
   }
 
   async blockUser(blockerId: string, blockedId: string): Promise<void> {
@@ -79,11 +67,32 @@ export class PrivacyService {
     return this.privacy.blockedUsers(blockerId);
   }
 
-  accessLogs(accessedUserId: string): Promise<DataAccessLogRow[]> {
-    return this.privacy.accessLogs(accessedUserId);
+  async accessLogs(
+    accessedUserId: string,
+    limit: number,
+    offset: number,
+    rawCursor?: string,
+  ): Promise<CursorPage<DataAccessLogRow>> {
+    rejectMixedPagination(offset, rawCursor);
+    const rows = await this.privacy.accessLogs(
+      accessedUserId,
+      limit + 1,
+      offset,
+      decodeCursor(rawCursor),
+    );
+    const page = cursorPage(rows, limit, (row) => row.cursor_at);
+    return { items: page.items.map(withoutCursor), next_cursor: page.next_cursor };
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function rejectMixedPagination(offset: number, cursor?: string): void {
+  if (cursor && offset !== 0) {
+    throw apiError(400, 'invalid_cursor', 'Cursor pagination cannot be combined with an offset.');
+  }
+}
+
+function withoutCursor<T extends { cursor_at: string }>(row: T): Omit<T, 'cursor_at'> {
+  const { cursor_at: _cursorAt, ...item } = row;
+  void _cursorAt;
+  return item;
 }

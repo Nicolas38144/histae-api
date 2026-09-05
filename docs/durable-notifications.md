@@ -91,9 +91,10 @@ Les durées restent celles de la [politique de rétention](retention-policy.md) 
 l’événement purgé, la notification ou l’appareil. Une dead letter dont la référence a disparu ne peut pas
 reconstruire le contenu ; sa relance devient un no-op acquitté.
 
-Le nettoyage du worker continu est actuellement plafonné à 50 événements par heure. La rétention de 7 jours est
-le seuil d’éligibilité à la purge, pas une garantie de délai effectif si le stock croît plus vite. Le bornage est
-suivi dans la [roadmap](roadmap.md#r06-volumes).
+Le nettoyage horaire supprime par défaut jusqu’à 20 lots de 500 événements résolus. La taille et le nombre de lots
+sont configurables ; `work_remaining` indique que le budget a été consommé. La rétention de 7 jours reste le seuil
+d’éligibilité, pas une garantie de délai effectif si le stock croît plus vite. Voir
+[le guide de calibration](volume-and-export.md).
 
 ## Déploiement et validation
 

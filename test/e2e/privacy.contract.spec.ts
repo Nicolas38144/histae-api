@@ -1,4 +1,4 @@
-import type { CanActivate, ExecutionContext } from '@nestjs/common';
+import { StreamableFile, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
@@ -9,6 +9,7 @@ import { ConfigService } from '../../src/config/config.service';
 import { PrivacyController } from '../../src/privacy/privacy.controller';
 import { PrivacyService } from '../../src/privacy/privacy.service';
 import { RateLimitService } from '../../src/ratelimit/rate-limit.service';
+import { DataExportService } from '../../src/privacy/data-export.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const TARGET_ID = '22222222-2222-4222-8222-222222222222';
@@ -50,10 +51,15 @@ describe('Privacy HTTP contract', () => {
   const privacy = {
     createRequest: jest.fn().mockResolvedValue(dataRequest),
     requestsForUser: jest.fn().mockResolvedValue([dataRequest]),
-    exportUserData: jest.fn().mockResolvedValue(exportedData),
     blockedUsers: jest.fn().mockResolvedValue([blockedUser]),
     blockUser: jest.fn().mockResolvedValue(undefined),
     unblockUser: jest.fn().mockResolvedValue(undefined),
+  };
+  const exports = {
+    prepare: jest.fn().mockImplementation(async () => new StreamableFile(
+      Buffer.from(JSON.stringify(exportedData)),
+      { type: 'application/json; charset=utf-8' },
+    )),
   };
   const limits = { enforce: jest.fn().mockResolvedValue(undefined) };
   const activeGuard: CanActivate = {
@@ -72,6 +78,7 @@ describe('Privacy HTTP contract', () => {
       controllers: [PrivacyController],
       providers: [
         { provide: PrivacyService, useValue: privacy },
+        { provide: DataExportService, useValue: exports },
         { provide: RateLimitService, useValue: limits },
         { provide: ConfigService, useValue: { rateLimit: { dataExport: { max: 5, windowMs: 3_600_000 } } } },
       ],
@@ -125,7 +132,7 @@ describe('Privacy HTTP contract', () => {
     expect(limits.enforce).toHaveBeenCalledWith(
       'data-export', USER_ID, { max: 5, windowMs: 3_600_000 }, 'data_export_rate_limit_exceeded',
     );
-    expect(privacy.exportUserData).toHaveBeenCalledWith(USER_ID);
+    expect(exports.prepare).toHaveBeenCalledWith(USER_ID);
   });
 
   it('lists blocked users without exposing unrelated account data', async () => {

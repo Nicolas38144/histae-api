@@ -15,11 +15,12 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R03 | Tests de concurrence et de coupure locale, plus correctif du pool Scylla |
 | R04 | Suivi Sweego, callbacks signés et traitement des issues incertaines |
 | R05 (implémentation) | Réconciliation Stripe durable, protection optimiste, watchdog Customer anti-doublon et file opérateur minimale |
+| R06 | Maintenances bornées et reprenables, purge outbox configurable, listes admin par curseur et export paginé sur fichier privé |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
-| PostgreSQL | Baseline figée de 44 tables puis migration incrémentale `015_stripe_reconciliation` |
+| PostgreSQL | Baseline unique `001_baseline_20260905` de 44 tables, consolidée jusqu’aux travaux R06 |
 
-Dernière validation : lint, typecheck, build, 568 tests autonomes et 190 intégrations locales, soit 758 tests dans
-92 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
+Dernière validation : lint, typecheck, build, 579 tests autonomes et 194 intégrations locales, soit 773 tests dans
+94 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
 aucun changement. Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni
 fournisseur réel, ni restauration, ni charge, ni pentest indépendant.
 
@@ -28,7 +29,6 @@ fournisseur réel, ni restauration, ni charge, ni pentest indépendant.
 | Référence | Travail | Priorité | Périmètre |
 | --- | --- | --- | --- |
 | R05-S | Valider les parcours réels dans la sandbox Stripe | P1 avant production | API, exploitation |
-| R06 | Borner les traitements et les exports | P2 | API |
 | R08 | Raccorder les métriques à des alertes | P1 avant production | API, exploitation |
 | R09 | Calibrer la modération et organiser les recours | P1 avant ouverture | API, dashboard, produit |
 | R10 | Tester sauvegarde, restauration et déploiement | P1 avant production | Infrastructure |
@@ -52,18 +52,6 @@ ambiguïtés et concurrence. Voir [le protocole](stripe-reconciliation.md).
 
 Terminé lorsque ces parcours réels convergent vers la même projection que les webhooks nominaux et que la
 procédure opérateur a été répétée depuis le dashboard.
-
-<a id="r06-volumes"></a>
-## R06 — Volumes, lots et exports
-
-- [ ] Découper la maintenance des matchs en lots reprenables sans perdre ses garanties de concurrence.
-- [ ] Augmenter le débit de purge outbox de façon bornée ; 50 événements par heure ne suffisent pas forcément.
-- [ ] Ajouter les curseurs manquants aux listes administratives plafonnées à 500 éléments.
-- [ ] Définir pour l’export un instantané cohérent ou documenter explicitement sa cohérence plus faible.
-- [ ] Éviter d’assembler un export volumineux intégralement en mémoire ; choisir streaming ou objet temporaire privé.
-- [ ] Mesurer volumes, mémoire, durée et verrouillage avant de fixer les tailles de lots.
-
-Terminé lorsque chaque traitement possède une borne, une progression, une reprise et un test de volume représentatif.
 
 <a id="r08-alertes"></a>
 ## R08 — Alertes et supervision
@@ -136,7 +124,7 @@ les tests et la documentation concernés. Voir [politique de conservation](reten
 ## Ordre conseillé
 
 1. R05-S : validation fournisseur avant toute facturation réelle.
-2. R06 et R08 : capacité et exploitation avant montée en charge.
+2. R08 : raccorder les signaux déjà disponibles à une supervision exploitable.
 3. R09 à R12 : préparation complète avant ouverture publique.
 4. R13 : à mener en parallèle avec les responsables produit et juridiques.
 

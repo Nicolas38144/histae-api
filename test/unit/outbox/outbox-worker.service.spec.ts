@@ -22,7 +22,7 @@ describe('OutboxWorkerService', () => {
     const outbox = outboxMock([EVENT]);
     outbox.renewClaim.mockResolvedValue(false);
     const photos = { findDeleting: jest.fn() };
-    const worker = new OutboxWorkerService(outbox as never, photos as never, {} as never, {} as never, tracker() as never, {} as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, photos as never, {} as never, workerConfig() as never, tracker() as never, {} as never, {} as never);
     await worker.runOnce();
     expect(photos.findDeleting).not.toHaveBeenCalled();
     expect(outbox.complete).not.toHaveBeenCalled();
@@ -33,7 +33,7 @@ describe('OutboxWorkerService', () => {
     const order: string[] = [];
     const notifications = { deliver: jest.fn(async () => { order.push('send'); }) };
     outbox.complete.mockImplementation(async () => { order.push('ack'); return true; });
-    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, {} as never, tracker() as never, notifications as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, workerConfig() as never, tracker() as never, notifications as never, {} as never);
     expect((await worker.runOnce()).completed).toBe(1);
     expect(order).toEqual(['send', 'ack']);
     expect(notifications.deliver).toHaveBeenCalledWith(EVENT.aggregateId);
@@ -42,7 +42,7 @@ describe('OutboxWorkerService', () => {
   it('retries push failures using only a normalized error code', async () => {
     const outbox = outboxMock([{ ...EVENT, eventType: 'notification.push' }]);
     const notifications = { deliver: jest.fn().mockRejectedValue(new PushDeliveryError()) };
-    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, {} as never, tracker() as never, notifications as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, workerConfig() as never, tracker() as never, notifications as never, {} as never);
     expect((await worker.runOnce()).retried).toBe(1);
     expect(outbox.reschedule).toHaveBeenCalledWith(EVENT.id, expect.any(String), expect.any(Date), 'push_delivery_unavailable', 10);
     expect(outbox.complete).not.toHaveBeenCalled();
@@ -52,7 +52,7 @@ describe('OutboxWorkerService', () => {
     const outbox = outboxMock([{ ...EVENT, eventType: 'notification.push' }]);
     outbox.complete.mockRejectedValue(new Error('commit unavailable'));
     const notifications = { deliver: jest.fn().mockResolvedValue(undefined) };
-    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, {} as never, tracker() as never, notifications as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, {} as never, {} as never, workerConfig() as never, tracker() as never, notifications as never, {} as never);
     expect((await worker.runOnce()).retried).toBe(1);
     expect(notifications.deliver).toHaveBeenCalledTimes(1);
   });
@@ -63,7 +63,7 @@ describe('OutboxWorkerService', () => {
       completeDeletion: jest.fn().mockResolvedValue(undefined),
     };
     const storage = { delete: jest.fn().mockResolvedValue(undefined) };
-    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, { maintenanceMode: 'disabled' } as never, tracker() as never, {} as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, workerConfig() as never, tracker() as never, {} as never, {} as never);
 
     await expect(worker.runOnce(new Date('2026-09-02T10:00:00.000Z')))
       .resolves.toEqual({
@@ -73,6 +73,8 @@ describe('OutboxWorkerService', () => {
         retried: 0,
         deadLettered: 0,
         purged: 2,
+        purgeBatches: 1,
+        workRemaining: false,
       });
     expect(storage.delete).toHaveBeenCalledWith(PHOTO.objectKey);
     expect(photos.completeDeletion).toHaveBeenCalledWith(PHOTO.id);
@@ -90,7 +92,7 @@ describe('OutboxWorkerService', () => {
       completeDeletion: jest.fn(),
     };
     const storage = { delete: jest.fn() };
-    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, { maintenanceMode: 'disabled' } as never, tracker() as never, {} as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, workerConfig() as never, tracker() as never, {} as never, {} as never);
 
     const result = await worker.runOnce();
     expect(result.completed).toBe(1);
@@ -110,7 +112,7 @@ describe('OutboxWorkerService', () => {
         new ObjectStorageUnavailableError(new Error('secret endpoint detail')),
       ),
     };
-    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, { maintenanceMode: 'disabled' } as never, tracker() as never, {} as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, photos as never, storage as never, workerConfig() as never, tracker() as never, {} as never, {} as never);
 
     const result = await worker.runOnce();
     expect(result.retried).toBe(1);
@@ -128,11 +130,35 @@ describe('OutboxWorkerService', () => {
   it('reports events moved to dead letter after the retry budget', async () => {
     const outbox = outboxMock([{ ...EVENT, attempts: 10 }]);
     outbox.reschedule.mockResolvedValue('dead_letter');
-    const worker = new OutboxWorkerService(outbox as never, { findDeleting: jest.fn().mockRejectedValue(new Error('database')) } as never, {} as never, { maintenanceMode: 'disabled' } as never, tracker() as never, {} as never, {} as never);
+    const worker = new OutboxWorkerService(outbox as never, { findDeleting: jest.fn().mockRejectedValue(new Error('database')) } as never, {} as never, workerConfig() as never, tracker() as never, {} as never, {} as never);
 
     const result = await worker.runOnce();
     expect(result.deadLettered).toBe(1);
     expect(result.retried).toBe(0);
+  });
+
+  it('purges completed events in multiple bounded batches and reports remaining work', async () => {
+    const outbox = outboxMock([]);
+    outbox.purgeCompleted
+      .mockResolvedValueOnce(500)
+      .mockResolvedValueOnce(500);
+    const config = workerConfig() as {
+      maintenanceMode: string;
+      workloads: { outboxPurgeBatchSize: number; outboxPurgeMaxBatches: number };
+    };
+    config.workloads.outboxPurgeMaxBatches = 2;
+    const worker = new OutboxWorkerService(
+      outbox as never, {} as never, {} as never, config as never,
+      tracker() as never, {} as never, {} as never,
+    );
+
+    await expect(worker.runOnce()).resolves.toEqual(expect.objectContaining({
+      purged: 1_000,
+      purgeBatches: 2,
+      workRemaining: true,
+    }));
+    expect(outbox.purgeCompleted).toHaveBeenCalledTimes(2);
+    expect(outbox.purgeCompleted.mock.calls.every((call) => call[1] === 500)).toBe(true);
   });
 
   it('dispatches Stripe reconciliation through the durable outbox', async () => {
@@ -140,7 +166,7 @@ describe('OutboxWorkerService', () => {
     const outbox = outboxMock([billingEvent]);
     const billing = { process: jest.fn().mockResolvedValue(undefined) };
     const worker = new OutboxWorkerService(
-      outbox as never, {} as never, {} as never, { maintenanceMode: 'disabled' } as never,
+      outbox as never, {} as never, {} as never, workerConfig() as never,
       tracker() as never, {} as never, {} as never, billing as never,
     );
 
@@ -157,7 +183,7 @@ describe('OutboxWorkerService', () => {
       process: jest.fn().mockRejectedValue(new BillingReconciliationError('billing_mapping_conflict', true)),
     };
     const worker = new OutboxWorkerService(
-      outbox as never, {} as never, {} as never, { maintenanceMode: 'disabled' } as never,
+      outbox as never, {} as never, {} as never, workerConfig() as never,
       tracker() as never, {} as never, {} as never, billing as never,
     );
 
@@ -180,4 +206,11 @@ function outboxMock(events: unknown[]): Record<string, jest.Mock> {
 
 function tracker(): { track: jest.Mock } {
   return { track: jest.fn(async (_job, work: () => Promise<unknown>) => work()) };
+}
+
+function workerConfig(): object {
+  return {
+    maintenanceMode: 'disabled',
+    workloads: { outboxPurgeBatchSize: 500, outboxPurgeMaxBatches: 20 },
+  };
 }

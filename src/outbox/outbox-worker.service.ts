@@ -24,6 +24,8 @@ import type { BillingReconciliationEventType } from '../billing/billing.models';
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
 const COMPLETED_PURGE_INTERVAL_MILLIS = 60 * 60 * 1_000;
+const DEFAULT_COMPLETED_PURGE_BATCH_SIZE = 500;
+const DEFAULT_COMPLETED_PURGE_MAX_BATCHES = 20;
 const BATCH_SIZE = 50;
 const HANDLER_CONCURRENCY = 5;
 const MAX_ATTEMPTS = 10;
@@ -75,6 +77,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       retried: 0,
       deadLettered: 0,
       purged: 0,
+      purgeBatches: 0,
+      workRemaining: events.length === BATCH_SIZE,
     };
 
     for (let offset = 0; offset < events.length; offset += HANDLER_CONCURRENCY) {
@@ -84,10 +88,12 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
     if (this.lastCompletedPurgeAt === undefined
       || now.getTime() - this.lastCompletedPurgeAt >= COMPLETED_PURGE_INTERVAL_MILLIS) {
-      result.purged = await this.outbox.purgeCompleted(
+      const purge = await this.purgeCompleted(
         new Date(now.getTime() - COMPLETED_RETENTION_MILLIS),
-        BATCH_SIZE,
       );
+      result.purged = purge.purged;
+      result.purgeBatches = purge.batches;
+      result.workRemaining ||= purge.workRemaining;
       this.lastCompletedPurgeAt = now.getTime();
     }
     return result;
@@ -170,7 +176,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         await this.tracker.track(
           'outbox',
           () => this.runOnce(now),
-          (result) => result.claimed + result.purged,
+          (result) => ({
+            processedCount: result.claimed + result.purged,
+            batchCount: 1 + result.purgeBatches,
+            workRemaining: result.workRemaining,
+          }),
         );
         this.lastStatusRecordedAt = now.getTime();
       } else {
@@ -186,6 +196,27 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.polling = false;
     }
+  }
+
+  private async purgeCompleted(before: Date): Promise<{
+    purged: number;
+    batches: number;
+    workRemaining: boolean;
+  }> {
+    let purged = 0;
+    let batches = 0;
+    let lastBatchSize = 0;
+    const batchSize = this.config.workloads?.outboxPurgeBatchSize ?? DEFAULT_COMPLETED_PURGE_BATCH_SIZE;
+    const maxBatches = this.config.workloads?.outboxPurgeMaxBatches ?? DEFAULT_COMPLETED_PURGE_MAX_BATCHES;
+
+    for (; batches < maxBatches; batches += 1) {
+      lastBatchSize = await this.outbox.purgeCompleted(before, batchSize);
+      purged += lastBatchSize;
+      if (lastBatchSize < batchSize) return { purged, batches: batches + 1, workRemaining: false };
+    }
+
+    this.logger.warn(formatLogEvent('outbox_completed_purge_batch_limit', { batches }));
+    return { purged, batches, workRemaining: lastBatchSize >= batchSize };
   }
 }
 

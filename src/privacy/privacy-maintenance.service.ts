@@ -10,6 +10,12 @@ const DAY = 24 * 60 * 60 * 1_000;
 const BATCH_SIZE = 1_000;
 const MAX_BATCHES_PER_RUN = 100;
 
+type PrivacyMaintenanceRun = {
+  result: PrivacyMaintenanceResult;
+  batchCount: number;
+  workRemaining: boolean;
+};
+
 @Injectable()
 export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrivacyMaintenanceService.name);
@@ -33,23 +39,36 @@ export class PrivacyMaintenanceService implements OnModuleInit, OnModuleDestroy 
   }
 
   async runOnce(): Promise<PrivacyMaintenanceResult | undefined> {
-    return this.tracker.track(
+    const run = await this.tracker.track(
       'privacy',
       () => this.performMaintenance(),
-      (result) => result ? Object.values(result).reduce((total, count) => total + count, 0) : 0,
+      (run) => run
+        ? {
+            processedCount: Object.values(run.result).reduce((total, count) => total + count, 0),
+            batchCount: run.batchCount,
+            workRemaining: run.workRemaining,
+          }
+        : 0,
     );
+    return run?.result;
   }
 
-  private async performMaintenance(): Promise<PrivacyMaintenanceResult | undefined> {
+  private async performMaintenance(): Promise<PrivacyMaintenanceRun | undefined> {
     let totals: PrivacyMaintenanceResult | undefined;
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch += 1) {
       const result = await this.privacy.runMaintenanceAsLeader(new Date(), BATCH_SIZE);
-      if (!result) return totals;
+      if (!result) {
+        return totals
+          ? { result: totals, batchCount: batch, workRemaining: true }
+          : undefined;
+      }
       totals = merge(totals, result);
-      if (Math.max(...Object.values(result)) < BATCH_SIZE) return totals;
+      if (Math.max(...Object.values(result)) < BATCH_SIZE) {
+        return { result: totals, batchCount: batch + 1, workRemaining: false };
+      }
     }
     this.logger.warn(formatLogEvent('privacy_maintenance_batch_limit', { batches: MAX_BATCHES_PER_RUN }));
-    return totals;
+    return { result: totals!, batchCount: MAX_BATCHES_PER_RUN, workRemaining: true };
   }
 
   private async execute(): Promise<void> {

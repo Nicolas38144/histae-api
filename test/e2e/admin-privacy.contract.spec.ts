@@ -16,7 +16,11 @@ describe('Administrator resumable erasure HTTP contract', () => {
   let authenticatedAt: Date;
   const erasure = { step: 'scylla', scylla_partition: 32, status: 'pending', event_id: REQUEST, attempts: 0, last_error_code: null };
   const privacy = {
-    requestsForAdmin: jest.fn().mockResolvedValue([{ id: REQUEST, status: 'in_progress', erasure }]),
+    requestsForAdmin: jest.fn().mockResolvedValue({
+      items: [{ id: REQUEST, status: 'in_progress', erasure }],
+      next_cursor: 'next-page',
+    }),
+    accessLogs: jest.fn().mockResolvedValue({ items: [], next_cursor: null }),
     updateRequest: jest.fn().mockResolvedValue('erasure_scheduled'),
   };
   const sessionGuard: CanActivate = {
@@ -66,7 +70,19 @@ describe('Administrator resumable erasure HTTP contract', () => {
     const response = await app.inject({ method: 'GET', url: '/api/admin/data-subject-requests?status=in_progress' });
     expect(response.statusCode).toBe(200);
     expect(response.json().requests[0].erasure).toEqual(erasure);
+    expect(response.json().next_cursor).toBe('next-page');
+    expect(privacy.requestsForAdmin).toHaveBeenCalledWith('in_progress', 20, 0, undefined);
     expect(response.body).not.toMatch(/object_key|stripe_customer|payload|token/);
+  });
+
+  it('paginates access logs for one validated user', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/admin/data-access-logs?user_id=${REQUEST}&limit=50&cursor=${Buffer.from(JSON.stringify({ at: '2030-01-01T00:00:00.000Z', id: REQUEST })).toString('base64url')}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ logs: [], next_cursor: null });
+    expect(privacy.accessLogs).toHaveBeenCalledWith(REQUEST, 50, 0, expect.any(String));
   });
 
   it('rejects caller-selected progress and provider identifiers', async () => {

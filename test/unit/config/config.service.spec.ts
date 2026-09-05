@@ -164,6 +164,39 @@ describe('ConfigService SMS configuration', () => {
     expect(new ConfigService().trustProxy).toEqual(['127.0.0.1', '10.0.0.0/8', '2001:db8::/32']);
   });
 
+  it('keeps high-volume workloads bounded and operator-tunable', () => {
+    expect(new ConfigService().workloads).toEqual({
+      matchMaintenanceBatchSize: 500,
+      matchMaintenanceMaxBatches: 20,
+      outboxPurgeBatchSize: 500,
+      outboxPurgeMaxBatches: 20,
+      dataExportPageSize: 250,
+      dataExportMaxBytes: 536_870_912,
+      dataExportMaxConcurrency: 2,
+    });
+    process.env = baseEnvironment({
+      MATCH_MAINTENANCE_BATCH_SIZE: '100',
+      OUTBOX_PURGE_MAX_BATCHES: '4',
+      DATA_EXPORT_PAGE_SIZE: '50',
+      DATA_EXPORT_MAX_BYTES: '1048576',
+      DATA_EXPORT_MAX_CONCURRENCY: '4',
+    });
+    expect(new ConfigService().workloads).toEqual(expect.objectContaining({
+      matchMaintenanceBatchSize: 100,
+      outboxPurgeMaxBatches: 4,
+      dataExportPageSize: 50,
+      dataExportMaxBytes: 1_048_576,
+      dataExportMaxConcurrency: 4,
+    }));
+  });
+
+  it('rejects workload settings outside their safety bounds', () => {
+    process.env = baseEnvironment({ MATCH_MAINTENANCE_BATCH_SIZE: '5001' });
+    expect(() => new ConfigService()).toThrow('config: invalid MATCH_MAINTENANCE_BATCH_SIZE');
+    process.env = baseEnvironment({ DATA_EXPORT_MAX_BYTES: '1024' });
+    expect(() => new ConfigService()).toThrow('config: invalid DATA_EXPORT_MAX_BYTES');
+  });
+
   it('refuses globally trusted forwarding headers in production', () => {
     process.env = productionEnvironment({ TRUST_PROXY: 'true' });
     expect(() => new ConfigService()).toThrow('config: production TRUST_PROXY must list explicit proxy IP addresses or CIDR ranges');
