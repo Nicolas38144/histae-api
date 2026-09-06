@@ -2,167 +2,349 @@
 
 Backend TypeScript de l’application de rencontres Histae, construit avec NestJS 11 et Fastify 5.
 
-Ce fichier sert uniquement à installer et exploiter le projet localement. Pour comprendre le métier, consulter
-[resume.md](resume.md) ; pour le contrat HTTP, consulter [routes.md](routes.md).
+Ce guide installe un environnement de développement complet sur une machine Debian neuve, sans WSL. Il a été
+pensé pour Debian 12 ou 13 avec PostgreSQL sur l’hôte et les autres dépendances dans Docker. Ce n’est pas une
+procédure de mise en production : les choix mono-nœud, HTTP local et fournisseurs désactivés sont réservés au
+développement.
 
-## Architecture en bref
+## Ce qui sera installé
 
-| Composant | Responsabilité | Choix local |
+| Composant | Exécution locale | Rôle |
 | --- | --- | --- |
-| PostgreSQL | Source de vérité transactionnelle | Base `histae-dev` |
-| ScyllaDB | Décisions de découverte à fort volume | Compose mono-nœud |
-| Redis | Rate limiting distribué et relais SSE | Compose local |
-| Stockage objet S3-compatible | Photos privées WebP | SeaweedFS `weed mini` |
-| Analyse photo | Visage, netteté et score de contenu | Service FastAPI/OpenCV/ONNX optionnel |
-| Supervision | Métriques, alertes et tableaux de bord | Prometheus, Alertmanager et Grafana optionnels |
-| Sweego / FCM / Stripe | SMS OTP, push et facturation | Fournisseurs configurables |
+| Histae API | processus Node.js | API métier sous `/api` |
+| PostgreSQL | service Debian | source de vérité transactionnelle |
+| ScyllaDB | conteneur mono-nœud | décisions de découverte |
+| Redis | conteneur | rate limiting distribué et relais SSE |
+| SeaweedFS `weed mini` | conteneur | stockage objet S3-compatible des photos |
+| Modération photo | conteneur optionnel | visage, netteté et contenu interdit |
+| Prometheus, Alertmanager et Grafana | conteneurs optionnels | métriques, alertes et tableaux de bord |
 
-L’API ne dépend d’aucune API propre à SeaweedFS. L’authentification administrateur est WebAuthn native, sans SSO.
+L’API ne dépend d’aucune fonction propre à SeaweedFS. L’authentification du dashboard est un WebAuthn natif, sans
+SSO ni fournisseur d’identité externe.
 
-## Prérequis
+## 1. Préparer Debian
 
-- Node.js 22 ou plus récent ;
-- pnpm 11.22.0 ;
-- PostgreSQL local ;
-- Docker dans WSL pour ScyllaDB, Redis, SeaweedFS et, si souhaité, l’analyse photo.
+Installer les outils système et PostgreSQL :
 
-Le gestionnaire de paquets est fixé dans `package.json` :
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl git openssl build-essential postgresql postgresql-client
+sudo systemctl enable --now postgresql
+```
 
-```powershell
+Installer Docker Engine et le plugin Compose depuis le dépôt officiel Docker :
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo docker run --rm hello-world
+```
+
+Les commandes suivantes utilisent Docker sans `sudo`. Cette facilité donne à l’utilisateur des privilèges
+équivalents à `root` sur la machine ; l’omettre et préfixer les commandes Docker par `sudo` si ce niveau d’accès
+n’est pas acceptable.
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker compose version
+```
+
+## 2. Installer Node.js 22 et pnpm
+
+Installer Node.js avec `nvm`, puis activer la version de pnpm attendue par le dépôt :
+
+```bash
+curl -fsSLo /tmp/nvm-install.sh \
+  https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh
+bash /tmp/nvm-install.sh
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm alias default 22
+
 corepack enable
-corepack install
+corepack prepare pnpm@11.22.0 --activate
+node --version
 pnpm --version
 ```
 
-## Installation locale
+Le résultat doit indiquer Node.js 22 ou plus récent et pnpm 11.22.0.
 
-Depuis PowerShell :
+## 3. Créer PostgreSQL
 
-```powershell
-Copy-Item .env.example .env
+Créer un rôle dédié et saisir un mot de passe local fort lorsque PostgreSQL le demande :
+
+```bash
+sudo -u postgres createuser --pwprompt histae
+sudo -u postgres createdb --owner=histae histae-dev
+psql -h 127.0.0.1 -U histae -d histae-dev -W -c 'SELECT 1;'
+```
+
+Conserver ce mot de passe : il devra être reporté dans `POSTGRES_PASSWORD`.
+
+## 4. Cloner et installer l’API
+
+```bash
+git clone https://github.com/Nicolas38144/histae-api.git
+cd histae-api
 pnpm install --frozen-lockfile
+cp .env.example .env
+chmod 600 .env
+```
+
+Ne jamais commiter `.env` ni le contenu de `.secrets/`.
+
+## 5. Configurer `.env`
+
+Ouvrir le fichier avec l’éditeur de son choix :
+
+```bash
+nano .env
+```
+
+Pour un premier démarrage local, renseigner au minimum :
+
+| Variable | Valeur ou règle |
+| --- | --- |
+| `ENV` | `development` |
+| `POSTGRES_HOST` | `127.0.0.1` |
+| `POSTGRES_USER` | `histae` |
+| `POSTGRES_PASSWORD` | mot de passe créé à l’étape 3 |
+| `POSTGRES_DB` | `histae-dev` |
+| `JWT_SECRET` | secret aléatoire d’au moins 32 octets |
+| `PHONE_ENCRYPTION_KEY` | 32 octets représentés par 64 caractères hexadécimaux |
+| `PHONE_HASH_KEY` | autre clé de 32 octets, distincte de la précédente |
+| `SMS_PROVIDER` | `disabled` tant que Sweego n’est pas configuré |
+| `PUSH_PROVIDER` | `disabled` tant que FCM n’est pas configuré |
+| `BILLING_PROVIDER` | `disabled` tant que Stripe n’est pas configuré |
+| `PHOTO_MODERATION_PROVIDER` | `local_http` si le conteneur de modération est lancé, sinon `disabled` |
+| `PHOTO_MODERATION_TOKEN` | secret aléatoire d’au moins 32 octets si `local_http` est utilisé |
+| `TRUST_PROXY` | `false` en accès direct local |
+
+Générer une valeur de 32 octets sous forme hexadécimale avec :
+
+```bash
+openssl rand -hex 32
+```
+
+Exécuter la commande séparément pour `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`, `PHONE_HASH_KEY` et
+`PHOTO_MODERATION_TOKEN` : ces valeurs doivent être différentes. Les identifiants `OBJECT_STORAGE_*` de
+`.env.example` conviennent uniquement au développement ; les remplacer ensemble dans `.env` avant tout usage sur
+une machine partagée.
+
+Avec `SMS_PROVIDER=disabled`, aucun OTP réel ne sera envoyé. Cette configuration permet de démarrer et de tester
+l’API, pas d’utiliser le parcours mobile complet avec un téléphone.
+
+## 6. Démarrer les dépendances locales
+
+Depuis la racine de `histae-api` :
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose-redis.yaml \
+  -f docker-compose.scylla.yml \
+  -f docker-compose.object-storage.yml \
+  up -d --wait
+```
+
+Si `PHOTO_MODERATION_PROVIDER=local_http`, ajouter son fichier à la même composition :
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose-redis.yaml \
+  -f docker-compose.scylla.yml \
+  -f docker-compose.object-storage.yml \
+  -f docker-compose.photo-moderation.yml \
+  up -d --build --wait
+```
+
+Contrôler l’état sans afficher les variables d’environnement :
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose-redis.yaml \
+  -f docker-compose.scylla.yml \
+  -f docker-compose.object-storage.yml \
+  ps
+```
+
+Ajouter `-f docker-compose.photo-moderation.yml` avant `ps` si le modèle local fait partie de la composition.
+
+Ces fichiers Compose sont destinés à une machine de développement de confiance. Ne publier aucun de leurs ports
+sur Internet.
+
+## 7. Initialiser les schémas et lancer l’API
+
+```bash
 pnpm run db:migrate
-```
-
-Compléter `.env` sans jamais le commiter. `.env.example` est la référence exhaustive des variables et valeurs
-locales. Les clés `PHONE_ENCRYPTION_KEY` et `PHONE_HASH_KEY` doivent chacune représenter exactement 32 octets.
-
-Démarrer les dépendances depuis WSL :
-
-```bash
-docker compose -f docker-compose.scylla.yml up -d
-docker compose -f docker-compose-redis.yaml up -d
-docker compose -f docker-compose.object-storage.yml up -d
-PHOTO_MODERATION_TOKEN='change-me-with-at-least-32-bytes' \
-  docker compose -f docker-compose.photo-moderation.yml up -d
-```
-
-La pile de supervision est séparée et optionnelle. Elle exige d’abord `METRICS_ENABLED=true`,
-`METRICS_HOST=0.0.0.0`, un `METRICS_TOKEN` dédié et `GRAFANA_ADMIN_PASSWORD` dans `.env` :
-
-```bash
-docker compose --env-file .env -f docker-compose.observability.yml up -d
-```
-
-Attendre les healthchecks, puis revenir dans PowerShell :
-
-```powershell
 pnpm run scylla:migrate
 pnpm run start:dev
 ```
 
-L’API écoute par défaut sur `http://localhost:8080` ; les routes métier sont sous `/api`.
-SeaweedFS n’est exposé que sur `127.0.0.1:8333`. L’analyse photo locale écoute par défaut sur
-`127.0.0.1:8090`.
-Grafana écoute sur `127.0.0.1:3001`; le listener Prometheus authentifié de l’API écoute séparément sur le port
-9091 et ne fait pas partie du contrat public. Voir [le guide de supervision](docs/observability.md).
+L’API écoute par défaut sur `http://localhost:8080`. Dans un second terminal :
 
-### Dashboard administrateur
-
-En développement, utiliser exactement `http://localhost:5173`, le RP ID `localhost` et le proxy Vite `/api`.
-WebAuthn n’accepte pas `127.0.0.1` comme substitut de `localhost`.
-
-Après promotion d’un compte en `admin` ou `superadmin`, créer son enrôlement initial :
-
-```powershell
-pnpm run admin:webauthn:bootstrap -- <uuid-du-compte>
+```bash
+curl -fsS http://127.0.0.1:8080/health/live
+curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
-Le jeton n’est affiché qu’une fois et expire après quinze minutes par défaut. Conserver ensuite au moins deux
-passkeys, dont idéalement une clé physique de secours.
+`live` confirme que le processus répond. `ready` ne doit réussir que lorsque les dépendances obligatoires sont
+joignables. Le contrat métier commence sous `/api`; les deux routes de santé sont les seules exceptions.
 
-## Processus d’arrière-plan
+En développement mono-instance, `MAINTENANCE_MODE=api` fait aussi exécuter l’outbox et la maintenance par le
+processus HTTP.
 
-`MAINTENANCE_MODE=api` convient au développement mono-instance : l’API exécute aussi l’outbox et la maintenance.
+## 8. Connecter le dashboard administrateur
 
-En production, utiliser `MAINTENANCE_MODE=disabled` sur les processus HTTP, maintenir au moins un worker
-`MAINTENANCE_MODE=worker pnpm run outbox:work` et planifier
-`MAINTENANCE_MODE=worker pnpm run maintenance:run`. Cette passe programme aussi la réconciliation Stripe ; le
-worker outbox effectue les lectures fournisseur. API et workers doivent utiliser la même version de code.
+Le développement WebAuthn exige exactement :
 
-Les budgets `MATCH_MAINTENANCE_*` et `OUTBOX_PURGE_*` bornent le travail et les transactions de chaque passe.
-`DATA_EXPORT_PAGE_SIZE` borne les lectures d’un export ; `DATA_EXPORT_MAX_BYTES` et
-`DATA_EXPORT_MAX_CONCURRENCY` protègent le disque temporaire.
-Ne modifier ces valeurs qu’après observation de `operations.maintenance`, de la mémoire, du pool PostgreSQL et des
-temps d’attente, selon [le guide volumes et exports](docs/volume-and-export.md).
+```ini
+ADMIN_WEBAUTHN_ORIGIN=http://localhost:5173
+ADMIN_WEBAUTHN_RP_ID=localhost
+```
 
-## Commandes
+Le navigateur doit ouvrir `http://localhost:5173`, jamais `http://127.0.0.1:5173`. Le dashboard relaie `/api` vers
+l’API locale, ce qui préserve la même origine côté navigateur.
+
+Après avoir promu un compte en `admin` ou `superadmin`, générer l’enrôlement initial depuis ce dépôt :
+
+```bash
+pnpm run admin:webauthn:bootstrap -- <uuid-du-compte-admin>
+```
+
+Le jeton de bootstrap est un secret à usage unique, affiché une seule fois et valable quinze minutes par défaut.
+
+## 9. Activer la supervision locale (optionnel)
+
+La pile de supervision utilise des secrets Docker basés sur des fichiers. Créer les deux fichiers avant le premier
+`docker compose up` :
+
+```bash
+install -d -m 700 .secrets
+openssl rand -hex 32 | tr -d '\n' > .secrets/histae_metrics_token
+openssl rand -base64 32 | tr -d '\n' > .secrets/histae_grafana_admin_password
+chmod 600 .secrets/histae_metrics_token .secrets/histae_grafana_admin_password
+```
+
+Dans `.env`, définir ensuite :
+
+```ini
+METRICS_ENABLED=true
+METRICS_HOST=0.0.0.0
+METRICS_PORT=9091
+METRICS_TOKEN=<contenu exact de .secrets/histae_metrics_token>
+```
+
+Redémarrer l’API, puis lancer la pile :
+
+```bash
+docker compose --env-file .env -f docker-compose.observability.yml up -d --wait
+docker compose --env-file .env -f docker-compose.observability.yml ps
+```
+
+Les interfaces restent liées à la boucle locale :
+
+| Interface | URL | Accès |
+| --- | --- | --- |
+| Grafana | `http://localhost:3001` | utilisateur `histae-admin`, mot de passe du fichier secret |
+| Prometheus | `http://localhost:9090` | local uniquement |
+| Alertmanager | `http://localhost:9093` | local uniquement |
+
+Le listener de métriques de l’API écoute sur le port 9091 et exige le bearer token. Il ne doit jamais passer dans
+un tunnel public. Le diagnostic et les tests `promtool` sont détaillés dans
+[docs/observability.md](docs/observability.md).
+
+## 10. Valider l’installation
+
+Les contrôles sans fournisseur externe :
+
+```bash
+pnpm run lint
+pnpm run typecheck
+pnpm run build
+pnpm run test:unit
+pnpm run test:e2e
+pnpm test
+```
+
+Lorsque PostgreSQL, ScyllaDB, Redis et le stockage objet local sont prêts :
+
+```bash
+pnpm run test:integration
+```
+
+Lire [test.md](test.md) avant les tests réels : ils imposent des cibles locales précises et des règles
+d’isolation.
+
+## Utilisation quotidienne
 
 | Commande | Usage |
 | --- | --- |
-| `pnpm run start:dev` | API avec rechargement automatique |
-| `pnpm run build` / `start:prod` | Compiler / lancer le build |
-| `pnpm run db:migrate` | Appliquer et vérifier les migrations PostgreSQL |
-| `pnpm run db:reset` | Reconstruire la seule base locale protégée `histae-dev` |
-| `pnpm run scylla:migrate` | Appliquer le schéma ScyllaDB |
-| `pnpm run db:reset-scylla` | Réinitialiser le keyspace local protégé |
-| `pnpm run admin:webauthn:bootstrap -- <uuid>` | Enrôler la première passkey admin |
-| `pnpm run seed:swipes` | Générer des décisions de développement |
-| `pnpm run fixtures:photos` | Régénérer les fixtures photo synthétiques |
-| `pnpm run maintenance:run` | Exécuter une passe de maintenance |
-| `pnpm run outbox:work` | Consommer l’outbox en continu |
-| `pnpm run lint` / `typecheck` / `build` | Contrôles statiques |
-| `pnpm test` / `test:integration` | Tests autonomes / avec stockages locaux |
+| `pnpm run start:dev` | lancer l’API avec rechargement automatique |
+| `pnpm run build` puis `pnpm run start:prod` | compiler et lancer le build local |
+| `pnpm run db:migrate` | appliquer et vérifier les migrations PostgreSQL |
+| `pnpm run scylla:migrate` | appliquer le schéma ScyllaDB |
+| `pnpm run maintenance:run` | exécuter une passe de maintenance |
+| `pnpm run outbox:work` | consommer l’outbox en continu |
+| `pnpm run admin:webauthn:bootstrap -- <uuid>` | préparer la première passkey d’un administrateur |
 
-Les resets refusent tout environnement autre que `development`, toute adresse non loopback et toute cible autre
-que la base ou le keyspace local explicitement autorisé. Voir [test.md](test.md) avant une validation réelle.
+Pour arrêter une dépendance sans effacer ses volumes :
 
-## Contrat HTTP
-
-L’API n’embarque ni OpenAPI ni Swagger. [routes.md](routes.md) constitue le contrat HTTP. Les erreurs publiques ont
-toujours la forme :
-
-```json
-{
-  "error": {
-    "code": "stable_code",
-    "message": "Human-readable message"
-  }
-}
+```bash
+docker compose --env-file .env \
+  -f docker-compose-redis.yaml \
+  -f docker-compose.scylla.yml \
+  -f docker-compose.object-storage.yml \
+  down
+docker compose --env-file .env -f docker-compose.observability.yml down
 ```
 
-En production, `TRUST_PROXY=true` est refusé : configurer précisément les IP ou CIDR des proxies approuvés.
+Si le modèle local a été démarré, ajouter `-f docker-compose.photo-moderation.yml` avant `down` afin d’arrêter toute
+la composition en une seule opération.
 
-## Documentation
+Ne pas ajouter `--volumes` sauf si la suppression des données de développement est volontaire.
+
+## Avant une mise en production
+
+Cette installation ne suffit pas pour la production. Il reste notamment à fournir un stockage S3 durable et
+sauvegardé, une topologie de données haute disponibilité, HTTPS, des domaines WebAuthn définitifs, une politique de
+pare-feu, des fournisseurs réels, des sauvegardes restaurées en exercice, la supervision privée et les validations
+de sécurité, charge et conformité listées dans [docs/roadmap.md](docs/roadmap.md).
+
+En production, `TRUST_PROXY=true` est refusé : configurer explicitement les IP ou CIDR des proxies approuvés.
+
+## Références du projet
 
 | Document | Rôle |
 | --- | --- |
-| [resume.md](resume.md) | Architecture, capacités et invariants métier actuels |
-| [routes.md](routes.md) | Contrat HTTP exhaustif |
-| [test.md](test.md) | Commandes, prérequis, isolation et limites des tests |
-| [docs/roadmap.md](docs/roadmap.md) | Travaux restant à réaliser |
-| [docs/postgres-migrations.md](docs/postgres-migrations.md) | Baseline, checksums et reset PostgreSQL |
-| [docs/module-responsibilities.md](docs/module-responsibilities.md) | Frontières de code et de transaction |
-| [docs/mobile-sessions.md](docs/mobile-sessions.md) | Sessions mobiles et rotation JWT |
-| [docs/sweego-delivery.md](docs/sweego-delivery.md) | États et callbacks OTP |
-| [docs/durable-notifications.md](docs/durable-notifications.md) | Outbox, push et acquittement |
-| [docs/account-erasure.md](docs/account-erasure.md) | Effacement reprenable |
-| [docs/stripe-reconciliation.md](docs/stripe-reconciliation.md) | Réconciliation des abonnements et créations Customer incertaines |
-| [docs/resilience-tests.md](docs/resilience-tests.md) | Concurrence et pannes contrôlées |
-| [docs/sql-performance.md](docs/sql-performance.md) | Audit et exploitation des requêtes SQL |
-| [docs/logging-policy.md](docs/logging-policy.md) | Format, minimisation, rétention et accès aux logs |
-| [docs/observability.md](docs/observability.md) | Métriques privées, alertes, dashboard et runbooks |
-| [docs/retention-policy.md](docs/retention-policy.md) | Conservation technique à faire valider |
-| [docs/legal-release-checklist.md](docs/legal-release-checklist.md) | Validation juridique avant production |
+| [resume.md](resume.md) | architecture, capacités et invariants actuels |
+| [routes.md](routes.md) | contrat HTTP exhaustif, sans OpenAPI ni Swagger |
+| [test.md](test.md) | commandes, prérequis et isolation des tests |
+| [docs/roadmap.md](docs/roadmap.md) | travaux encore ouverts |
+| [docs/observability.md](docs/observability.md) | métriques, alertes, dashboard et runbooks |
+| [docs/postgres-migrations.md](docs/postgres-migrations.md) | baseline, migrations et reset PostgreSQL |
+| [docs/module-responsibilities.md](docs/module-responsibilities.md) | frontières de code et de transaction |
+| [docs/logging-policy.md](docs/logging-policy.md) | minimisation et exploitation des logs |
+| [docs/legal-release-checklist.md](docs/legal-release-checklist.md) | validations juridiques avant production |
+| [AGENTS.md](AGENTS.md) | règles impératives pour modifier le dépôt |
 
-Les règles impératives pour toute modification sont dans [AGENTS.md](AGENTS.md).
+Sources d’installation système : [Docker Engine sur Debian](https://docs.docker.com/engine/install/debian/),
+[PostgreSQL sur Debian](https://www.postgresql.org/download/linux/debian/),
+[nvm](https://github.com/nvm-sh/nvm) et [pnpm](https://pnpm.io/installation).

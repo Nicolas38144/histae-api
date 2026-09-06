@@ -12,12 +12,13 @@ Il ne fait pas partie du contrat `/api`, n’accepte que `GET /metrics` et exige
 les métriques. Une collecte PostgreSQL en échec laisse disponibles les compteurs mémoire et publie
 `histae_metrics_collection_success 0`.
 
-Le serveur applicatif principal ne publie donc aucun endpoint Prometheus. En local, Prometheus sous Docker/WSL
-joint le port Windows via `host.docker.internal:9091`. Les trois interfaces de la pile sont liées à `127.0.0.1` :
+Le serveur applicatif principal ne publie donc aucun endpoint Prometheus. En local, Prometheus sous Docker joint
+l’API exécutée sur l’hôte Debian via `host.docker.internal:9091`. Les trois interfaces de la pile sont liées à
+`127.0.0.1` :
 
 | Interface | URL locale | Authentification |
 | --- | --- | --- |
-| Grafana | `http://localhost:3001` | `histae-admin` et `GRAFANA_ADMIN_PASSWORD` |
+| Grafana | `http://localhost:3001` | `histae-admin` et le secret fichier Grafana |
 | Prometheus | `http://localhost:9090` | loopback local, ne pas exposer |
 | Alertmanager | `http://localhost:9093` | loopback local, ne pas exposer |
 
@@ -29,21 +30,29 @@ l’adresse de ce réseau plutôt qu’à toutes les interfaces.
 
 ## Démarrage local
 
-Dans `.env`, définir au minimum :
+Créer d’abord les secrets Docker basés sur des fichiers :
+
+```bash
+install -d -m 700 .secrets
+openssl rand -hex 32 | tr -d '\n' > .secrets/histae_metrics_token
+openssl rand -base64 32 | tr -d '\n' > .secrets/histae_grafana_admin_password
+chmod 600 .secrets/histae_metrics_token .secrets/histae_grafana_admin_password
+```
+
+Dans `.env`, définir au minimum `METRICS_TOKEN` avec le contenu exact de
+`.secrets/histae_metrics_token` :
 
 ```ini
 METRICS_ENABLED=true
 METRICS_HOST=0.0.0.0
 METRICS_PORT=9091
 METRICS_TOKEN=<secret-aléatoire-dédié-de-32-octets-minimum>
-GRAFANA_ADMIN_PASSWORD=<mot-de-passe-local-fort>
 ```
 
-Redémarrer l’API depuis PowerShell, puis lancer la pile depuis WSL :
+Redémarrer l’API, puis lancer la pile depuis la racine du dépôt :
 
 ```bash
-cd /mnt/c/Users/nicol/Nicolas_Germani/Programmation/Histae/histae-api
-docker compose --env-file .env -f docker-compose.observability.yml up -d
+docker compose --env-file .env -f docker-compose.observability.yml up -d --wait
 docker compose --env-file .env -f docker-compose.observability.yml ps
 ```
 
@@ -60,7 +69,7 @@ docker compose --env-file .env -f docker-compose.observability.yml exec promethe
 
 Dans Prometheus, `Status > Target health` doit montrer `histae-api` à `UP`. Un `401` indique presque toujours que
 le token chargé par Compose diffère de celui de l’API ; un refus de connexion indique l’API arrêtée, les métriques
-désactivées, une mauvaise interface d’écoute ou un filtrage Windows/WSL.
+désactivées, une mauvaise interface d’écoute ou un filtrage réseau sur l’hôte.
 
 Le dashboard provisionné `Histae / Histae Operations` affiche disponibilité, alertes, HTTP, dépendances, pool
 PostgreSQL, outbox et maintenance. Les compteurs HTTP/dépendances repartent à zéro après un redémarrage de l’API ;
@@ -107,8 +116,9 @@ production. Cette décision opérationnelle ne doit pas être codée sous forme 
 ## Cible de métriques indisponible
 
 Vérifier `/health/live`, le processus API, `METRICS_ENABLED`, l’interface/port, puis la cible Prometheus. Si la cible
-répond `401`, réaligner le même `METRICS_TOKEN` côté API et Compose puis recréer le conteneur Prometheus ; ne jamais
-afficher le token. Un échec du seul port 9091 n’autorise pas à rendre `/metrics` public sur le port métier.
+répond `401`, réaligner le même `METRICS_TOKEN` côté API et dans `.secrets/histae_metrics_token`, puis recréer le
+conteneur Prometheus ; ne jamais afficher le token. Un échec du seul port 9091 n’autorise pas à rendre `/metrics`
+public sur le port métier.
 
 <a id="collection-failed"></a>
 ## Collecte persistante impossible
