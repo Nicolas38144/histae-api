@@ -18,6 +18,7 @@
 # Environment files and local secrets
 .env
 .env.example
+/.secrets/
 
 # Logs
 /logs/

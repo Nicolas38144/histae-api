@@ -89,7 +89,8 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Les métriques HTTP et dépendances restent agrégées, à cardinalité bornée et sans identifiant utilisateur. L’état persistant de maintenance ne conserve qu’un code d’erreur normalisé, jamais le message ou la stack.
 - L’export Prometheus utilise un listener HTTP séparé, désactivé par défaut et protégé par un bearer token dédié.
   Ne jamais l’ajouter au contrat `/api`, le publier via Cloudflare, journaliser son token ou introduire des labels
-  utilisateur/métier. Les interfaces Prometheus, Alertmanager et Grafana restent privées.
+  utilisateur/métier. Les interfaces Prometheus, Alertmanager et Grafana restent privées. Les secrets Docker de
+  supervision sont dans `.secrets/` et ignoré par Git.
 - Une collection administrative ou de blocages ne signe aucune photo. Seul un accès métier explicitement autorisé peut produire un lien signé ; le détail admin exige un motif et une trace d'audit.
 - La réconciliation admin ne doit exposer ni `object_key`, ni URL, ni image. Elle ne peut agir sur une photo `ready` ou un traitement récent, ne doit pas reprendre le verrou d’un worker actif et doit écrire `admin_reconcile_photo` avec un motif dans la transaction qui remet `photo.delete` en file.
 - Le statut technique d’une photo et son statut de modération sont indépendants. Les bios, réponses libres et photos non approuvées ne doivent jamais être projetées dans le feed ou les matchs ; leur propriétaire conserve leur contenu et voit le statut et les motifs de modération.

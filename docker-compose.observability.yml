@@ -114,6 +114,6 @@ volumes:
 
 secrets:
   histae-metrics-token:
-    environment: METRICS_TOKEN
+    file: ./.secrets/histae_metrics_token
   histae-grafana-password:
-    environment: GRAFANA_ADMIN_PASSWORD
+    file: ./.secrets/histae_grafana_admin_password
