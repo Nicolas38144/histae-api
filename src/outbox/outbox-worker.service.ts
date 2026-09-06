@@ -1,25 +1,19 @@
 import { randomUUID } from 'node:crypto';
 
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
+import { BillingReconciliationError } from '../billing/billing.errors';
+import { formatLogEvent } from '../common/logging/safe-logging';
 import { ConfigService } from '../config/config.service';
-import { PhotosRepository } from '../photos/photos.repository';
-import {
-  ObjectStorageService,
-  ObjectStorageUnavailableError,
-} from '../storage/object-storage.service';
+import { PushDeliveryError } from '../mobile/push.service';
+import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
+import { ErasureStepError } from '../privacy/erasure.service';
+import { ObjectStorageUnavailableError } from '../storage/object-storage.service';
 import { OUTBOX_LOCK_TIMEOUT_MILLIS } from './outbox.constants';
+import { OutboxEventDispatcher } from './outbox-event.dispatcher';
 import type { OutboxEvent, OutboxWorkerResult } from './outbox.models';
 import { OutboxRepository } from './outbox.repository';
-import { MaintenanceTrackerService } from '../operations/maintenance-tracker.service';
-import { NotificationPushService } from '../mobile/notification-push.service';
-import { PushDeliveryError } from '../mobile/push.service';
-import { ErasureService, ErasureStepError } from '../privacy/erasure.service';
-import { formatLogEvent } from '../common/logging/safe-logging';
-import { BillingReconciliationError } from '../billing/billing.errors';
-import { BillingReconciliationService } from '../billing/billing-reconciliation.service';
-import type { BillingReconciliationEventType } from '../billing/billing.models';
 
 const POLL_INTERVAL_MILLIS = 1_000;
 const COMPLETED_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1_000;
@@ -43,13 +37,9 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly outbox: OutboxRepository,
-    private readonly photos: PhotosRepository,
-    private readonly storage: ObjectStorageService,
+    private readonly dispatcher: OutboxEventDispatcher,
     private readonly config: ConfigService,
     private readonly tracker: MaintenanceTrackerService,
-    private readonly notifications: NotificationPushService,
-    private readonly erasures: ErasureService,
-    @Optional() private readonly billingReconciliation?: BillingReconciliationService,
   ) {}
 
   onModuleInit(): void {
@@ -113,7 +103,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     try {
       // A claimed batch can wait behind slow handlers. Recheck ownership before each send.
       if (!await this.outbox.renewClaim(event.id, this.workerId)) return;
-      if (!await this.dispatch(event)) {
+      if (await this.dispatcher.dispatch(event, this.workerId) === 'deferred') {
         result.deferred += 1;
         return;
       }
@@ -138,31 +128,6 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         }));
       }
     }
-  }
-
-  private async dispatch(event: OutboxEvent): Promise<boolean> {
-    if (event.eventType === 'account.erase') return this.erasures.process(event.id, this.workerId);
-    if (event.eventType === 'billing.subscription.reconcile'
-      || event.eventType === 'billing.customer.reconcile') {
-      if (!this.billingReconciliation) throw new BillingReconciliationError('billing_reconciliation_unavailable');
-      await this.billingReconciliation.process(
-        event.eventType as BillingReconciliationEventType,
-        event.aggregateId,
-      );
-      return true;
-    }
-    if (event.eventType === 'notification.push') {
-      await this.notifications.deliver(event.aggregateId);
-      return true;
-    }
-    if (event.eventType === 'photo.delete') {
-      const photo = await this.photos.findDeleting(event.aggregateId);
-      if (!photo) return true;
-      await this.storage.delete(photo.objectKey);
-      await this.photos.completeDeletion(photo.id);
-      return true;
-    }
-    throw new Error('Unsupported outbox event type');
   }
 
   private async poll(): Promise<void> {

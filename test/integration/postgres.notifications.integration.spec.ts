@@ -7,6 +7,7 @@ import { NotificationPushRepository } from '../../src/mobile/notification-push.r
 import { NotificationPushService } from '../../src/mobile/notification-push.service';
 import { PushDeliveryError } from '../../src/mobile/push.service';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
+import { OutboxEventDispatcher } from '../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../src/outbox/outbox-worker.service';
 import { MatchesRepository } from '../../src/matches/matches.repository';
 import { MatchMessageRepository } from '../../src/matches/match-message.repository';
@@ -275,7 +276,18 @@ describe('PostgreSQL durable notifications', () => {
 
   function worker(send = jest.fn().mockResolvedValue(undefined), repository = outbox) {
     const notifications = new NotificationPushService(deliveries, { sendToDevice: send } as never);
-    return new OutboxWorkerService(repository, {} as never, {} as never, { maintenanceMode: 'disabled' } as never, {} as never, notifications, {} as never);
+    const dispatcher = new OutboxEventDispatcher(
+      {} as never,
+      {} as never,
+      notifications,
+      {} as never,
+    );
+    return new OutboxWorkerService(
+      repository,
+      dispatcher,
+      { maintenanceMode: 'disabled' } as never,
+      {} as never,
+    );
   }
 
   it('rolls back intent and jobs together and exposes neither before commit', async () => {

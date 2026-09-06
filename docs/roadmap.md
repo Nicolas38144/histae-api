@@ -19,8 +19,8 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
 | PostgreSQL | Baseline unique `001_baseline_20260905` de 44 tables, consolidée jusqu’aux travaux R06 |
 
-Dernière validation : lint, typecheck, build, 579 tests autonomes et 194 intégrations locales, soit 773 tests dans
-94 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
+Dernière validation : lint, typecheck, build, 586 tests autonomes et 194 intégrations locales, soit 780 tests dans
+95 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
 aucun changement. Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni
 fournisseur réel, ni restauration, ni charge, ni pentest indépendant.
 

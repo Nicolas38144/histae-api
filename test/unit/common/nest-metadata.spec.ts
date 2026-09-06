@@ -65,6 +65,7 @@ import { PhotosRepository } from '../../../src/photos/photos.repository';
 import { PhotosService } from '../../../src/photos/photos.service';
 import { PhotosMaintenanceService } from '../../../src/photos/photos-maintenance.service';
 import { OutboxRepository } from '../../../src/outbox/outbox.repository';
+import { OutboxEventDispatcher } from '../../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../../src/outbox/outbox-worker.service';
 import { ProfileQuestionsController } from '../../../src/profile-questions/profile-questions.controller';
 import { ProfileQuestionsRepository } from '../../../src/profile-questions/profile-questions.repository';
@@ -83,7 +84,7 @@ const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, RefreshSessionRepository, AuthService, OtpService, SweegoSmsService, TokenService,
   DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
   PhotosRepository, PhotosService, PhotosMaintenanceService,
-  OutboxRepository, OutboxWorkerService,
+  OutboxRepository, OutboxEventDispatcher, OutboxWorkerService,
   OutboxAdminController, OutboxAdminService,
   MaintenanceStatusRepository, MaintenanceTrackerService, OperationalStatusService,
   DiscoveryController, DiscoveryRepository, DiscoveryStore, DiscoveryService,

@@ -47,6 +47,9 @@ pas la seule présence d’une ligne ERROR.
 directes et les appels au logger qui ne passent pas par un code ou un formateur sûr. Les valeurs interdites sont
 également exercées par `safe-logging.spec.ts`. Voir [la politique de journalisation](docs/logging-policy.md).
 
+Les tests unitaires de l’outbox séparent la politique du worker (claim, renouvellement, report, retry, dead letter
+et purge) du routage des effets idempotents par le dispatcher (photo, push, effacement et réconciliation Stripe).
+
 ## Validation avec les stockages locaux
 
 Préparer les services décrits dans le [README](README.md), puis vérifier la cible de `.env` avant les migrations.

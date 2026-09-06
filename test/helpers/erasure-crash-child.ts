@@ -3,6 +3,7 @@ import { AccountActivityService } from '../../src/database/account-activity.serv
 import { ErasureRepository } from '../../src/privacy/erasure.repository';
 import { ErasureService } from '../../src/privacy/erasure.service';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
+import { OutboxEventDispatcher } from '../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../src/outbox/outbox-worker.service';
 import type { PoolConfig } from 'pg';
 
@@ -33,8 +34,18 @@ process.once('message', async (input: { postgres: PoolConfig; afterCheckpoint: b
       { deleteCustomerForAccount: async () => true } as never,
       { deleteForAccount: async () => true } as never,
       { deleteUserDataBatch: async () => true } as never);
-    const worker = new OutboxWorkerService(outbox, {} as never, {} as never,
-      { maintenanceMode: 'disabled' } as never, {} as never, {} as never, erasure);
+    const dispatcher = new OutboxEventDispatcher(
+      {} as never,
+      {} as never,
+      {} as never,
+      erasure,
+    );
+    const worker = new OutboxWorkerService(
+      outbox,
+      dispatcher,
+      { maintenanceMode: 'disabled' } as never,
+      {} as never,
+    );
     await worker.runOnce();
     process.send?.({ type: 'unexpected_completion' });
   } catch { process.send?.({ type: 'failed' }); }

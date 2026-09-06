@@ -11,6 +11,7 @@ import { ErasureService } from '../../src/privacy/erasure.service';
 import { PhotosRepository } from '../../src/photos/photos.repository';
 import { PhotosService } from '../../src/photos/photos.service';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
+import { OutboxEventDispatcher } from '../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../src/outbox/outbox-worker.service';
 import { MatchesRepository } from '../../src/matches/matches.repository';
 import { MatchMessageRepository } from '../../src/matches/match-message.repository';
@@ -110,8 +111,18 @@ describe('PostgreSQL resumable account erasure', () => {
 
   function worker(repository = erasures) {
     const service = new ErasureService(repository, activity, stripe as never, photos, scylla as never);
-    return new OutboxWorkerService(outbox, photosRepository, storage as never, { maintenanceMode: 'disabled' } as never,
-      {} as never, { deliver: jest.fn() } as never, service);
+    const dispatcher = new OutboxEventDispatcher(
+      photosRepository,
+      storage as never,
+      { deliver: jest.fn() } as never,
+      service,
+    );
+    return new OutboxWorkerService(
+      outbox,
+      dispatcher,
+      { maintenanceMode: 'disabled' } as never,
+      {} as never,
+    );
   }
 
   async function tick(instance = worker()) {

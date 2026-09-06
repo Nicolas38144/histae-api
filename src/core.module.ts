@@ -13,6 +13,7 @@ import { PhotosService } from './photos/photos.service';
 import { PhotosMaintenanceService } from './photos/photos-maintenance.service';
 import { OutboxRepository } from './outbox/outbox.repository';
 import { OutboxWorkerService } from './outbox/outbox-worker.service';
+import { OutboxEventDispatcher } from './outbox/outbox-event.dispatcher';
 import { PhotoModerationService } from './moderation/photo-moderation.service';
 import { TextModerationService } from './moderation/text-moderation.service';
 import { MaintenanceStatusRepository } from './operations/maintenance-status.repository';
@@ -38,6 +39,7 @@ import { SweegoWebhookMetricsService } from './auth/sweego-webhook-metrics.servi
     PhotosService,
     PhotosMaintenanceService,
     OutboxRepository,
+    OutboxEventDispatcher,
     OutboxWorkerService,
     PhotoModerationService,
     TextModerationService,

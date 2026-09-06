@@ -10,6 +10,7 @@ import { DiscoveryStore } from '../../src/discovery/discovery.store';
 import { ObjectStorageService } from '../../src/storage/object-storage.service';
 import { PhotosRepository } from '../../src/photos/photos.repository';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
+import { OutboxEventDispatcher } from '../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../src/outbox/outbox-worker.service';
 import { accountActivityStub } from '../account-activity.stub';
 import { IsolatedPostgres, eventually } from '../helpers/isolated-postgres';
@@ -97,8 +98,13 @@ describe('Real local dependency recovery through disposable TCP relays', () => {
       credentials: { accessKeyId: config.objectStorage.accessKey, secretAccessKey: config.objectStorage.secretKey } });
     const owner = await fixture.account(), id = randomUUID(), key = `profile-photos/${owner}/${id}.webp`;
     const outbox = new OutboxRepository(fixture.database), photos = new PhotosRepository(fixture.database, outbox);
-    const worker = new OutboxWorkerService(outbox, photos, storage, { maintenanceMode: 'disabled' } as never,
-      {} as never, {} as never, {} as never);
+    const dispatcher = new OutboxEventDispatcher(photos, storage, {} as never, {} as never);
+    const worker = new OutboxWorkerService(
+      outbox,
+      dispatcher,
+      { maintenanceMode: 'disabled' } as never,
+      {} as never,
+    );
     try {
       await direct.put({ key, body: Buffer.from('r03-temporary-object'), contentType: 'image/webp' });
       await fixture.pool.query(`INSERT INTO user_photo(id,user_id,object_key,status) VALUES ($1,$2,$3,'deleting')`, [id, owner, key]);

@@ -169,8 +169,8 @@ leader mais avec un commit par lot ; leurs messages et signalements sont nettoy�
 cascade volumineuse. La purge horaire de l’outbox peut traiter 10 000 lignes par défaut en lots de 500. Les tailles,
 budgets et règles de calibration sont dans [docs/volume-and-export.md](docs/volume-and-export.md).
 
-Dernière validation complète : lint, typecheck, build, 579 tests autonomes et 194 intégrations locales, soit
-773 tests dans 94 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète : lint, typecheck, build, 586 tests autonomes et 194 intégrations locales, soit
+780 tests dans 95 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 

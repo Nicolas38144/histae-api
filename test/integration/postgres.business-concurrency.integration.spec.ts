@@ -28,7 +28,7 @@ describe('PostgreSQL business concurrency and retention', () => {
 
   beforeAll(() => fixture.start(), 60_000);
   afterEach(async () => { jest.restoreAllMocks(); await fixture.reset(); });
-  afterAll(() => fixture.stop());
+  afterAll(() => fixture.stop(), 30_000);
 
   async function ready(id: string) {
     await users.recordConsents(id, choices.map(consent_type => ({ consent_type, granted: true, document_version: 'v1' })), '', '');

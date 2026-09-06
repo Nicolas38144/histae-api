@@ -25,6 +25,7 @@ Ce document fixe les frontières internes à préserver lors d’un refactor. Il
 | Mobile | `notification-outbox.ts` | Notifications et tâches par appareil dans la transaction métier de l’appelant. |
 | Mobile | `NotificationPushRepository` / `NotificationPushService` | Éligibilité courante et métadonnées minimales avant envoi FCM. |
 | Mobile | `MobileDeliveryService` / `PushService` | Signaux SSE best-effort / envoi vers un seul appareil avec erreurs normalisées. |
+| Outbox | `OutboxWorkerService` / `OutboxEventDispatcher` | Claim, renouvellement, retry, dead letter et purge / routage des effets métier idempotents après commit. |
 
 Les modules Nest injectent directement ces composants. Il n'existe pas de façade de repository qui recrée ses
 dépendances avec `new` ou conserve une copie des anciennes méthodes. Les contrôleurs gardent leurs guards,

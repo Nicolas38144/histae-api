@@ -65,6 +65,9 @@ describe('PostgreSQL migration chain', () => {
     const client = await fixture.pool.connect();
     try {
       await client.query('BEGIN');
+      // Rebuilding the full schema plus 400 development fixtures is intentionally
+      // heavier than an application query. Keep the larger budget local to this transaction.
+      await client.query("SET LOCAL statement_timeout = '25s'");
       await client.query(await readFile('db/drop_postgres.sql', 'utf8'));
       await client.query('DROP TABLE schema_migrations');
       expect(await objectNames(client)).toEqual([]);
@@ -77,7 +80,7 @@ describe('PostgreSQL migration chain', () => {
       await client.query('ROLLBACK');
       client.release();
     }
-  });
+  }, 60_000);
 
   async function objectNames(client: Pick<PoolClient, 'query'> = fixture.pool) {
     const result = await client.query<{ kind: string; name: string }>(`
