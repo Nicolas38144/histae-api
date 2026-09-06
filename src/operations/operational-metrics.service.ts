@@ -9,7 +9,7 @@ import type {
 import { DEPENDENCY_NAMES } from './operations.models';
 
 const MAX_HTTP_ROUTES = 200;
-const HTTP_DURATION_BUCKETS = [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, Number.POSITIVE_INFINITY];
+export const OPERATION_DURATION_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, Number.POSITIVE_INFINITY] as const;
 
 type Counters = {
   calls: number;
@@ -19,6 +19,7 @@ type Counters = {
   lastErrorAt: Date | null;
   lastErrorCode: string | null;
   lastOutcome: 'success' | 'error' | null;
+  durationBuckets: number[];
 };
 
 type HttpCounters = {
@@ -32,6 +33,12 @@ type HttpCounters = {
   status5xx: number;
   totalDurationMs: number;
   durationBuckets: number[];
+};
+
+export type PrometheusMetricsSnapshot = {
+  startedAt: Date;
+  http: ReadonlyArray<Readonly<HttpCounters>>;
+  dependencies: ReadonlyArray<Readonly<Counters> & { name: DependencyName }>;
 };
 
 @Injectable()
@@ -90,7 +97,7 @@ export class OperationalMetricsService implements OnModuleDestroy {
         status429: 0,
         status5xx: 0,
         totalDurationMs: 0,
-        durationBuckets: HTTP_DURATION_BUCKETS.map(() => 0),
+        durationBuckets: OPERATION_DURATION_BUCKETS_MS.map(() => 0),
       };
       this.routes.set(key, counters);
     }
@@ -101,8 +108,23 @@ export class OperationalMetricsService implements OnModuleDestroy {
     counters.status429 += statusCode === 429 ? 1 : 0;
     counters.status5xx += statusCode >= 500 ? 1 : 0;
     counters.totalDurationMs += durationMs;
-    const bucket = HTTP_DURATION_BUCKETS.findIndex((upperBound) => durationMs <= upperBound);
+    const bucket = OPERATION_DURATION_BUCKETS_MS.findIndex((upperBound) => durationMs <= upperBound);
     counters.durationBuckets[bucket] += 1;
+  }
+
+  prometheusSnapshot(): PrometheusMetricsSnapshot {
+    return {
+      startedAt: new Date(this.startedAt),
+      http: [...this.routes.values()].map((counters) => ({
+        ...counters,
+        durationBuckets: [...counters.durationBuckets],
+      })),
+      dependencies: DEPENDENCY_NAMES.map((name) => ({
+        name,
+        ...this.dependencies.get(name)!,
+        durationBuckets: [...this.dependencies.get(name)!.durationBuckets],
+      })),
+    };
   }
 
   httpSnapshot(): OperationalSnapshotHttp {
@@ -161,6 +183,8 @@ export class OperationalMetricsService implements OnModuleDestroy {
     const counters = this.dependencies.get(dependency)!;
     counters.calls += 1;
     counters.totalDurationMs += durationMs;
+    const bucket = OPERATION_DURATION_BUCKETS_MS.findIndex((upperBound) => durationMs <= upperBound);
+    counters.durationBuckets[bucket] += 1;
     if (succeeded) {
       counters.lastSuccessAt = new Date();
       counters.lastOutcome = 'success';
@@ -193,6 +217,7 @@ function emptyCounters(): Counters {
     lastErrorAt: null,
     lastErrorCode: null,
     lastOutcome: null,
+    durationBuckets: OPERATION_DURATION_BUCKETS_MS.map(() => 0),
   };
 }
 
@@ -218,11 +243,11 @@ function percentileUpperBound(buckets: number[], total: number, percentile: numb
   for (let index = 0; index < buckets.length; index += 1) {
     cumulative += buckets[index]!;
     if (cumulative >= threshold) {
-      const bound = HTTP_DURATION_BUCKETS[index]!;
-      return Number.isFinite(bound) ? bound : HTTP_DURATION_BUCKETS.at(-2)!;
+      const bound = OPERATION_DURATION_BUCKETS_MS[index]!;
+      return Number.isFinite(bound) ? bound : OPERATION_DURATION_BUCKETS_MS.at(-2)!;
     }
   }
-  return HTTP_DURATION_BUCKETS.at(-2)!;
+  return OPERATION_DURATION_BUCKETS_MS.at(-2)!;
 }
 
 function sum<T>(items: T[], key: keyof T): number {

@@ -49,6 +49,8 @@ directes et les appels au logger qui ne passent pas par un code ou un formateur 
 
 Les tests unitaires de l’outbox séparent la politique du worker (claim, renouvellement, report, retry, dead letter
 et purge) du routage des effets idempotents par le dispatcher (photo, push, effacement et réconciliation Stripe).
+Les assets de supervision sont contrôlés statiquement sans démarrer Docker ; la syntaxe et le comportement des
+règles sont ensuite vérifiés avec le `promtool` de l’image Prometheus épinglée.
 
 ## Validation avec les stockages locaux
 
@@ -77,6 +79,19 @@ Les suites réelles sont activées directement, sans flag de contournement. Une 
 échec à diagnostiquer, pas une raison de désactiver silencieusement les tests. Aucun reset n’est nécessaire.
 La commande complète lance PostgreSQL, Scylla, Redis puis les coupures réseau dans quatre processus Jest successifs :
 les connexions et pilotes natifs sont ainsi libérés entre groupes, sans réduire la couverture.
+
+Une fois la pile de supervision locale lancée, valider sa configuration et les incidents synthétiques :
+
+```bash
+docker compose --env-file .env -f docker-compose.observability.yml exec prometheus \
+  promtool check config /etc/prometheus/prometheus.yml
+docker compose --env-file .env -f docker-compose.observability.yml exec prometheus \
+  promtool test rules /etc/prometheus/alerts.test.yml
+```
+
+Cette validation ne livre pas une notification d’astreinte : le compose de développement conserve les alertes
+dans l’interface locale. Le test de chaîne complet et non destructif est décrit dans
+[le guide de supervision](docs/observability.md#test-contrôlé-des-alertes).
 
 Commandes ciblées :
 
@@ -161,4 +176,5 @@ Guides spécialisés :
 - [Callbacks et reprises OTP Sweego](docs/sweego-delivery.md) : signatures/réponses synthétiques, PostgreSQL isolé, aucun SMS réel.
 - [Baseline PostgreSQL](docs/postgres-migrations.md) : initialisation, checksums, reset local protégé et évolutions suivantes.
 - [Politique de rétention](docs/retention-policy.md)
+- [Supervision, alertes et runbooks](docs/observability.md)
 - [Portée des contrôles de sécurité](docs/roadmap.md#r12-securite)

@@ -22,6 +22,8 @@ import { OperationalMetricsService } from './operations/operational-metrics.serv
 import { OperationalStatusService } from './operations/operational-status.service';
 import { OtpRepository } from './auth/otp.repository';
 import { SweegoWebhookMetricsService } from './auth/sweego-webhook-metrics.service';
+import { PrometheusExporterService } from './operations/prometheus-exporter.service';
+import { MetricsServerService } from './operations/metrics-server.service';
 
 @Global()
 @Module({
@@ -49,6 +51,8 @@ import { SweegoWebhookMetricsService } from './auth/sweego-webhook-metrics.servi
     OperationalStatusService,
     OtpRepository,
     SweegoWebhookMetricsService,
+    PrometheusExporterService,
+    MetricsServerService,
   ],
   exports: [
     ConfigService, DatabaseService, AccountActivityService, ScyllaService, RedisService, RateLimitService,
@@ -59,6 +63,7 @@ import { SweegoWebhookMetricsService } from './auth/sweego-webhook-metrics.servi
     OperationalMetricsService, MaintenanceStatusRepository,
     MaintenanceTrackerService, OperationalStatusService,
     OtpRepository, SweegoWebhookMetricsService,
+    PrometheusExporterService, MetricsServerService,
   ],
 })
 export class CoreModule {}

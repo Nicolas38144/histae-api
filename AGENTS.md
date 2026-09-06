@@ -14,6 +14,7 @@ Les sources de référence à consulter avant une modification importante sont :
 - `test.md` pour les commandes, prérequis, règles d’isolation et limites de validation ; les scénarios détaillés restent dans les tests, les bilans de lots dans la roadmap ;
 - `docs/retention-policy.md` et `docs/legal-release-checklist.md` pour la rétention et les contraintes juridiques ;
 - `docs/logging-policy.md` pour les données autorisées, niveaux et règles d’exploitation des logs ;
+- `docs/observability.md` pour l’export privé, les alertes, seuils et runbooks ;
 - `docs/volume-and-export.md` pour les lots, leur progression et la cohérence de l’export ;
 - `.env.example` pour la configuration prise en charge.
 
@@ -86,6 +87,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Une création Customer Stripe incertaine interdit toute nouvelle tentative avec une autre clé. Rejouer uniquement la clé et la tentative d'origine avant 23 heures ; passé ce seuil, ne faire que des recherches Stripe en lecture jusqu'à résolution.
 - Une décision opérateur sur une dead letter exige une authentification admin récente, un motif et un audit dans la transaction verrouillée. Ne jamais exposer payload, agrégat ou clé objet dans la liste. Interdire l’abandon de `photo.delete` tant que la ligne `user_photo` existe.
 - Les métriques HTTP et dépendances restent agrégées, à cardinalité bornée et sans identifiant utilisateur. L’état persistant de maintenance ne conserve qu’un code d’erreur normalisé, jamais le message ou la stack.
+- L’export Prometheus utilise un listener HTTP séparé, désactivé par défaut et protégé par un bearer token dédié.
+  Ne jamais l’ajouter au contrat `/api`, le publier via Cloudflare, journaliser son token ou introduire des labels
+  utilisateur/métier. Les interfaces Prometheus, Alertmanager et Grafana restent privées.
 - Une collection administrative ou de blocages ne signe aucune photo. Seul un accès métier explicitement autorisé peut produire un lien signé ; le détail admin exige un motif et une trace d'audit.
 - La réconciliation admin ne doit exposer ni `object_key`, ni URL, ni image. Elle ne peut agir sur une photo `ready` ou un traitement récent, ne doit pas reprendre le verrou d’un worker actif et doit écrire `admin_reconcile_photo` avec un motif dans la transaction qui remet `photo.delete` en file.
 - Le statut technique d’une photo et son statut de modération sont indépendants. Les bios, réponses libres et photos non approuvées ne doivent jamais être projetées dans le feed ou les matchs ; leur propriétaire conserve leur contenu et voit le statut et les motifs de modération.

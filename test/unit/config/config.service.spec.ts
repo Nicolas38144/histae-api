@@ -322,6 +322,43 @@ describe('ConfigService SMS configuration', () => {
   });
 });
 
+describe('ConfigService private metrics listener', () => {
+  const originalEnvironment = process.env;
+
+  beforeEach(() => {
+    process.env = baseEnvironment();
+  });
+
+  afterAll(() => {
+    process.env = originalEnvironment;
+  });
+
+  it('is disabled and loopback-bound by default', () => {
+    expect(new ConfigService().metrics).toEqual({ enabled: false, host: '127.0.0.1', port: 9091, token: '' });
+  });
+
+  it('requires a dedicated strong token when enabled', () => {
+    process.env = baseEnvironment({ METRICS_ENABLED: 'true', METRICS_TOKEN: 'short' });
+    expect(() => new ConfigService()).toThrow('config: METRICS_TOKEN must contain at least 32 bytes');
+
+    process.env = baseEnvironment({ METRICS_ENABLED: 'true', METRICS_TOKEN: 'j'.repeat(32) });
+    expect(() => new ConfigService()).toThrow('config: METRICS_TOKEN must be distinct');
+
+    process.env = baseEnvironment({ METRICS_ENABLED: 'true', METRICS_TOKEN: 'p'.repeat(32), POSTGRES_PASSWORD: 'p'.repeat(32) });
+    expect(() => new ConfigService()).toThrow('config: METRICS_TOKEN must be distinct');
+
+    process.env = baseEnvironment({
+      METRICS_ENABLED: 'true', METRICS_HOST: '0.0.0.0', METRICS_PORT: '9092', METRICS_TOKEN: 'm'.repeat(32),
+    });
+    expect(new ConfigService().metrics).toEqual({ enabled: true, host: '0.0.0.0', port: 9092, token: 'm'.repeat(32) });
+  });
+
+  it('rejects a URL or path as listener host', () => {
+    process.env = baseEnvironment({ METRICS_HOST: 'http://localhost/metrics' });
+    expect(() => new ConfigService()).toThrow('config: METRICS_HOST must be a hostname or IP address');
+  });
+});
+
 function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ENV: 'test',

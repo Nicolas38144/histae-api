@@ -110,6 +110,13 @@ export type WorkloadConfig = {
   dataExportMaxConcurrency: number;
 };
 
+export type MetricsConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  token: string;
+};
+
 @Injectable()
 export class ConfigService {
   readonly env: Environment;
@@ -163,6 +170,7 @@ export class ConfigService {
   readonly corsOrigins: string[];
   readonly maintenanceMode: MaintenanceMode;
   readonly workloads: WorkloadConfig;
+  readonly metrics: MetricsConfig;
   readonly rateLimit: {
     store: 'memory' | 'redis';
     global: LimitPolicy;
@@ -451,6 +459,37 @@ export class ConfigService {
         1,
         16,
       ),
+    };
+    const metricsEnabled = optionalBoolean('METRICS_ENABLED', false);
+    const metricsHost = envOr('METRICS_HOST', '127.0.0.1');
+    if (!/^(?:localhost|[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?)$/.test(metricsHost)) {
+      throw new Error('config: METRICS_HOST must be a hostname or IP address without a scheme or path');
+    }
+    const metricsToken = envOr('METRICS_TOKEN', '');
+    if (metricsEnabled && Buffer.byteLength(metricsToken) < 32) {
+      throw new Error('config: METRICS_TOKEN must contain at least 32 bytes when metrics are enabled');
+    }
+    const otherSecrets = [
+      jwtSecret, encryptionKey, hashKey,
+      process.env.POSTGRES_PASSWORD,
+      process.env.REDIS_PASSWORD,
+      process.env.OBJECT_STORAGE_SECRET_KEY,
+      process.env.PHOTO_MODERATION_TOKEN,
+      process.env.SWEEGO_API_KEY,
+      process.env.SWEEGO_WEBHOOK_SECRET,
+      process.env.FIREBASE_PRIVATE_KEY,
+      process.env.STRIPE_SECRET_KEY,
+      process.env.STRIPE_WEBHOOK_SECRET,
+      process.env.GRAFANA_ADMIN_PASSWORD,
+    ];
+    if (metricsEnabled && otherSecrets.some((secret) => secret && secret === metricsToken)) {
+      throw new Error('config: METRICS_TOKEN must be distinct from all other configured secrets');
+    }
+    this.metrics = {
+      enabled: metricsEnabled,
+      host: metricsHost,
+      port: integer(envOr('METRICS_PORT', '9091'), 'METRICS_PORT', 1, 65535),
+      token: metricsToken,
     };
     const store = envOr('RATE_LIMIT_STORE', 'memory').toLowerCase();
     if (store !== 'memory' && store !== 'redis') throw new Error('config: RATE_LIMIT_STORE must be memory or redis');

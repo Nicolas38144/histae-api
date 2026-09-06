@@ -14,6 +14,7 @@ Ce fichier sert uniquement à installer et exploiter le projet localement. Pour 
 | Redis | Rate limiting distribué et relais SSE | Compose local |
 | Stockage objet S3-compatible | Photos privées WebP | SeaweedFS `weed mini` |
 | Analyse photo | Visage, netteté et score de contenu | Service FastAPI/OpenCV/ONNX optionnel |
+| Supervision | Métriques, alertes et tableaux de bord | Prometheus, Alertmanager et Grafana optionnels |
 | Sweego / FCM / Stripe | SMS OTP, push et facturation | Fournisseurs configurables |
 
 L’API ne dépend d’aucune API propre à SeaweedFS. L’authentification administrateur est WebAuthn native, sans SSO.
@@ -56,6 +57,13 @@ PHOTO_MODERATION_TOKEN='change-me-with-at-least-32-bytes' \
   docker compose -f docker-compose.photo-moderation.yml up -d
 ```
 
+La pile de supervision est séparée et optionnelle. Elle exige d’abord `METRICS_ENABLED=true`,
+`METRICS_HOST=0.0.0.0`, un `METRICS_TOKEN` dédié et `GRAFANA_ADMIN_PASSWORD` dans `.env` :
+
+```bash
+docker compose --env-file .env -f docker-compose.observability.yml up -d
+```
+
 Attendre les healthchecks, puis revenir dans PowerShell :
 
 ```powershell
@@ -66,6 +74,8 @@ pnpm run start:dev
 L’API écoute par défaut sur `http://localhost:8080` ; les routes métier sont sous `/api`.
 SeaweedFS n’est exposé que sur `127.0.0.1:8333`. L’analyse photo locale écoute par défaut sur
 `127.0.0.1:8090`.
+Grafana écoute sur `127.0.0.1:3001`; le listener Prometheus authentifié de l’API écoute séparément sur le port
+9091 et ne fait pas partie du contrat public. Voir [le guide de supervision](docs/observability.md).
 
 ### Dashboard administrateur
 
@@ -151,6 +161,7 @@ En production, `TRUST_PROXY=true` est refusé : configurer précisément les IP 
 | [docs/resilience-tests.md](docs/resilience-tests.md) | Concurrence et pannes contrôlées |
 | [docs/sql-performance.md](docs/sql-performance.md) | Audit et exploitation des requêtes SQL |
 | [docs/logging-policy.md](docs/logging-policy.md) | Format, minimisation, rétention et accès aux logs |
+| [docs/observability.md](docs/observability.md) | Métriques privées, alertes, dashboard et runbooks |
 | [docs/retention-policy.md](docs/retention-policy.md) | Conservation technique à faire valider |
 | [docs/legal-release-checklist.md](docs/legal-release-checklist.md) | Validation juridique avant production |
 

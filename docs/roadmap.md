@@ -1,6 +1,6 @@
 # Histae API — feuille de route
 
-État au 5 septembre 2026.
+État au 6 septembre 2026.
 
 Ce document contient uniquement les travaux encore ouverts et leurs critères de fin. L’état fonctionnel courant
 est dans [resume.md](../resume.md), les contrats dans [routes.md](../routes.md) et les procédures de validation
@@ -17,12 +17,14 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R05 (implémentation) | Réconciliation Stripe durable, protection optimiste, watchdog Customer anti-doublon et file opérateur minimale |
 | R06 | Maintenances bornées et reprenables, purge outbox configurable, listes admin par curseur et export paginé sur fichier privé |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
+| R08 (implémentation) | Export Prometheus privé, règles Alertmanager, dashboard Grafana et runbooks opérationnels |
 | PostgreSQL | Baseline unique `001_baseline_20260905` de 44 tables, consolidée jusqu’aux travaux R06 |
 
-Dernière validation : lint, typecheck, build, 586 tests autonomes et 194 intégrations locales, soit 780 tests dans
-95 suites. Les intégrations complètes passent par quatre processus successifs et le second `db:migrate` n’a appliqué
-aucun changement. Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni
-fournisseur réel, ni restauration, ni charge, ni pentest indépendant.
+Dernière validation : lint, typecheck, build, 595 tests autonomes et 194 intégrations locales, soit 789 tests dans
+98 suites. La configuration Compose de supervision est valide ; les règles `promtool` et le smoke test vivant
+attendent le démarrage volontaire de la pile. Les intégrations complètes passent par quatre processus successifs.
+Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni fournisseur réel,
+ni restauration, ni charge, ni pentest indépendant.
 
 ## Priorités
 
@@ -56,10 +58,13 @@ procédure opérateur a été répétée depuis le dashboard.
 <a id="r08-alertes"></a>
 ## R08 — Alertes et supervision
 
-- [ ] Exporter les agrégats existants vers l’outil de supervision retenu, sans nouvelle cardinalité utilisateur.
-- [ ] Définir seuils et fenêtres pour HTTP, Sweego, Stripe, S3, Scylla, Redis, pool PostgreSQL et event loop.
-- [ ] Alerter sur dead letters, ancienneté outbox, maintenance absente ou bloquée et retard de réconciliation.
-- [ ] Écrire les runbooks, l’escalade, l’astreinte et la procédure de test des alertes.
+- [x] Exporter les agrégats existants vers Prometheus sur un listener privé, sans cardinalité utilisateur.
+- [x] Définir les seuils initiaux pour HTTP, Sweego, Stripe, S3, Scylla, Redis, pool PostgreSQL et event loop.
+- [x] Alerter sur dead letters, ancienneté outbox, maintenance absente ou bloquée et retard de réconciliation.
+- [x] Écrire les runbooks, l’escalade générique et les tests synthétiques des alertes.
+- [ ] Après lancement local par l’opérateur, injecter une coupure du seul processus API, observer l’alerte puis sa
+  résolution, et vérifier le runbook de bout en bout.
+- [ ] Avant la production, nommer le propriétaire d’astreinte et raccorder un canal de notification approuvé.
 
 Terminé lorsqu’un incident injecté déclenche l’alerte attendue et mène à un runbook vérifié.
 
@@ -124,7 +129,7 @@ les tests et la documentation concernés. Voir [politique de conservation](reten
 ## Ordre conseillé
 
 1. R05-S : validation fournisseur avant toute facturation réelle.
-2. R08 : raccorder les signaux déjà disponibles à une supervision exploitable.
+2. R08 : terminer le smoke test local puis choisir le canal d’astreinte avant production.
 3. R09 à R12 : préparation complète avant ouverture publique.
 4. R13 : à mener en parallèle avec les responsables produit et juridiques.
 

@@ -12,6 +12,7 @@ import { RateLimitService } from './ratelimit/rate-limit.service';
 import { MAX_PHOTO_UPLOAD_BYTES } from './photos/photo-processor.service';
 import { OperationalMetricsService } from './operations/operational-metrics.service';
 import { formatErrorEvent, formatLogEvent } from './common/logging/safe-logging';
+import { MetricsServerService } from './operations/metrics-server.service';
 
 async function bootstrap(): Promise<void> {
   // Build config before Fastify so trust-proxy and the 1 MiB body cap apply to every route.
@@ -43,6 +44,12 @@ async function bootstrap(): Promise<void> {
   const fastify = app.getHttpAdapter().getInstance();
   registerHttpLifecycle(fastify, limits, config, metrics, logger);
   await app.listen(config.port, '0.0.0.0');
+  try {
+    await app.get(MetricsServerService).start();
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
   logger.log(formatLogEvent('api_started', { port: config.port, environment: config.env }));
 }
 

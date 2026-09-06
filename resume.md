@@ -164,13 +164,18 @@ R06. Les 44 tables définissent leurs contraintes sans `ALTER TABLE`; la prochai
 
 `/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. L’outbox et la
 maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
-dashboard sont agrégées, bornées et sans identifiant utilisateur. Les matchs sont entretenus sous un verrou de
+dashboard sont agrégées, bornées et sans identifiant utilisateur. Un listener séparé, désactivé par défaut et
+protégé par bearer token, exporte ces signaux vers Prometheus ; la pile locale épinglée fournit Alertmanager et un
+dashboard Grafana sans exposer leurs ports hors du loopback. Voir [docs/observability.md](docs/observability.md).
+Les matchs sont entretenus sous un verrou de
 leader mais avec un commit par lot ; leurs messages et signalements sont nettoyés avant le parent pour éviter une
 cascade volumineuse. La purge horaire de l’outbox peut traiter 10 000 lignes par défaut en lots de 500. Les tailles,
 budgets et règles de calibration sont dans [docs/volume-and-export.md](docs/volume-and-export.md).
 
-Dernière validation complète : lint, typecheck, build, 586 tests autonomes et 194 intégrations locales, soit
-780 tests dans 95 suites. Les résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète le 6 septembre 2026 : lint, typecheck, build, 595 tests autonomes et 194 intégrations
+locales, soit 789 tests dans 98 suites. La configuration Compose de supervision est valide ; le smoke test vivant
+et `promtool` attendent le démarrage volontaire de la pile. Ces résultats ne valent ni pentest, ni test de charge,
+ni validation d’un fournisseur réel.
 
 ## Références
 
