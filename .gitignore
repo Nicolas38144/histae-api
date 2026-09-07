@@ -6,6 +6,7 @@
 
 # Compiled output and TypeScript incremental state
 /dist/
+/container-dist/
 /build/
 *.tsbuildinfo
 

@@ -222,6 +222,12 @@ describe('ConfigService SMS configuration', () => {
     });
   });
 
+  it('uses the dual-resolvable local object-storage endpoint by default', () => {
+    process.env = baseEnvironment();
+
+    expect(new ConfigService().objectStorage.endpoint).toBe('http://storage.histae.localhost:8333/');
+  });
+
   it('requires HTTPS object storage in production', () => {
     process.env = productionEnvironment({ OBJECT_STORAGE_ENDPOINT: 'http://storage.histae.test' });
     expect(() => new ConfigService()).toThrow('config: OBJECT_STORAGE_ENDPOINT must be an absolute HTTP(S) origin and HTTPS in production');

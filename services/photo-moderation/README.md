@@ -7,9 +7,11 @@ mémoire, sans stockage persistant, et renvoie trois signaux : visage détectabl
 
 Depuis la racine de l’API :
 
+Après avoir renseigné `PHOTO_MODERATION_TOKEN` dans le `.env` de l’API :
+
 ```bash
-PHOTO_MODERATION_TOKEN='change-me-with-at-least-32-bytes' \
-  docker compose -f docker-compose.photo-moderation.yml up --build
+docker compose --env-file .env -f compose.yaml -f compose.dev.yaml \
+  up -d --build --wait photo-moderation
 ```
 
 Le token doit correspondre à `PHOTO_MODERATION_TOKEN` dans l’API. Le service écoute uniquement sur

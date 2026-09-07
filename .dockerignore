@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+.secrets
+node_modules
+.pnpm-store
+dist
+container-dist
+coverage
+test-results
+logs
+*.log
+report.*.json
+

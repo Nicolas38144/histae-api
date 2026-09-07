@@ -1,0 +1,234 @@
+x-development-service: &development-service
+  image: histae-api:development
+  build:
+    context: .
+    target: development
+  read_only: false
+  volumes:
+    - ./src:/app/src
+    - ./scripts:/app/scripts
+    - ./db:/app/db:ro
+    - ./scylla:/app/scylla:ro
+  environment: &development-environment
+    ENV: development
+    PORT: "8080"
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_SSLMODE: disable
+    SCYLLA_ENABLED: "true"
+    SCYLLA_CONTACT_POINTS: scylla
+    SCYLLA_PORT: "9042"
+    SCYLLA_REPLICATION_FACTOR: "1"
+    SCYLLA_TLS: "false"
+    REDIS_ADDR: redis:6379
+    REDIS_TLS: "false"
+    OBJECT_STORAGE_ENDPOINT: http://storage.histae.localhost:8333
+    PHOTO_MODERATION_ENDPOINT: http://photo-moderation:8080
+    METRICS_HOST: 0.0.0.0
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-histae-dev}
+      POSTGRES_USER: ${POSTGRES_USER:-histae}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --data-checksums --auth-host=scram-sha-256
+      PGDATA: /var/lib/postgresql/18/docker
+    ports:
+      - 127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432
+    volumes:
+      - histae-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 1m
+    shm_size: 256m
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    networks:
+      - backend
+
+  redis:
+    image: redis:7.4.2-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - 127.0.0.1:6379:6379
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 192m
+    cpus: 0.5
+    networks:
+      - backend
+
+  scylla:
+    image: scylladb/scylla:2026.2.2
+    command: --smp 1 --memory 1G --overprovisioned 1 --developer-mode 1
+    ports:
+      - 127.0.0.1:9042:9042
+    volumes:
+      - histae-scylla-data:/var/lib/scylla
+    healthcheck:
+      test: [CMD-SHELL, "cqlsh -e 'SELECT release_version FROM system.local' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 1m
+    pids_limit: 512
+    mem_limit: 1536m
+    cpus: 2.0
+    networks:
+      - backend
+
+  object-storage:
+    image: chrislusf/seaweedfs:4.45
+    command: [mini, -dir=/data]
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY:-histae-dev}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_KEY:-histae-dev-secret-change-me}
+      S3_BUCKET: ${OBJECT_STORAGE_BUCKET:-histae-photos}
+    ports:
+      - 127.0.0.1:8333:8333
+    volumes:
+      - histae-object-storage-data:/data
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8333/healthz]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+    networks:
+      backend:
+        aliases:
+          - storage.histae.localhost
+
+  photo-moderation:
+    build:
+      context: ./services/photo-moderation
+    environment:
+      MODERATION_TOKEN: ${PHOTO_MODERATION_TOKEN:?Define PHOTO_MODERATION_TOKEN with at least 32 bytes}
+    ports:
+      - 127.0.0.1:8090:8080
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 384m
+    cpus: 1.0
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  migrate:
+    <<: *development-service
+    command:
+      - /bin/sh
+      - -ec
+      - pnpm run db:migrate && pnpm run scylla:migrate
+    environment:
+      <<: *development-environment
+      MAINTENANCE_MODE: disabled
+      METRICS_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+
+  api:
+    <<: *development-service
+    command: [pnpm, run, start:dev]
+    environment:
+      <<: *development-environment
+      MAINTENANCE_MODE: disabled
+    ports:
+      - 127.0.0.1:${HISTAE_API_HOST_PORT:-8080}:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scylla:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+      photo-moderation:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  outbox-worker:
+    <<: *development-service
+    command: [pnpm, run, outbox:work]
+    environment:
+      <<: *development-environment
+      MAINTENANCE_MODE: worker
+      METRICS_ENABLED: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+      photo-moderation:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  maintenance:
+    <<: *development-service
+    command: [pnpm, run, maintenance:run]
+    environment:
+      <<: *development-environment
+      MAINTENANCE_MODE: worker
+      METRICS_ENABLED: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+      photo-moderation:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  histae-postgres-data:
+  histae-scylla-data:
+  histae-object-storage-data:

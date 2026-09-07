@@ -274,7 +274,10 @@ export class ConfigService {
       throw new Error('config: OBJECT_STORAGE_ACCESS_KEY and OBJECT_STORAGE_SECRET_KEY are required');
     }
     this.objectStorage = {
-      endpoint: objectStorageEndpoint(envOr('OBJECT_STORAGE_ENDPOINT', 'http://127.0.0.1:8333'), this.env),
+      endpoint: objectStorageEndpoint(
+        envOr('OBJECT_STORAGE_ENDPOINT', 'http://storage.histae.localhost:8333'),
+        this.env,
+      ),
       region: objectStorageRegion(envOr('OBJECT_STORAGE_REGION', 'us-east-1')),
       bucket: objectStorageBucket(envOr('OBJECT_STORAGE_BUCKET', 'histae-photos')),
       accessKey: objectStorageAccessKey,

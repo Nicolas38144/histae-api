@@ -5,6 +5,8 @@ describe('observability assets', () => {
   it('pins the local stack, keeps UIs on loopback and scrapes the authenticated private listener', () => {
     const compose = fixture('docker-compose.observability.yml');
     const prometheus = fixture('observability/prometheus/prometheus.yml');
+    const containerOverride = fixture('compose.observability-container.yaml');
+    const containerPrometheus = fixture('observability/prometheus/prometheus.container.yml');
 
     expect(compose).toContain('prom/prometheus:v3.14.0');
     expect(compose).toContain('prom/alertmanager:v0.32.1');
@@ -14,6 +16,9 @@ describe('observability assets', () => {
     expect(compose).toContain('127.0.0.1:9093:9093');
     expect(prometheus).toContain('credentials_file: /run/secrets/histae_metrics_token');
     expect(prometheus).toContain('host.docker.internal:9091');
+    expect(containerOverride).toContain('histae-backend');
+    expect(containerPrometheus).toContain('credentials_file: /run/secrets/histae_metrics_token');
+    expect(containerPrometheus).toContain('api:9091');
   });
 
   it('defines actionable bounded alerts and a valid provisioned dashboard JSON', () => {

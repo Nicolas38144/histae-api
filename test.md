@@ -26,10 +26,12 @@ pnpm install --frozen-lockfile
 pnpm run lint
 pnpm run typecheck
 pnpm run build
+pnpm run build:container
 pnpm test
 ```
 
-`pnpm test` regroupe les suites unitaires et e2e, sans les intégrations. Inutile de le précéder systématiquement
+`build:container` compile aussi les points d’entrée des migrations, workers et commandes d’exploitation utilisés
+par l’image finale. `pnpm test` regroupe les suites unitaires et e2e, sans les intégrations. Inutile de le précéder systématiquement
 des deux commandes séparées. Pour cibler un niveau ou une régression :
 
 ```powershell
@@ -55,7 +57,9 @@ règles sont ensuite vérifiés avec le `promtool` de l’image Prometheus épin
 ## Validation avec les stockages locaux
 
 Préparer les services décrits dans le [README](README.md), puis vérifier la cible de `.env` avant les migrations.
-Ne jamais afficher ce fichier ou ses secrets dans les sorties de test.
+La composition de développement publie chaque stockage uniquement sur loopback ; les commandes de test lancées
+sur l’hôte continuent donc d’utiliser les adresses `127.0.0.1` de `.env`. Ne jamais afficher ce fichier ou ses
+secrets dans les sorties de test.
 
 | Service | Prérequis / périmètre autorisé |
 | --- | --- |
@@ -75,6 +79,16 @@ pnpm run scylla:migrate
 pnpm run test:integration
 ```
 
+Sur Debian, la pile complète peut être préparée sans installer PostgreSQL, ScyllaDB ou Redis sur l’hôte :
+
+```bash
+docker compose --env-file .env -f compose.yaml -f compose.dev.yaml up -d --build --wait
+pnpm run test:integration
+```
+
+Le service `migrate` a déjà appliqué les schémas avant que l’API soit déclarée prête. Les commandes de migration
+ci-dessus restent utiles lorsque les stockages sont lancés séparément.
+
 Les suites réelles sont activées directement, sans flag de contournement. Une dépendance indisponible est un
 échec à diagnostiquer, pas une raison de désactiver silencieusement les tests. Aucun reset n’est nécessaire.
 La commande complète lance PostgreSQL, Scylla, Redis puis les coupures réseau dans quatre processus Jest successifs :
@@ -88,6 +102,9 @@ docker compose --env-file .env -f docker-compose.observability.yml exec promethe
 docker compose --env-file .env -f docker-compose.observability.yml exec prometheus \
   promtool test rules /etc/prometheus/alerts.test.yml
 ```
+
+Ajouter `-f compose.observability-container.yaml` après le premier fichier lorsque l’API est elle-même
+conteneurisée.
 
 Cette validation ne livre pas une notification d’astreinte : le compose de développement conserve les alertes
 dans l’interface locale. Le test de chaîne complet et non destructif est décrit dans

@@ -1,6 +1,6 @@
 # Histae API — feuille de route
 
-État au 6 septembre 2026.
+État au 7 septembre 2026.
 
 Ce document contient uniquement les travaux encore ouverts et leurs critères de fin. L’état fonctionnel courant
 est dans [resume.md](../resume.md), les contrats dans [routes.md](../routes.md) et les procédures de validation
@@ -18,13 +18,15 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R06 | Maintenances bornées et reprenables, purge outbox configurable, listes admin par curseur et export paginé sur fichier privé |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
 | R08 (implémentation) | Export Prometheus privé, règles Alertmanager, dashboard Grafana et runbooks opérationnels |
+| Conteneurs | Image API/worker/migrations non-root, pile de développement complète et topologie de production sans stockage mono-nœud |
 | PostgreSQL | Baseline unique `001_baseline_20260905` de 44 tables, consolidée jusqu’aux travaux R06 |
 
-Dernière validation : lint, typecheck, build, 595 tests autonomes et 194 intégrations locales, soit 789 tests dans
-98 suites. La configuration Compose de supervision est valide ; les règles `promtool` et le smoke test vivant
-attendent le démarrage volontaire de la pile. Les intégrations complètes passent par quatre processus successifs.
-Le dashboard passe également typecheck, lint et build de production. Ce résultat ne couvre ni fournisseur réel,
-ni restauration, ni charge, ni pentest indépendant.
+Dernière validation : lint, typecheck, builds Nest et conteneur, 600 tests autonomes et 194 intégrations locales,
+soit 794 tests dans 99 suites. L’image de production est construite en utilisateur `node`; les compositions
+développement, production et supervision conteneurisée sont valides. Les règles `promtool` et le smoke test vivant
+des nouvelles compositions attendent leur démarrage volontaire. Le dashboard passe typecheck, lint, build, 37
+tests unitaires et 2 parcours Playwright. Ce résultat ne couvre ni fournisseur réel, ni restauration, ni charge,
+ni pentest indépendant.
 
 ## Priorités
 
@@ -82,6 +84,9 @@ Terminé lorsque les limites sont mesurées, les décisions contestables et tout
 <a id="r10-sauvegardes"></a>
 ## R10 — Sauvegarde et déploiement
 
+- [x] Construire une image reproductible commune à l’API, aux migrations, à l’outbox et à la maintenance.
+- [x] Fournir une pile Debian de développement avec PostgreSQL persistant et tous les services liés au loopback.
+- [x] Séparer une topologie de production sans stockage mono-nœud ni port hôte publié.
 - [ ] Fixer les objectifs acceptables de perte de données et de délai de reprise.
 - [ ] Restaurer réellement une sauvegarde PostgreSQL dans un environnement isolé.
 - [ ] Choisir puis tester une cible objet privée, durable, sauvegardée et supervisée.

@@ -162,8 +162,14 @@ R06. Les 44 tables définissent leurs contraintes sans `ALTER TABLE`; la prochai
 `017_<description>`. Voir
 [docs/postgres-migrations.md](docs/postgres-migrations.md).
 
-`/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. L’outbox et la
-maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
+`/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. Une image Docker
+multi-stage non-root contient l’API compilée, les workers et les migrations, sans sources, tests ou secrets. La
+composition de développement fournit PostgreSQL, ScyllaDB, Redis, SeaweedFS et l’analyseur photo sur un réseau
+privé, avec uniquement des ports loopback ; la composition de production n’embarque volontairement aucun stockage
+mono-nœud et ne publie aucun port hôte. PostgreSQL conserve ses données dans un volume, mais ce volume ne remplace
+jamais une sauvegarde hors machine testée. Voir [docs/container-deployment.md](docs/container-deployment.md).
+
+L’outbox et la maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
 dashboard sont agrégées, bornées et sans identifiant utilisateur. Un listener séparé, désactivé par défaut et
 protégé par bearer token, exporte ces signaux vers Prometheus ; la pile locale épinglée fournit Alertmanager et un
 dashboard Grafana sans exposer leurs ports hors du loopback. Voir [docs/observability.md](docs/observability.md).
@@ -172,10 +178,11 @@ leader mais avec un commit par lot ; leurs messages et signalements sont nettoy�
 cascade volumineuse. La purge horaire de l’outbox peut traiter 10 000 lignes par défaut en lots de 500. Les tailles,
 budgets et règles de calibration sont dans [docs/volume-and-export.md](docs/volume-and-export.md).
 
-Dernière validation complète le 6 septembre 2026 : lint, typecheck, build, 595 tests autonomes et 194 intégrations
-locales, soit 789 tests dans 98 suites. La configuration Compose de supervision est valide ; le smoke test vivant
-et `promtool` attendent le démarrage volontaire de la pile. Ces résultats ne valent ni pentest, ni test de charge,
-ni validation d’un fournisseur réel.
+Dernière validation complète le 7 septembre 2026 : lint, typecheck, builds Nest et conteneur, 600 tests autonomes
+et 194 intégrations locales, soit 794 tests dans 99 suites. L’image de production a été construite et inspectée en
+utilisateur `node`; les compositions développement, production et supervision conteneurisée sont valides. Le smoke
+test vivant des nouvelles compositions et `promtool` attendent leur démarrage volontaire par l’opérateur. Ces
+résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 

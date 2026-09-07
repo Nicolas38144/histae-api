@@ -1,0 +1,36 @@
+services:
+  migrate:
+    environment:
+      ENV: production
+
+  api:
+    environment:
+      ENV: production
+      PORT: "8080"
+      MAINTENANCE_MODE: disabled
+      METRICS_HOST: 0.0.0.0
+    restart: always
+    networks:
+      - backend
+      - edge
+
+  outbox-worker:
+    environment:
+      ENV: production
+      MAINTENANCE_MODE: worker
+      METRICS_ENABLED: "false"
+    restart: always
+
+  maintenance:
+    environment:
+      ENV: production
+      MAINTENANCE_MODE: worker
+      METRICS_ENABLED: "false"
+
+networks:
+  backend:
+    name: ${HISTAE_BACKEND_NETWORK:-histae-backend}
+    external: true
+  edge:
+    name: ${HISTAE_EDGE_NETWORK:-histae-edge}
+    external: true

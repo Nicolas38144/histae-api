@@ -23,6 +23,9 @@ Si le code et la documentation divergent, vérifier le comportement par les test
 ## Stack et responsabilités des stockages
 
 - Node.js 22+, pnpm 11.22.0, TypeScript strict.
+- `Dockerfile` produit une image commune non-root pour l’API, les migrations, l’outbox et la maintenance.
+  `compose.dev.yaml` est uniquement une pile mono-machine de développement ; `compose.production.yaml` ne doit
+  réintroduire ni stockage mono-nœud, ni port hôte public.
 - PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, questions/réponses de profil, consentements, abonnements, matchs, messages, signalements et workflows RGPD.
 - ScyllaDB conserve uniquement les décisions de découverte à fort volume et leurs vues par acteur/cible.
 - Redis fournit le rate limiting distribué et le relais Pub/Sub SSE entre instances.
@@ -98,6 +101,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - La liste de modération admin ne doit exposer ni texte, ni `object_key`, ni URL. Le détail exige un motif, produit `view_moderation_content` avant de signer une photo, et toute décision produit `admin_review_content` dans la transaction métier.
 - Une revue photo exige les trois contrôles explicites `face_detectable`, `sharp_enough` et `content_allowed`. Une approbation exige trois valeurs vraies ; un rejet exige au moins une valeur fausse. Rejeter une photo `ready` doit la passer à `deleting` et écrire `photo.delete` dans l’outbox de la même transaction.
 - L’accès au stockage doit rester derrière `ObjectStorageService` et les six variables `OBJECT_STORAGE_*`; ne jamais dépendre d’une API SeaweedFS, MinIO, Garage ou fournisseur cloud spécifique.
+- En développement conteneurisé, conserver `storage.histae.localhost` comme alias réseau SeaweedFS et comme hôte
+  de `OBJECT_STORAGE_ENDPOINT` : les URLs signées doivent être résolubles sans réécriture depuis Docker et depuis
+  le navigateur. Toute autre cible doit préserver cette propriété avec un nom HTTPS stable.
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
 - Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers. Les collections PostgreSQL sont paginées sous un instantané `REPEATABLE READ`; Scylla reste une lecture partitionnée datée, sans promesse d’instantané inter-stockages.
 - Construire l’export dans un fichier temporaire privé et borné, jamais dans un grand objet en RAM. Ne commencer la réponse qu’après préparation complète, supprimer le fichier à la fermeture du flux et normaliser tout échec avant envoi.
@@ -106,6 +112,8 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Préserver les guards SQL contre les écritures tardives et les verrous de session `AccountActivityService` des uploads, Checkout et swipes. Normaliser/trier les UUID ; ce pool dédié ajoute quatre connexions maximum et exige un pooling de session. Les lots d’effacement sont bornés et les checkpoints vérifient la propriété du worker. Les intentions Stripe inconnues de plus de 23 heures exigent une réconciliation, jamais un nouveau POST aveugle. Voir `docs/account-erasure.md`.
 - Ne pas modifier les durées de rétention sans mettre à jour la politique, les migrations, la maintenance et les tests correspondants.
 - Ne pas exposer de secret, `.env`, clé fournisseur, token FCM, téléphone ou justification sensible dans les logs ou les réponses.
+- Ne copier aucun `.env`, fichier de `.secrets`, fixture privée ou sortie de test dans une image. Injecter la
+  configuration au runtime et conserver l’image finale non-root et en lecture seule dans Compose.
 - Les logs utilisent un code d’événement stable et les formateurs de `common/logging/safe-logging.ts`. Ne jamais
   journaliser message, stack ou cause d’exception, chemin HTTP concret, query string ou champ refusé par la
   politique. Les erreurs CLI passent par `scripts/cli-output.ts`; la sortie volontaire du bootstrap WebAuthn est
@@ -138,6 +146,7 @@ Validation autonome, sans infrastructure externe :
 pnpm run lint
 pnpm run typecheck
 pnpm run build
+pnpm run build:container
 pnpm run test:unit
 pnpm run test:e2e
 pnpm test

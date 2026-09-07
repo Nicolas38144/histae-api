@@ -12,9 +12,10 @@ Il ne fait pas partie du contrat `/api`, n’accepte que `GET /metrics` et exige
 les métriques. Une collecte PostgreSQL en échec laisse disponibles les compteurs mémoire et publie
 `histae_metrics_collection_success 0`.
 
-Le serveur applicatif principal ne publie donc aucun endpoint Prometheus. En local, Prometheus sous Docker joint
-l’API exécutée sur l’hôte Debian via `host.docker.internal:9091`. Les trois interfaces de la pile sont liées à
-`127.0.0.1` :
+Le serveur applicatif principal ne publie donc aucun endpoint Prometheus. Deux raccordements locaux sont pris en
+charge : Prometheus joint une API exécutée directement sur Debian via `host.docker.internal:9091`, ou l’API
+conteneurisée via `api:9091` et le réseau privé `histae-backend`. Dans les deux cas, les trois interfaces de la
+pile sont liées à `127.0.0.1` :
 
 | Interface | URL locale | Authentification |
 | --- | --- | --- |
@@ -49,12 +50,27 @@ METRICS_PORT=9091
 METRICS_TOKEN=<secret-aléatoire-dédié-de-32-octets-minimum>
 ```
 
-Redémarrer l’API, puis lancer la pile depuis la racine du dépôt :
+Si l’API s’exécute directement sur l’hôte, la redémarrer puis lancer la pile depuis la racine du dépôt :
 
 ```bash
 docker compose --env-file .env -f docker-compose.observability.yml up -d --wait
 docker compose --env-file .env -f docker-compose.observability.yml ps
 ```
+
+Si l’API utilise `compose.yaml` et `compose.dev.yaml`, recréer d’abord son conteneur puis appliquer l’override qui
+raccorde Prometheus au réseau backend sans publier le port 9091 :
+
+```bash
+docker compose --env-file .env -f compose.yaml -f compose.dev.yaml up -d api
+docker compose --env-file .env \
+  -f docker-compose.observability.yml \
+  -f compose.observability-container.yaml \
+  up -d --wait
+```
+
+Utiliser les mêmes deux options `-f` dans les commandes `ps`, `exec prometheus` et `down` tant que ce mode est
+actif. Le fichier `prometheus.container.yml` cible `api:9091`; la configuration native cible
+`host.docker.internal:9091`.
 
 Vérifier ensuite la configuration et les règles dans le conteneur épinglé :
 
