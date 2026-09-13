@@ -153,8 +153,6 @@ function loadConfig(): SeedConfig {
   if (app.env !== 'development' || app.postgres.database !== 'histae-dev') {
     throw new Error('The fake swipe seed is restricted to ENV=development and POSTGRES_DB=histae-dev.');
   }
-  if (!app.scylla.enabled) throw new Error('SCYLLA_ENABLED=true is required for the fake swipe seed.');
-
   const apiUrl = (process.env.SEED_API_URL ?? 'http://127.0.0.1:8080').trim();
   const parsedUrl = new URL(apiUrl);
   if (!new Set(['127.0.0.1', 'localhost', '::1']).has(parsedUrl.hostname)) {

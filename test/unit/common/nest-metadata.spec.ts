@@ -42,7 +42,6 @@ import { RateLimitService } from '../../../src/ratelimit/rate-limit.service';
 import { ReportsController } from '../../../src/reports/reports.controller';
 import { ReportsRepository } from '../../../src/reports/reports.repository';
 import { ReportsService } from '../../../src/reports/reports.service';
-import { ScyllaService } from '../../../src/scylla/scylla.service';
 import { RedisService } from '../../../src/redis/redis.service';
 import { TraitsController } from '../../../src/traits/traits.controller';
 import { TraitsRepository } from '../../../src/traits/traits.repository';
@@ -82,7 +81,7 @@ import { OperationalStatusService } from '../../../src/operations/operational-st
 
 const injectedClasses = [
   AuthController, JwtActiveGuard, AuthRepository, RefreshSessionRepository, AuthService, OtpService, SweegoSmsService, TokenService,
-  DatabaseService, ScyllaService, RedisService, ObjectStorageService, HealthController, RateLimitService,
+  DatabaseService, RedisService, ObjectStorageService, HealthController, RateLimitService,
   PhotosRepository, PhotosService, PhotosMaintenanceService,
   OutboxRepository, OutboxEventDispatcher, OutboxWorkerService,
   OutboxAdminController, OutboxAdminService,

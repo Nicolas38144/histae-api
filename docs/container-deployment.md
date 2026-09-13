@@ -1,7 +1,7 @@
 # Conteneurisation et déploiement
 
 Ce guide décrit l’image Histae API et les compositions Docker. Il sépare volontairement le développement local
-d’un futur déploiement : le premier fournit PostgreSQL, Redis, ScyllaDB, SeaweedFS et la modération sur une machine ;
+d’un futur déploiement : le premier fournit PostgreSQL, Redis, SeaweedFS et la modération sur une machine ;
 le second ne prétend pas transformer ces services mono-nœud en infrastructure de production.
 
 ## Fichiers et responsabilités
@@ -10,12 +10,12 @@ le second ne prétend pas transformer ces services mono-nœud en infrastructure 
 | --- | --- |
 | `Dockerfile` | image de développement et image d’exécution multi-stage |
 | `.dockerignore` | exclusion des secrets, sorties et fichiers inutiles du contexte de build |
-| `compose.yaml` | API, migration PostgreSQL/Scylla, worker outbox et tâche de maintenance |
+| `compose.yaml` | API, migration PostgreSQL, worker outbox et tâche de maintenance |
 | `compose.dev.yaml` | stockages locaux, code monté, ports loopback et endpoints Docker |
 | `compose.production.yaml` | environnement strict, réseaux externes et absence de port hôte |
 | `compose.observability-container.yaml` | raccordement de Prometheus au listener interne `api:9091` |
 
-L’image finale contient les dépendances de production, le JavaScript compilé et les schémas SQL/CQL nécessaires aux
+L’image finale contient les dépendances de production, le JavaScript compilé et les schémas SQL nécessaires aux
 migrations. Elle ne contient ni `.env`, ni `.secrets`, ni sources TypeScript, ni tests. L’API, le worker et les
 commandes d’exploitation utilisent tous cette même image.
 
@@ -37,15 +37,15 @@ Renseigner au minimum `POSTGRES_PASSWORD`, `JWT_SECRET`, `PHONE_ENCRYPTION_KEY`,
 openssl rand -hex 32
 ```
 
-Les variables applicatives de `.env` restent adaptées aux commandes exécutées depuis l’hôte : PostgreSQL,
-ScyllaDB et Redis utilisent donc des adresses loopback. `compose.dev.yaml` les remplace uniquement dans les
-conteneurs par les noms de service `postgres`, `scylla` et `redis`.
+Les variables applicatives de `.env` restent adaptées aux commandes exécutées depuis l’hôte : PostgreSQL et Redis
+utilisent donc des adresses loopback. `compose.dev.yaml` les remplace uniquement dans les conteneurs par les noms
+de service `postgres` et `redis`.
 
 ### Démarrer
 
-Une installation PostgreSQL native qui écoute déjà sur le port 5432 doit être arrêtée, ou
-`POSTGRES_HOST_PORT` doit être changé dans `.env`. Un changement de port doit aussi être reporté dans
-`POSTGRES_PORT` pour les tests exécutés depuis l’hôte.
+L’exemple publie PostgreSQL Docker sur le port 5433 pour éviter une installation PostgreSQL native qui écoute déjà
+sur 5432. `POSTGRES_HOST_PORT` et `POSTGRES_PORT` doivent conserver la même valeur pour l’API et les tests exécutés
+depuis l’hôte. Les conteneurs continuent d’utiliser `postgres:5432` sur le réseau interne.
 
 Depuis la racine du dépôt :
 
@@ -58,8 +58,8 @@ docker compose --env-file .env \
 
 Cette commande :
 
-1. attend les healthchecks PostgreSQL et ScyllaDB ;
-2. exécute les migrations PostgreSQL puis ScyllaDB dans le service `migrate` ;
+1. attend le healthcheck PostgreSQL ;
+2. exécute les migrations PostgreSQL dans le service `migrate` ;
 3. ne démarre l’API et le worker outbox qu’après la réussite complète des migrations ;
 4. attend que l’API réponde sur `/health/live`.
 
@@ -173,7 +173,7 @@ docker network create histae-edge
 
 Créer `.env.production` avec `ENV=production`, `HISTAE_ENV_FILE=.env.production`, une image immuable dans
 `HISTAE_API_IMAGE` et toutes les valeurs exigées par `ConfigService`. Les contrôles de production refusent notamment
-PostgreSQL sans TLS, Redis sans TLS/mot de passe, ScyllaDB sans TLS/authentification/réplication 3, un endpoint S3
+PostgreSQL sans TLS, Redis sans TLS/mot de passe, un endpoint S3
 HTTP, Sweego ou Stripe incomplets et un proxy globalement approuvé.
 
 Valider sans afficher la configuration résolue :
@@ -194,7 +194,7 @@ docker compose --env-file .env.production \
   up -d --wait
 ```
 
-Le tunnel doit cibler `http://api:8080` depuis `histae-edge`. PostgreSQL, Redis, Scylla, SeaweedFS et le listener
+Le tunnel doit cibler `http://api:8080` depuis `histae-edge`. PostgreSQL, Redis, SeaweedFS et le listener
 9091 ne doivent pas rejoindre ce réseau. Un tunnel ne remplace ni WebAuthn, ni les guards, ni la configuration
 précise de `TRUST_PROXY`.
 
@@ -235,5 +235,5 @@ PostgreSQL prévus et conserver les preuves de restauration sans donnée personn
 ## Limites restantes
 
 Cette livraison fournit le packaging et l’orchestration, pas la haute disponibilité. Une seule machine demeure un
-point de panne unique. La cible S3 durable, le cluster Scylla, les sauvegardes restaurées, la rotation réelle des
+point de panne unique. La cible S3 durable, les sauvegardes PostgreSQL restaurées, la rotation réelle des
 secrets, le canal d’alertes et les tests de charge/sécurité restent suivis dans [roadmap.md](roadmap.md).

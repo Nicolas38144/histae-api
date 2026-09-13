@@ -10,7 +10,7 @@ les nombres, et la [roadmap](docs/roadmap.md) pour le bilan synthétique.
 | --- | --- | --- |
 | `test/unit/` | Règles isolées, validation, mappers, cas d’échec et sécurité des helpers. | Aucune ; dépendances contrôlées. |
 | `test/e2e/` | Routes Fastify, corps, statuts, erreurs et autorisations selon la suite. | Aucune ; services/stockages remplacés par des doublures. |
-| `test/integration/` | SQL/CQL, contraintes, transactions, verrous, concurrence et reprises réelles. | Stockages locaux de développement. |
+| `test/integration/` | SQL, contraintes, transactions, verrous, concurrence et reprises réelles. | Stockages locaux de développement. |
 
 Les helpers et processus de test sont dans `test/helpers/`, les images dans `test/fixtures/photos/`.
 Jest ne découvre que `test/**/*.spec.ts`. Le contrôle `test-layout.spec.ts` refuse les tests hors de ce dossier.
@@ -64,7 +64,6 @@ secrets dans les sorties de test.
 | Service | Prérequis / périmètre autorisé |
 | --- | --- |
 | PostgreSQL | `ENV=development`, base locale `histae-dev`, migrations appliquées. |
-| ScyllaDB | Activé, keyspace local `histae_discovery` migré ; mono-nœud sans TLS pour la suite de coupures réseau. |
 | Redis | Local ; tests dédiés exclusivement dans la base logique 15. |
 | S3 compatible | Bucket local préparé ; endpoint HTTP loopback pour les tests de panne. SeaweedFS `weed mini` convient en développement. |
 
@@ -75,11 +74,10 @@ réel reste un contrôle sandbox séparé.
 
 ```powershell
 pnpm run db:migrate
-pnpm run scylla:migrate
 pnpm run test:integration
 ```
 
-Sur Debian, la pile complète peut être préparée sans installer PostgreSQL, ScyllaDB ou Redis sur l’hôte :
+Sur Debian, la pile complète peut être préparée sans installer PostgreSQL ou Redis sur l’hôte :
 
 ```bash
 docker compose --env-file .env -f compose.yaml -f compose.dev.yaml up -d --build --wait
@@ -91,7 +89,7 @@ ci-dessus restent utiles lorsque les stockages sont lancés séparément.
 
 Les suites réelles sont activées directement, sans flag de contournement. Une dépendance indisponible est un
 échec à diagnostiquer, pas une raison de désactiver silencieusement les tests. Aucun reset n’est nécessaire.
-La commande complète lance PostgreSQL, Scylla, Redis puis les coupures réseau dans quatre processus Jest successifs :
+La commande complète lance PostgreSQL, Redis puis les coupures réseau dans trois processus Jest successifs :
 les connexions et pilotes natifs sont ainsi libérés entre groupes, sans réduire la couverture.
 
 Une fois la pile de supervision locale lancée, valider sa configuration et les incidents synthétiques :
@@ -114,14 +112,13 @@ Commandes ciblées :
 
 ```powershell
 pnpm run test:integration:postgres
-pnpm run test:integration:scylla
 pnpm run test:integration:redis
 pnpm run test:integration:network
 pnpm exec jest --runInBand --testPathPatterns='postgres.business-concurrency|postgres.crash-recovery|network-recovery'
 ```
 
 La suite PostgreSQL de démarrage initialise aussi le graphe Nest : Redis doit être disponible selon la
-configuration. La suite d’intégration Scylla utilise aussi PostgreSQL. L’analyseur photo local n’est pas requis par
+configuration. L’analyseur photo local n’est pas requis par
 ces suites ; il est nécessaire pour un smoke test manuel du parcours photo avec analyse automatique activée.
 
 `postgres.r06-volumes.integration.spec.ts` exerce la reprise de la maintenance des matchs, une purge outbox de plus
@@ -133,15 +130,14 @@ durée et verrous avec [le guide dédié](docs/volume-and-export.md) avant d’a
 
 - Utiliser des UUID temporaires, transactions annulées ou schémas dédiés ; ne pas consommer les jobs du développeur.
 - Les fixtures de résilience rejouent les migrations dans `r03_test_<uuid>`, vérifient leur schéma et ne suppriment que celui créé.
-- Ne jamais exécuter de nettoyage global du schéma public, de Redis, du keyspace Scylla ou du bucket.
+- Ne jamais exécuter de nettoyage global du schéma public, de Redis ou du bucket.
 - Les compteurs Redis uniques expirent en deux secondes dans la suite dédiée, trente secondes dans la suite réseau.
-- Les scénarios Scylla/S3 nettoient leurs propres UUID et objets ; ne pas supprimer des références inconnues après un échec.
+- Les scénarios S3 nettoient leurs propres UUID et objets ; ne pas supprimer des références inconnues après un échec.
 - Injecter les pannes seulement dans les relais TCP loopback et processus enfants créés par la suite. Ne pas arrêter
   les conteneurs partagés ni tuer un processus à partir de son seul nom.
 - Fermer clients, pools et processus même après assertion échouée. Ne pas ajouter `forceExit` pour masquer une fuite.
 
-Le correctif pnpm de `cassandra-driver@4.9.0` fait partie de la validation de reconnexion :
-conserver `patches/` et les fichiers pnpm ensemble. Protocole complet : [tests de résilience](docs/resilience-tests.md).
+Le protocole complet des coupures et reprises est décrit dans [tests de résilience](docs/resilience-tests.md).
 
 ## Contrôle de la documentation HTTP
 

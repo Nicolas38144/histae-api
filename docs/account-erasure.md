@@ -28,7 +28,7 @@ administratives exigent maintenant une authentification WebAuthn récente en plu
 | --- | --- |
 | `stripe` | Supprimer le Customer connu et les créations de Customer suivies, par lots de 50. Une réponse perdue conserve l’intention ou l’identifiant nécessaire au rejeu. |
 | `photos` | Passer au plus 50 lignes à `deleting`, supprimer chaque objet puis sa trace PostgreSQL seulement après confirmation. Rejouer un DELETE absent est sans effet. |
-| `scylla` | Parcourir les 32 partitions acteur puis les 32 partitions cible. Traiter au plus 100 références par lot, supprimer d’abord la contrepartie puis la référence source. Une partition pleine est reprise, pas considérée terminée. |
+| `swipes` | Supprimer au plus 1 000 décisions PostgreSQL entrantes ou sortantes par transaction. Un lot plein est repris avant de passer à l’anonymisation. |
 | `postgres` | Dans une transaction locale, vérifier l’absence de photos, supprimer les références d’upload et credentials/sessions admin, exécuter l’anonymisation existante puis terminer DSR et workflow. Les factures conservées sont détachées selon les règles existantes. |
 | `completed` | Aucun nouvel effacement : un acquittement outbox perdu est rejoué sans réanonymiser ni dupliquer l’audit. |
 
@@ -36,8 +36,8 @@ Les appels fournisseur ne s’exécutent pas dans une transaction PostgreSQL. Le
 sa concurrence, ses verrous de revendication et ses dix tentatives avant dead letter. Une étape réussie remet
 le budget de tentatives à zéro et programme le lot suivant ; un verrou d’activité occupé diffère le travail de
 cinq secondes sans consommer ce budget. Les erreurs persistées sont normalisées (`erasure_stripe_unavailable`,
-`erasure_photos_unavailable`, `erasure_scylla_unavailable`, `erasure_postgres_unavailable`) et ne contiennent ni
-réponse fournisseur, ni texte privé, ni clé objet. Désactiver Scylla n’équivaut pas à confirmer son nettoyage.
+`erasure_photos_unavailable`, `erasure_swipes_unavailable`, `erasure_postgres_unavailable`) et ne contiennent ni
+réponse fournisseur, ni texte privé, ni clé objet.
 
 ## Concurrence
 
@@ -62,7 +62,7 @@ Cela ne crée pas une transaction distribuée. Un fournisseur qui termine arbitr
 une perte de processus/connexion ne fournit pas, à lui seul, une preuve d’absence définitive. Les traces
 techniques conservées, les deadlines des clients et la réconciliation demeurent nécessaires. Les tests de résilience
 couvrent des arrêts réels du worker aux checkpoints, la perte de sa connexion de verrouillage et des coupures réseau
-locales Scylla/S3. Les interruptions de l’hôte complet, restaurations et la cible S3 de production restent à valider.
+locales S3. Les interruptions de l’hôte complet, restaurations et la cible S3 de production restent à valider.
 Voir [les scénarios, leur isolation et leurs limites](resilience-tests.md).
 
 ## Issue incertaine Stripe
@@ -91,8 +91,8 @@ changer manuellement l’étape d’effacement vers `completed`.
 - Appliquer la [baseline courante](postgres-migrations.md), puis déployer API et workers compatibles ensemble.
   Ne pas laisser une version incompatible consommer `account.erase` ou contourner les verrous.
 - En développement, `MAINTENANCE_MODE=api` suffit. En mode séparé, conserver `pnpm run outbox:work` actif avec la
-  même configuration PostgreSQL, Scylla, S3 et Stripe que l’API. Aucun composant supplémentaire n’est nécessaire.
-- `GET /api/admin/data-subject-requests` fournit un objet `erasure` nullable : étape, progression Scylla, dernier
+  même configuration PostgreSQL, S3 et Stripe que l’API. Aucun composant supplémentaire n’est nécessaire.
+- `GET /api/admin/data-subject-requests` fournit un objet `erasure` nullable : étape, dernier
   checkpoint, état outbox, tentatives, code d’erreur et UUID de tâche. Ni payload, ni référence Stripe, ni objet S3.
 - Le dashboard affiche ce suivi et un bouton d’actualisation. Une dead letter propose « Reprendre » avec motif
   de 3 à 500 caractères via `POST /api/admin/outbox/:id/retry` : authentification récente et audit transactionnel
@@ -110,5 +110,5 @@ clôture. Une demande en échec n’est pas purgée comme si elle était termin�
 fournisseurs simulés. Les tests ciblent l’acceptation atomique, la reprise après checkpoint/acquittement perdu,
 le parcours complet, la conservation des traces S3, le refus des écritures tardives, l’exclusion publique, le
 fencing des workers et la reprise administrative auditée. Les tests billing couvrent les réponses Stripe
-perdues et la fenêtre d’idempotence ; les tests Scylla couvrent l’ordre des suppressions et les lots pleins.
+perdues et la fenêtre d’idempotence ; les tests PostgreSQL couvrent les suppressions de swipes par lots pleins.
 Voir [test.md](../test.md) pour les commandes et prérequis, et la [roadmap](roadmap.md) pour les limites restantes.

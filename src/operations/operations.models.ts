@@ -5,7 +5,6 @@ import type { SmsWebhookOutcome } from '../auth/sweego-webhook-metrics.service';
 export const DEPENDENCY_NAMES = [
   'postgres',
   'redis',
-  'scylla',
   'object_storage',
   'sweego',
   'stripe',

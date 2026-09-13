@@ -1,6 +1,6 @@
 # Histae API — état du projet
 
-Mise à jour : 5 septembre 2026.
+Mise à jour : 13 septembre 2026.
 
 Ce document permet de reprendre rapidement le contexte technique et métier. Il ne duplique ni les routes
 ([routes.md](routes.md)), ni les procédures de test ([test.md](test.md)), ni le backlog
@@ -13,7 +13,7 @@ Histae API est un monolithe modulaire NestJS 11/Fastify 5 en TypeScript strict. 
 - authentification mobile OTP/JWT, familles de refresh et gestion des appareils ;
 - authentification administrateur WebAuthn native et sessions serveur opaques ;
 - onboarding, consentements, profil, préférences, traits et trois réponses guidées au maximum ;
-- découverte ScyllaDB, swipes, match réciproque, continuation et messagerie ;
+- découverte PostgreSQL, swipes, match réciproque, continuation et messagerie ;
 - abonnements Premium, projection Stripe et réconciliation durable ;
 - blocages, signalements, modération des textes/photos et audit administratif ;
 - photo privée unique, conversion WebP, stockage S3-compatible et suppression par outbox ;
@@ -31,7 +31,7 @@ Les travaux encore ouverts et leur ordre sont centralisés dans la roadmap.
 | --- | --- |
 | Runtime | Node.js 22+, pnpm 11.22.0, TypeScript strict |
 | HTTP | NestJS 11, Fastify 5 |
-| Données | PostgreSQL via `pg`, ScyllaDB via `cassandra-driver`, Redis |
+| Données | PostgreSQL via `pg`, Redis |
 | Photos | SDK AWS v3, Sharp, `heic-decode` |
 | Admin | SimpleWebAuthn côté serveur |
 | Fournisseurs | Sweego, Firebase Cloud Messaging, Stripe |
@@ -45,7 +45,7 @@ de vérité et ne peut jamais rejeter automatiquement un contenu.
 | Stockage | Données autorisées | À ne pas y placer |
 | --- | --- | --- |
 | PostgreSQL | Comptes, profils, consentements, abonnements, matchs, messages, audit, notifications et workflows | URL photo signée ou secret brut |
-| ScyllaDB | Décisions de découverte sortantes et vues orientées cible | Profil ou donnée personnelle de référence |
+| PostgreSQL `swipe_decision` | Décisions de découverte sortantes et index orientés acteur/cible | Décisions entrantes exposées aux utilisateurs |
 | Redis | Compteurs de débit et relais SSE | État métier durable |
 | S3-compatible | WebP privés sans métadonnées | URL publique persistée |
 
@@ -57,7 +57,7 @@ variables `OBJECT_STORAGE_*`.
 Les domaines sont dans `src/admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`,
 `mobile`, `moderation`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`,
 `traits` et `users`. Les briques partagées sont dans `common`, `config`, `crypto`, `database`,
-`operations`, `ratelimit`, `redis`, `scylla` et `storage`.
+`operations`, `ratelimit`, `redis` et `storage`.
 
 La séparation attendue est : contrôleur pour HTTP, DTO pour l’entrée stricte, service pour le métier,
 repository/store pour les accès aux données et mapper/model pour les représentations. Les frontières détaillées
@@ -146,25 +146,25 @@ fournisseur et leur reprise exige WebAuthn récent, motif et audit. Voir
 [docs/stripe-reconciliation.md](docs/stripe-reconciliation.md).
 
 L’effacement consomme un jeton dédié, désactive le compte et répond `202`. L’outbox reprend Stripe, photos,
-Scylla puis PostgreSQL. Les checkpoints ne progressent qu’après effets confirmés ; `account.erase` ne peut
+les swipes PostgreSQL bornés puis l’anonymisation PostgreSQL. Les checkpoints ne progressent qu’après effets confirmés ; `account.erase` ne peut
 jamais être abandonné. Voir [docs/account-erasure.md](docs/account-erasure.md).
 
 L’export portable est construit page par page dans un fichier temporaire privé, puis diffusé et supprimé sans
-assembler toutes les collections en RAM. PostgreSQL utilise un instantané `REPEATABLE READ`; Scylla reste une
-lecture partitionnée explicitement datée dans le document, car aucun instantané atomique ne couvre les deux
-stockages. Taille et concurrence des préparations sont bornées. Les demandes RGPD et journaux d’accès
+assembler toutes les collections en RAM. Toutes les collections relationnelles, swipes compris, utilisent le même
+instantané PostgreSQL `REPEATABLE READ`. La signature courte de la photo intervient seulement après la préparation
+de cet instantané. Taille et concurrence des préparations sont bornées. Les demandes RGPD et journaux d’accès
 administratifs sont parcourus par curseur.
 
 ## Base de données et exploitation
 
 `db/schema_postgres.sql` est la baseline PostgreSQL unique `001_baseline_20260905`, consolidée jusqu’aux travaux
-R06. Les 44 tables définissent leurs contraintes sans `ALTER TABLE`; la prochaine évolution persistante utilisera
-`017_<description>`. Voir
+R06. Les 44 tables de la baseline définissent leurs contraintes sans `ALTER TABLE`; `017_postgres_discovery`
+ajoute la table des swipes et la prochaine évolution persistante utilisera `018_<description>`. Voir
 [docs/postgres-migrations.md](docs/postgres-migrations.md).
 
 `/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. Une image Docker
 multi-stage non-root contient l’API compilée, les workers et les migrations, sans sources, tests ou secrets. La
-composition de développement fournit PostgreSQL, ScyllaDB, Redis, SeaweedFS et l’analyseur photo sur un réseau
+composition de développement fournit PostgreSQL, Redis, SeaweedFS et l’analyseur photo sur un réseau
 privé, avec uniquement des ports loopback ; la composition de production n’embarque volontairement aucun stockage
 mono-nœud et ne publie aucun port hôte. PostgreSQL conserve ses données dans un volume, mais ce volume ne remplace
 jamais une sauvegarde hors machine testée. Voir [docs/container-deployment.md](docs/container-deployment.md).
@@ -178,11 +178,10 @@ leader mais avec un commit par lot ; leurs messages et signalements sont nettoy�
 cascade volumineuse. La purge horaire de l’outbox peut traiter 10 000 lignes par défaut en lots de 500. Les tailles,
 budgets et règles de calibration sont dans [docs/volume-and-export.md](docs/volume-and-export.md).
 
-Dernière validation complète le 7 septembre 2026 : lint, typecheck, builds Nest et conteneur, 600 tests autonomes
-et 194 intégrations locales, soit 794 tests dans 99 suites. L’image de production a été construite et inspectée en
-utilisateur `node`; les compositions développement, production et supervision conteneurisée sont valides. Le smoke
-test vivant des nouvelles compositions et `promtool` attendent leur démarrage volontaire par l’opérateur. Ces
-résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
+Dernière validation complète le 13 septembre 2026 : lint, typecheck, builds Nest et conteneur, 597 tests autonomes
+et 190 intégrations locales, soit 787 tests dans 98 suites. La composition de développement sans service de
+découverte externe est valide et ses dépendances PostgreSQL, Redis et S3 ont été démarrées pour les intégrations.
+Ces résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
 

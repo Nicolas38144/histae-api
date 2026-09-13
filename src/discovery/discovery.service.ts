@@ -3,12 +3,11 @@ import { isUUID } from 'class-validator';
 import { apiError } from '../common/api-error';
 import type { PublicMatch } from '../matches/matches.mapper';
 import { MatchesService } from '../matches/matches.service';
-import { ScyllaUnavailableError } from '../scylla/scylla.service';
 import { ConfigService } from '../config/config.service';
 import type { DiscoveryCandidateRow, DiscoveryCursor, DiscoveryStatus, DiscoveryRequiredAction, FeedCandidate, SwipeDecision } from './discovery.models';
 import { SWIPE_DECISIONS } from './discovery.models';
 import { DiscoveryRepository } from './discovery.repository';
-import { DiscoveryStore } from './discovery.store';
+import { DiscoveryPersistenceError, DiscoveryStore } from './discovery.store';
 
 const MAX_FEED_BATCHES = 20;
 
@@ -42,7 +41,6 @@ export class DiscoveryService {
   }
 
   async feed(userId: string, limit: number, rawCursor?: string): Promise<{ profiles: FeedCandidate[]; next_cursor: string | null }> {
-    this.requireAvailable();
     if (limit < 1 || limit > 100) throw apiError(400, 'invalid_feed_request', 'The feed request is invalid.');
     await this.requireReady(userId);
     let cursor = decodeDiscoveryCursor(rawCursor);
@@ -94,7 +92,6 @@ export class DiscoveryService {
     targetId: string,
     decision: SwipeDecision,
   ): Promise<{ decision: SwipeDecision; matched: boolean; match?: PublicMatch }> {
-    this.requireAvailable();
     if (actorId === targetId || !isUUID(targetId, 'all') || !SWIPE_DECISIONS.includes(decision)) {
       throw apiError(400, 'invalid_swipe_request', 'The swipe request is invalid.');
     }
@@ -117,7 +114,7 @@ export class DiscoveryService {
       const match = await this.matches.createFromMutualLike(actorId, targetId);
       return { decision, matched: true, match };
     } catch (error) {
-      if (error instanceof ScyllaUnavailableError) throwDiscoveryUnavailable(error);
+      if (error instanceof DiscoveryPersistenceError) throwDiscoveryUnavailable(error);
       throw error;
     }
   }
@@ -131,10 +128,6 @@ export class DiscoveryService {
     if (!ready) {
       throw apiError(409, 'discovery_not_ready', 'A complete profile, preferences, current consents and a fresh location are required for discovery.');
     }
-  }
-
-  private requireAvailable(): void {
-    if (!this.store.available) throw apiError(503, 'discovery_unavailable', 'Discovery is temporarily unavailable.');
   }
 }
 
@@ -164,7 +157,7 @@ function decodeDiscoveryCursor(value?: string): DiscoveryCursor | undefined {
 }
 
 function throwDiscoveryUnavailable(error: unknown): never {
-  if (error instanceof ScyllaUnavailableError) {
+  if (error instanceof DiscoveryPersistenceError) {
     throw apiError(503, 'discovery_unavailable', 'Discovery is temporarily unavailable.', error);
   }
   throw error;

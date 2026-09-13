@@ -8,18 +8,12 @@ x-development-service: &development-service
     - ./src:/app/src
     - ./scripts:/app/scripts
     - ./db:/app/db:ro
-    - ./scylla:/app/scylla:ro
   environment: &development-environment
     ENV: development
     PORT: "8080"
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
     POSTGRES_SSLMODE: disable
-    SCYLLA_ENABLED: "true"
-    SCYLLA_CONTACT_POINTS: scylla
-    SCYLLA_PORT: "9042"
-    SCYLLA_REPLICATION_FACTOR: "1"
-    SCYLLA_TLS: "false"
     REDIS_ADDR: redis:6379
     REDIS_TLS: "false"
     OBJECT_STORAGE_ENDPOINT: http://storage.histae.localhost:8333
@@ -78,27 +72,6 @@ services:
     pids_limit: 128
     mem_limit: 192m
     cpus: 0.5
-    networks:
-      - backend
-
-  scylla:
-    image: scylladb/scylla:2026.2.2
-    command: --smp 1 --memory 1G --overprovisioned 1 --developer-mode 1
-    ports:
-      - 127.0.0.1:9042:9042
-    volumes:
-      - histae-scylla-data:/var/lib/scylla
-    healthcheck:
-      test: [CMD-SHELL, "cqlsh -e 'SELECT release_version FROM system.local' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-    restart: unless-stopped
-    stop_grace_period: 1m
-    pids_limit: 512
-    mem_limit: 1536m
-    cpus: 2.0
     networks:
       - backend
 
@@ -161,15 +134,13 @@ services:
     command:
       - /bin/sh
       - -ec
-      - pnpm run db:migrate && pnpm run scylla:migrate
+      - pnpm run db:migrate
     environment:
       <<: *development-environment
       MAINTENANCE_MODE: disabled
       METRICS_ENABLED: "false"
     depends_on:
       postgres:
-        condition: service_healthy
-      scylla:
         condition: service_healthy
 
   api:
@@ -184,8 +155,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      scylla:
         condition: service_healthy
       object-storage:
         condition: service_healthy
@@ -230,5 +199,4 @@ services:
 
 volumes:
   histae-postgres-data:
-  histae-scylla-data:
   histae-object-storage-data:

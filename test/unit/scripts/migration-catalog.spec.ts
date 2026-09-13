@@ -3,7 +3,7 @@ import { CONSOLIDATED_BASELINE_VERSION, loadMigration, migrations } from '../../
 
 describe('PostgreSQL migration catalog', () => {
   it('loads the consolidated baseline with portable checksums and reference data', async () => {
-    expect(migrations).toHaveLength(1);
+    expect(migrations).toHaveLength(2);
     expect(migrations[0].version).toBe(CONSOLIDATED_BASELINE_VERSION);
     const { sql, checksum } = await loadMigration(migrations[0]);
     for (const table of ['user_account', 'user_photo', 'photo_upload_request', 'outbox_event',
@@ -19,7 +19,24 @@ describe('PostgreSQL migration catalog', () => {
     expect(checksum).toMatch(/^[0-9a-f]{64}$/);
     expect((await loadMigration(migrations[0])).checksum).toBe(checksum);
     expect((await readdir('db')).filter(name => name.endsWith('.sql')).sort())
-      .toEqual(['drop_postgres.sql', 'insert_postgres.sql', 'schema_postgres.sql']);
+      .toEqual(['017_postgres_discovery.sql', 'drop_postgres.sql', 'insert_postgres.sql', 'schema_postgres.sql']);
+  });
+
+  it('adds PostgreSQL discovery as migration 017 without modifying the frozen baseline', async () => {
+    expect(migrations[1]).toEqual({
+      version: '017_postgres_discovery',
+      filenames: ['017_postgres_discovery.sql'],
+    });
+    const { sql, checksum } = await loadMigration(migrations[1]);
+    for (const invariant of [
+      'CREATE TABLE swipe_decision',
+      'swipe_decision_pkey',
+      'idx_swipe_decision_target_actor',
+      'idx_swipe_decision_actor_swiped_target',
+      'idx_swipe_decision_expires',
+      'trg_live_swipe',
+    ]) expect(sql).toContain(invariant);
+    expect(checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('defines Stripe reconciliation directly in the consolidated baseline', async () => {

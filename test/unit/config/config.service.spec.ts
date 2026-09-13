@@ -389,11 +389,6 @@ function productionEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   return baseEnvironment({
     ENV: 'production',
     POSTGRES_SSLMODE: 'require',
-    SCYLLA_ENABLED: 'true',
-    SCYLLA_TLS: 'true',
-    SCYLLA_USERNAME: 'histae',
-    SCYLLA_PASSWORD: 'test-password',
-    SCYLLA_REPLICATION_FACTOR: '3',
     RATE_LIMIT_STORE: 'redis',
     REDIS_ADDR: 'localhost:6379',
     REDIS_TLS: 'true',

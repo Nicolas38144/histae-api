@@ -18,7 +18,13 @@ La commande est transactionnelle et sérialisée par verrou consultatif :
 - sur un schéma vide, elle applique la baseline et les catalogues sans créer d’utilisateur factice ;
 - sur une base à jour, elle contrôle le checksum puis ne fait rien ;
 - elle refuse un schéma applicatif non vide sans historique courant, une version inconnue et un checksum absent ou modifié ;
-- la prochaine évolution persistante sera `017_<description>` ; une migration enregistrée ne doit plus être modifiée.
+- `017_postgres_discovery` ajoute la persistance des swipes et retire l’ancien checkpoint de stockage externe ;
+- la prochaine évolution persistante sera `018_<description>` ; une migration enregistrée ne doit plus être modifiée.
+
+`017_postgres_discovery` ne se connecte à aucun ancien stockage et ne copie donc aucune décision existante depuis
+ScyllaDB. Le basculement local courant repose volontairement sur un reset des données de développement. Avant
+d'appliquer cette chaîne dans un environnement qui conserverait encore des décisions ScyllaDB utiles, préparer,
+valider et exécuter un transfert de données dédié avant de retirer l'ancien cluster.
 
 Le moteur ne tente plus d’adopter les anciennes chaînes, y compris celle arrêtée à 015 ou 016. En développement, reconstruire la base avec le reset
 protégé. Pour une base déjà déployée dans un autre environnement, écrire une migration de transition explicite
@@ -37,7 +43,8 @@ Les extensions PostgreSQL, partagées au niveau de la base, restent installées.
 
 ## Organisation et validation
 
-Les 44 tables sont regroupées par domaine, parents avant dépendants. Leurs clés primaires, unicités,
+Les 44 tables de la baseline sont regroupées par domaine, parents avant dépendants. `017_postgres_discovery`
+ajoute la 45e table. Leurs clés primaires, unicités,
 clés étrangères et colonnes auto-incrémentées sont définies directement dans les `CREATE TABLE` ;
 la baseline ne contient aucun `ALTER TABLE`. Les index et commentaires suivent leur table, puis les
 fonctions et triggers terminent le fichier.

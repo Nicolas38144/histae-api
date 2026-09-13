@@ -1,4 +1,5 @@
 import { DiscoveryService } from '../../../src/discovery/discovery.service';
+import { DiscoveryPersistenceError } from '../../../src/discovery/discovery.store';
 
 const ACTOR_ID = '11111111-1111-4111-8111-111111111111';
 const FIRST_TARGET_ID = '22222222-2222-4222-8222-222222222222';
@@ -56,7 +57,6 @@ describe('DiscoveryService', () => {
       ]),
     };
     const store = {
-      available: true,
       swipedTargetIds: jest.fn().mockResolvedValue(new Set([SECOND_TARGET_ID])),
     };
     const service = new DiscoveryService(repository as never, store as never, {} as never, config as never);
@@ -79,7 +79,6 @@ describe('DiscoveryService', () => {
       isSwipeTargetAvailable: jest.fn().mockResolvedValue(true),
     };
     const store = {
-      available: true,
       recordSwipe: jest.fn().mockResolvedValue({ created: true, decision: 'like' }),
       findSwipe: jest.fn().mockResolvedValue({ decision: 'like' }),
     };
@@ -98,7 +97,6 @@ describe('DiscoveryService', () => {
       isSwipeTargetAvailable: jest.fn().mockResolvedValue(true),
     };
     const store = {
-      available: true,
       recordSwipe: jest.fn().mockResolvedValue({ created: false, decision: 'pass' }),
     };
     const service = new DiscoveryService(repository as never, store as never, {} as never, config as never);
@@ -109,8 +107,15 @@ describe('DiscoveryService', () => {
     }));
   });
 
-  it('fails closed when Scylla-backed discovery is disabled', async () => {
-    const service = new DiscoveryService({} as never, { available: false } as never, {} as never, config as never);
+  it('keeps the stable public error when PostgreSQL swipe persistence is unavailable', async () => {
+    const repository = {
+      isDiscoveryReady: jest.fn().mockResolvedValue(true),
+      candidateBatch: jest.fn().mockResolvedValue([candidate(FIRST_TARGET_ID, 1)]),
+    };
+    const store = {
+      swipedTargetIds: jest.fn().mockRejectedValue(new DiscoveryPersistenceError('unavailable')),
+    };
+    const service = new DiscoveryService(repository as never, store as never, {} as never, config as never);
 
     await expect(service.feed(ACTOR_ID, 20)).rejects.toEqual(expect.objectContaining({
       status: 503,

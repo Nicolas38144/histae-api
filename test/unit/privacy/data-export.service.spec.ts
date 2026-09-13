@@ -1,6 +1,5 @@
 import type { Readable } from 'node:stream';
 
-import type { DiscoveryAction } from '../../../src/discovery/discovery.models';
 import { DataExportService } from '../../../src/privacy/data-export.service';
 import type { JsonExportWriter } from '../../../src/privacy/json-export.writer';
 
@@ -14,6 +13,11 @@ describe('DataExportService', () => {
         await writer.startArray('traits');
         await writer.item({ id: TARGET_ID, name: 'Hiking' });
         await writer.endArray();
+        await writer.startObject('discovery_actions');
+        await writer.startArray('outgoing');
+        await writer.item({ actor_id: USER_ID, target_id: TARGET_ID, decision: 'like', swiped_at: new Date('2030-01-02') });
+        await writer.endArray();
+        await writer.endObject();
         return {
           snapshotAt: new Date('2030-01-01T00:00:00.000Z'),
           account: { user_id: USER_ID },
@@ -21,20 +25,11 @@ describe('DataExportService', () => {
           photoKey: null,
           preferences: null,
           subscription: null,
+          discoveryRows: 1,
         };
       }),
     };
     const privacy = { recordSelfExport: jest.fn().mockResolvedValue(undefined) };
-    const discovery = {
-      available: true,
-      forEachOwnAction: jest.fn(async (
-        userId: string,
-        visit: (action: DiscoveryAction) => void | Promise<void>,
-      ) => {
-        await visit({ actor_id: userId, target_id: TARGET_ID, decision: 'like', swiped_at: new Date('2030-01-02') });
-        return 1;
-      }),
-    };
     const photos = { urlForKey: jest.fn().mockResolvedValue(null) };
     const config = {
       workloads: { dataExportPageSize: 25, dataExportMaxBytes: 1_048_576, dataExportMaxConcurrency: 2 },
@@ -42,7 +37,6 @@ describe('DataExportService', () => {
     const service = new DataExportService(
       exports as never,
       privacy as never,
-      discovery as never,
       photos as never,
       config as never,
     );
@@ -63,14 +57,15 @@ describe('DataExportService', () => {
     ]);
     expect(parsed.consistency).toEqual(expect.objectContaining({
       postgres: { level: 'repeatable_read', snapshot_at: '2030-01-01T00:00:00.000Z' },
-      discovery: expect.objectContaining({ level: 'partitioned_live_read', rows: 1 }),
+      discovery: expect.objectContaining({
+        level: 'repeatable_read', snapshot_at: '2030-01-01T00:00:00.000Z', rows: 1,
+      }),
     }));
     expect(prepared.getHeaders()).toEqual(expect.objectContaining({
       type: 'application/json; charset=utf-8',
       disposition: 'attachment; filename="histae-data-export.json"',
     }));
     expect(exports.writeSnapshot).toHaveBeenCalledWith(USER_ID, expect.any(Object), 25);
-    expect(discovery.forEachOwnAction).toHaveBeenCalledWith(USER_ID, expect.any(Function), 25);
     expect(privacy.recordSelfExport).toHaveBeenCalledWith(USER_ID);
   });
 
@@ -84,7 +79,6 @@ describe('DataExportService', () => {
     const service = new DataExportService(
       exports as never,
       { recordSelfExport: jest.fn() } as never,
-      {} as never,
       {} as never,
       { workloads: { dataExportPageSize: 25, dataExportMaxBytes: 100, dataExportMaxConcurrency: 2 } } as never,
     );
@@ -101,12 +95,12 @@ describe('DataExportService', () => {
         photoKey: null,
         preferences: null,
         subscription: null,
+        discoveryRows: 0,
       })),
     };
     const service = new DataExportService(
       exports as never,
       { recordSelfExport: jest.fn().mockResolvedValue(undefined) } as never,
-      { available: false, forEachOwnAction: jest.fn().mockResolvedValue(0) } as never,
       { urlForKey: jest.fn().mockResolvedValue(null) } as never,
       { workloads: {
         dataExportPageSize: 25,

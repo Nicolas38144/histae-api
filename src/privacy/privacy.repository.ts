@@ -48,7 +48,7 @@ export class PrivacyRepository {
         request.completed_at, request.handled_by, request.notes,
         to_char(request.requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at,
         CASE WHEN erasure.request_id IS NOT NULL THEN jsonb_build_object(
-          'step', erasure.step, 'scylla_partition', erasure.scylla_partition, 'updated_at', erasure.updated_at,
+          'step', erasure.step, 'updated_at', erasure.updated_at,
           'event_id', event.id, 'status', event.status, 'attempts', COALESCE(event.attempts, 0),
           'last_error_code', event.last_error_code) END AS erasure
       FROM data_subject_request request
@@ -187,6 +187,10 @@ export class PrivacyRepository {
       SELECT user_id FROM user_presence WHERE updated_at <= $1::timestamptz - INTERVAL '24 hours'
       ORDER BY updated_at LIMIT $2
     )`, [now, batchSize]);
+    const expiredSwipes = await database.query(`DELETE FROM swipe_decision WHERE (actor_id, target_id) IN (
+      SELECT actor_id, target_id FROM swipe_decision WHERE expires_at <= $1::timestamptz
+      ORDER BY expires_at, actor_id, target_id LIMIT $2
+    )`, [now, batchSize]);
     const expiredOtps = await database.query(`DELETE FROM otp_verification WHERE id IN (
       SELECT id FROM otp_verification WHERE expires_at <= $1::timestamptz ORDER BY expires_at LIMIT $2
     )`, [now, batchSize]);
@@ -281,6 +285,7 @@ export class PrivacyRepository {
     return {
       stale_presences: stalePresences.rowCount ?? 0,
       expired_presences: expiredPresences.rowCount ?? 0,
+      expired_swipes: expiredSwipes.rowCount ?? 0,
       expired_otps: expiredOtps.rowCount ?? 0,
       expired_refresh_tokens: expiredRefreshTokens.rowCount ?? 0,
       expired_notifications: expiredNotifications.rowCount ?? 0,

@@ -28,7 +28,7 @@ services:
     command:
       - /bin/sh
       - -ec
-      - pnpm run container:db:migrate && pnpm run container:scylla:migrate
+      - pnpm run container:db:migrate
     environment:
       MAINTENANCE_MODE: disabled
       METRICS_ENABLED: "false"

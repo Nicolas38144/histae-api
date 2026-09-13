@@ -15,7 +15,6 @@ export type DataSubjectRequestRow = {
   notes?: string | null;
   erasure?: {
     step: import('./erasure.repository').ErasureStep;
-    scylla_partition: number;
     updated_at: string;
     event_id: string | null;
     status: import('../outbox/outbox.models').OutboxStatus | null;
@@ -52,6 +51,7 @@ export type BlockedUser = {
 export type PrivacyMaintenanceResult = {
   stale_presences: number;
   expired_presences: number;
+  expired_swipes: number;
   expired_otps: number;
   expired_refresh_tokens: number;
   expired_mobile_sessions: number;

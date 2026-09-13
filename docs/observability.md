@@ -176,10 +176,10 @@ mesurer le budget, pas de supprimer immédiatement la limite.
 <a id="dependency-errors"></a>
 ## Dépendance indisponible ou instable
 
-Le label `dependency` appartient à la liste fermée `postgres`, `redis`, `scylla`, `object_storage`, `sweego`,
+Le label `dependency` appartient à la liste fermée `postgres`, `redis`, `object_storage`, `sweego`,
 `stripe`. Vérifier son healthcheck, réseau, TLS, credentials et quotas sans imprimer de secret. Pour S3 et Stripe,
 préserver les traces PostgreSQL et laisser l’outbox/réconciliation reprendre ; ne pas relancer un POST dont l’issue
-est incertaine. Pour Scylla/Redis, vérifier les mécanismes de reconnexion avant tout redémarrage partagé.
+est incertaine. Pour Redis, vérifier les mécanismes de reconnexion avant tout redémarrage partagé.
 
 <a id="postgres-pool"></a>
 ## Pool PostgreSQL sous pression
@@ -237,5 +237,5 @@ indisponible, collecte persistante impossible et dead letter. Exécuter `promtoo
 
 Pour vérifier toute la chaîne locale, arrêter volontairement **l’API seulement** pendant plus de deux minutes,
 observer `HistaeMetricsUnavailable` dans Prometheus puis Alertmanager, suivre le runbook ci-dessus, redémarrer l’API
-et vérifier la résolution. Ne jamais arrêter PostgreSQL, Redis, Scylla ou S3 partagés pour ce test. Archiver seulement
+et vérifier la résolution. Ne jamais arrêter PostgreSQL, Redis ou S3 partagés pour ce test. Archiver seulement
 le nom de l’alerte et les horodatages, sans capture contenant une configuration ou un secret.

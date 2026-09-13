@@ -44,7 +44,6 @@ describe('PostgreSQL resumable account erasure', () => {
   const calls: string[] = [];
   const stripe = { deleteCustomerForAccount: jest.fn<Promise<boolean>, [string]>() };
   const storage = { delete: jest.fn<Promise<void>, [string]>() };
-  const scylla = { deleteUserDataBatch: jest.fn<Promise<boolean>, [string, number]>() };
   const photos = new PhotosService(photosRepository, {} as never, storage as never, activity);
   let createdSchema = false;
   let owner: string;
@@ -66,7 +65,6 @@ describe('PostgreSQL resumable account erasure', () => {
     await pool.query("INSERT INTO user_profile (user_id, firstname, birthdate) VALUES ($1, 'Private', '1990-01-01')", [owner]);
     stripe.deleteCustomerForAccount.mockReset().mockImplementation(async () => { await noOpenTransaction(); calls.push('stripe'); return true; });
     storage.delete.mockReset().mockImplementation(async (key) => { await noOpenTransaction(); calls.push('photos'); objects.delete(key); });
-    scylla.deleteUserDataBatch.mockReset().mockImplementation(async (_user, partition) => { await noOpenTransaction(); calls.push(`scylla:${partition}`); return true; });
   });
 
   afterEach(async () => {
@@ -110,7 +108,7 @@ describe('PostgreSQL resumable account erasure', () => {
   }
 
   function worker(repository = erasures) {
-    const service = new ErasureService(repository, activity, stripe as never, photos, scylla as never);
+    const service = new ErasureService(repository, activity, stripe as never, photos);
     const dispatcher = new OutboxEventDispatcher(
       photosRepository,
       storage as never,
@@ -174,30 +172,35 @@ describe('PostgreSQL resumable account erasure', () => {
     expect((await pool.query('SELECT * FROM account_erasure')).rows).toHaveLength(0);
   });
 
-  it('checkpoints Stripe, photos and all 64 Scylla partitions before final SQL redaction', async () => {
+  it('checkpoints Stripe, photos and bounded PostgreSQL swipe batches before final SQL redaction', async () => {
     await photo();
+    const peers = Array.from({ length: 1_001 }, () => randomUUID());
+    await pool.query(`INSERT INTO user_account (user_id, role, phone_number_hash, phone_number_encrypted)
+      SELECT id, 'user', 'erasure-peer-' || id::text, ''::bytea FROM unnest($1::uuid[]) AS id`, [peers]);
+    await pool.query(`INSERT INTO swipe_decision (actor_id, target_id, decision, swiped_at, expires_at)
+      SELECT $1, id, 'pass', now(), now() + interval '365 days' FROM unnest($2::uuid[]) AS id`, [owner, peers]);
     const requestId = await accept();
     // Recreate the worker for each tick to exercise recovery without in-memory progress.
-    for (let i = 0; i < 67; i++) await tick();
-    expect(calls).toEqual(['stripe', 'photos', ...Array.from({ length: 64 }, (_, i) => `scylla:${i}`)]);
+    for (let i = 0; i < 5; i++) await tick();
+    expect(calls).toEqual(['stripe', 'photos']);
     expect(objects.size).toBe(0);
+    expect((await pool.query('SELECT 1 FROM swipe_decision WHERE actor_id = $1 OR target_id = $1', [owner])).rowCount).toBe(0);
     expect(await state()).toMatchObject({ step: 'completed', request_status: 'completed', event_status: 'completed' });
     expect((await pool.query('SELECT * FROM user_profile WHERE user_id = $1', [owner])).rows).toHaveLength(0);
     expect((await pool.query("SELECT * FROM data_access_log WHERE accessed_user_id = $1 AND action = 'system_anonymize'", [owner])).rowCount).toBe(1);
     expect((await privacy.requestsForAdmin(undefined, 100, 0)).find((row) => row.id === requestId)?.erasure?.step).toBe('completed');
   }, 30_000);
 
-  it.each(['stripe', 'photos', 'scylla'] as const)('retries %s after an effect succeeds but its checkpoint is lost', async (step) => {
+  it.each(['stripe', 'photos'] as const)('retries %s after an effect succeeds but its checkpoint is lost', async (step) => {
     await accept();
     await pool.query('UPDATE account_erasure SET step = $2 WHERE user_id = $1', [owner, step]);
     jest.spyOn(erasures, 'advance').mockRejectedValueOnce(new Error('private database detail'));
     expect((await tick()).retried).toBe(1);
     expect(await state()).toMatchObject({ step, request_status: 'in_progress', last_error_code: `erasure_${step}_unavailable` });
     expect((await tick()).deferred).toBe(1);
-    const expected = step === 'stripe' ? 'photos' : step === 'photos' ? 'scylla' : 'scylla';
+    const expected = step === 'stripe' ? 'photos' : 'swipes';
     expect((await state()).step).toBe(expected);
     expect((await state()).attempts).toBe(0);
-    if (step === 'scylla') expect(scylla.deleteUserDataBatch).toHaveBeenCalledTimes(2);
   });
 
   it('retains the photo trace after a lost S3 deletion response, then retries the same key', async () => {
@@ -211,7 +214,7 @@ describe('PostgreSQL resumable account erasure', () => {
     await tick();
     expect(storage.delete.mock.calls.map(([objectKey]) => objectKey)).toEqual([key, key]);
     expect((await pool.query('SELECT * FROM user_photo WHERE id = $1', [id])).rows).toHaveLength(0);
-    expect((await state()).step).toBe('scylla');
+    expect((await state()).step).toBe('swipes');
   });
 
   it('waits for an in-flight external writer without consuming the failure budget', async () => {
@@ -304,6 +307,7 @@ describe('PostgreSQL resumable account erasure', () => {
     "INSERT INTO billing_customer (user_id, stripe_customer_id) VALUES ($1, 'cus_Late')",
     "INSERT INTO user_subscription (user_id, plan) VALUES ($1, 'premium')",
     "INSERT INTO data_subject_request (user_id, type) VALUES ($1, 'access')",
+    "INSERT INTO swipe_decision (actor_id, target_id, decision, swiped_at, expires_at) VALUES ($1, $1, 'like', now(), now() + interval '365 days')",
   ])('rejects late account writes: %s', async (sql) => {
     await accept();
     await expect(pool.query(sql, [owner])).rejects.toMatchObject({ code: 'P0E01' });
@@ -346,7 +350,7 @@ describe('PostgreSQL resumable account erasure', () => {
   it('refuses finalization while a photo trace remains and rolls back the completion marker', async () => {
     await photo();
     await accept();
-    await pool.query("UPDATE account_erasure SET step = 'postgres', scylla_partition = 64 WHERE user_id = $1", [owner]);
+    await pool.query("UPDATE account_erasure SET step = 'postgres' WHERE user_id = $1", [owner]);
     expect((await tick()).retried).toBe(1);
     expect(await state()).toMatchObject({ step: 'postgres', request_status: 'in_progress', anonymized_at: null, last_error_code: 'erasure_postgres_unavailable' });
     expect((await pool.query('SELECT * FROM user_profile WHERE user_id = $1', [owner])).rowCount).toBe(1);
@@ -354,7 +358,7 @@ describe('PostgreSQL resumable account erasure', () => {
 
   it('does not repeat anonymization if its final outbox acknowledgement is lost', async () => {
     await accept();
-    await pool.query("UPDATE account_erasure SET step = 'postgres', scylla_partition = 64 WHERE user_id = $1", [owner]);
+    await pool.query("UPDATE account_erasure SET step = 'postgres' WHERE user_id = $1", [owner]);
     jest.spyOn(outbox, 'complete').mockRejectedValueOnce(new Error('lost ack'));
     expect((await tick()).retried).toBe(1);
     const completedAt = (await state()).completed_at;

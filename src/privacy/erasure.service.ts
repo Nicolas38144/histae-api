@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { AccountActivityService } from '../database/account-activity.service';
 import { BillingService } from '../billing/billing.service';
 import { PhotosService } from '../photos/photos.service';
-import { DiscoveryStore } from '../discovery/discovery.store';
 import { ErasureRepository, type ErasureStep } from './erasure.repository';
 import { ApiError } from '../common/api-error';
 
@@ -17,7 +16,6 @@ export class ErasureService {
     private readonly activity: AccountActivityService,
     private readonly billing: BillingService,
     private readonly photos: PhotosService,
-    private readonly discovery: DiscoveryStore,
   ) {}
 
   /** False means the job was deferred/checkpointed, not that erasure is complete. */
@@ -30,7 +28,6 @@ export class ErasureService {
       if (!current) return false;
       if (current.step === 'completed') return true;
       let next: ErasureStep = current.step;
-      let partition = current.scylla_partition;
       try {
         assertHeld();
         switch (current.step) {
@@ -38,16 +35,16 @@ export class ErasureService {
             if (await this.billing.deleteCustomerForAccount(current.user_id)) next = 'photos';
             break;
           case 'photos':
-            if (await this.photos.deleteForAccount(current.user_id)) next = 'scylla';
+            if (await this.photos.deleteForAccount(current.user_id)) next = 'swipes';
             break;
-          case 'scylla':
-            if (await this.discovery.deleteUserDataBatch(current.user_id, partition)) partition++;
-            if (partition === 64) next = 'postgres';
-            break;
+          case 'swipes':
+            await this.erasures.deleteSwipeBatch(eventId, workerId, current);
+            assertHeld();
+            return false;
           case 'postgres': next = 'completed'; break;
         }
         assertHeld();
-        const advanced = await this.erasures.advance(eventId, workerId, current, next, partition);
+        const advanced = await this.erasures.advance(eventId, workerId, current, next);
         return advanced && next === 'completed';
       } catch (error) {
         // Never store provider messages, object keys or personal data in the job.

@@ -30,10 +30,16 @@ process.once('message', async (input: { postgres: PoolConfig; afterCheckpoint: b
       if (input.afterCheckpoint) await pause();
       return result;
     };
+    const deleteSwipeBatch = repository.deleteSwipeBatch.bind(repository);
+    repository.deleteSwipeBatch = async (...args) => {
+      if (!input.afterCheckpoint) await pause();
+      const result = await deleteSwipeBatch(...args);
+      if (input.afterCheckpoint) await pause();
+      return result;
+    };
     const erasure = new ErasureService(repository, activity,
       { deleteCustomerForAccount: async () => true } as never,
-      { deleteForAccount: async () => true } as never,
-      { deleteUserDataBatch: async () => true } as never);
+      { deleteForAccount: async () => true } as never);
     const dispatcher = new OutboxEventDispatcher(
       {} as never,
       {} as never,

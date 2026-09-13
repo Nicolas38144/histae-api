@@ -48,7 +48,6 @@ export class OperationalStatusService {
       http: this.metrics.httpSnapshot(),
       dependencies: this.metrics.dependencySnapshot({
         redis: this.config.rateLimit.store === 'redis',
-        scylla: this.config.scylla.enabled,
         sweego: this.config.sms.provider === 'sweego',
         stripe: this.config.billing.provider === 'stripe',
       }),

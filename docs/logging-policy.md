@@ -19,7 +19,7 @@ Sont interdits, y compris en développement :
 - téléphone, nom, bio, réponse libre ou contenu de message ;
 - JWT, refresh token, OTP, passkey, cookie, en-tête d’autorisation ou secret fournisseur ;
 - token FCM, clé objet, URL signée ou corps photo ;
-- payload/réponse Sweego, Stripe, FCM, S3, Redis, Scylla ou PostgreSQL ;
+- payload/réponse Sweego, Stripe, FCM, S3, Redis ou PostgreSQL ;
 - motif administratif, contenu de modération, corps ou query string HTTP ;
 - message, stack, cause ou sérialisation brute d’une exception.
 

@@ -35,6 +35,8 @@ DROP TABLE IF EXISTS refresh_token_family CASCADE;
 
 DROP TABLE IF EXISTS continuation_usage CASCADE;
 
+DROP TABLE IF EXISTS swipe_decision CASCADE;
+
 DROP TABLE IF EXISTS chat_message CASCADE;
 DROP TABLE IF EXISTS match_state CASCADE;
 DROP TABLE IF EXISTS match_init CASCADE;

@@ -1,18 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import * as scyllaClients from '../../src/scylla/scylla.client';
 import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '../../src/config/config.service';
 import { RedisService } from '../../src/redis/redis.service';
 import { RateLimitService } from '../../src/ratelimit/rate-limit.service';
-import { ScyllaService } from '../../src/scylla/scylla.service';
-import { DiscoveryStore } from '../../src/discovery/discovery.store';
 import { ObjectStorageService } from '../../src/storage/object-storage.service';
 import { PhotosRepository } from '../../src/photos/photos.repository';
 import { OutboxRepository } from '../../src/outbox/outbox.repository';
 import { OutboxEventDispatcher } from '../../src/outbox/outbox-event.dispatcher';
 import { OutboxWorkerService } from '../../src/outbox/outbox-worker.service';
-import { accountActivityStub } from '../account-activity.stub';
 import { IsolatedPostgres, eventually } from '../helpers/isolated-postgres';
 import { TcpFaultProxy } from '../helpers/tcp-fault-proxy';
 
@@ -45,46 +41,6 @@ describe('Real local dependency recovery through disposable TCP relays', () => {
       await expect(limits.enforce('r03-network', id, policy, 'r03_limit')).rejects.toMatchObject({ status: 429, code: 'r03_limit' });
       expect(proxy.connections).toBeGreaterThan(1);
     } finally { proxy.resume(); await redis.onModuleDestroy(); await proxy.stop(); }
-  });
-
-  it('keeps Scylla decisions immutable through a real socket cut and resumes cross-view erasure', async () => {
-    if (config.scylla.keyspace !== 'histae_discovery' || config.scylla.contactPoints.length !== 1 || config.scylla.tls) {
-      throw new Error('Fault test requires a single local development Scylla node without TLS.');
-    }
-    const proxy = await new TcpFaultProxy(config.scylla.contactPoints[0], config.scylla.port).start();
-    // Observe the real production driver's host replacement after the cut.
-    // Queries and connection policies are not mocked. The pinned driver patch
-    // must close the retired pool so this suite can exit without forceExit.
-    let retiredHosts = 0;
-    const createClient = scyllaClients.createScyllaClient;
-    jest.spyOn(scyllaClients, 'createScyllaClient').mockImplementationOnce(settings => {
-      const client = createClient(settings);
-      client.on('hostRemove', () => { retiredHosts++; });
-      return client;
-    });
-    const scylla = new ScyllaService({ scylla: { ...config.scylla, enabled: true,
-      contactPoints: ['127.0.0.1'], port: proxy.port, connectTimeoutMillis: 500, requestTimeoutMillis: 500 } } as ConfigService);
-    const direct = new ScyllaService(config);
-    const store = new DiscoveryStore(scylla, accountActivityStub), cleanup = new DiscoveryStore(direct, accountActivityStub);
-    const a = randomUUID(), b = randomUUID();
-    try {
-      await direct.onModuleInit(); await scylla.onModuleInit();
-      expect(await store.recordSwipe(a, b, 'like')).toMatchObject({ created: true, decision: 'like' });
-      proxy.cut();
-      await expect(store.deleteUserDataBatch(a, 0)).rejects.toThrow('ScyllaDB query failed');
-      proxy.resume();
-      await eventually(async () => { try { await scylla.check(); return true; } catch { return false; } }, 15_000);
-      expect(await store.recordSwipe(a, b, 'pass')).toMatchObject({ created: false, decision: 'like' });
-      await store.deleteUserData(a);
-      expect(await cleanup.exportOwnActions(a)).toEqual([]);
-      expect(await cleanup.findSwipe(a, b)).toBeUndefined();
-      expect(proxy.connections).toBeGreaterThan(1);
-      expect(retiredHosts).toBeGreaterThan(0);
-    } finally {
-      proxy.resume();
-      try { await cleanup.deleteUserData(a); await cleanup.deleteUserData(b); }
-      finally { await scylla.onModuleDestroy(); await direct.onModuleDestroy(); await proxy.stop(); }
-    }
   });
 
   it('retains the photo trace after an S3 DELETE response is lost and completes the outbox retry', async () => {

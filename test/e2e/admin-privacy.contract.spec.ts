@@ -14,7 +14,7 @@ const REQUEST = '22222222-2222-4222-8222-222222222222';
 describe('Administrator resumable erasure HTTP contract', () => {
   let app: NestFastifyApplication;
   let authenticatedAt: Date;
-  const erasure = { step: 'scylla', scylla_partition: 32, status: 'pending', event_id: REQUEST, attempts: 0, last_error_code: null };
+  const erasure = { step: 'swipes', status: 'pending', event_id: REQUEST, attempts: 0, last_error_code: null };
   const privacy = {
     requestsForAdmin: jest.fn().mockResolvedValue({
       items: [{ id: REQUEST, status: 'in_progress', erasure }],

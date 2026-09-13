@@ -14,6 +14,10 @@ export const migrations: readonly MigrationDefinition[] = [
     version: CONSOLIDATED_BASELINE_VERSION,
     filenames: ['schema_postgres.sql', 'insert_postgres.sql'],
   },
+  {
+    version: '017_postgres_discovery',
+    filenames: ['017_postgres_discovery.sql'],
+  },
 ];
 
 export async function loadMigration(migration: MigrationDefinition): Promise<{ sql: string; checksum: string }> {

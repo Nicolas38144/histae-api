@@ -20,7 +20,7 @@ prouve seulement qu’une référence a été fournie, pas qu’elle est valable
 - [ ] Valider la conservation des hashes de refresh consommés nécessaire à la détection de rejeu.
 - [ ] Valider les métadonnées Sweego minimales, sans téléphone, OTP ou payload webhook conservé.
 - [ ] Définir les sauvegardes, leur accès, leur rétention et la purge des données restaurées après effacement.
-- [ ] Vérifier l’effacement Stripe, PostgreSQL, ScyllaDB et stockage objet, ainsi que le traitement des dead letters.
+- [ ] Vérifier l’effacement Stripe, PostgreSQL et stockage objet, ainsi que le traitement des dead letters.
 
 ## Profil, photos et modération
 

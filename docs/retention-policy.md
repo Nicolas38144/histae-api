@@ -14,7 +14,7 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 | Outbox technique | Garantir suppressions objet, intentions push, effacement et réconciliation Stripe | Événement réussi ou explicitement abandonné : 7 jours ; `dead_letter` : jusqu’au diagnostic opérateur | Le worker revendique avec `SKIP LOCKED`, réessaie dix fois avec backoff et purge les événements résolus par lots. Les événements `billing.*` ont un payload vide et disparaissent à l’effacement du compte. Relance et abandon exigent une authentification admin récente, un motif et un audit transactionnel ; l’abandon reste interdit pour l’effacement et la facturation |
 | Actions opérateur outbox | Traçabilité des reprises et abandons techniques | 1 an glissant | Identité/role au moment de l’action, type d’événement et motif, sans payload ni clé objet ; suppression bornée par `PrivacyMaintenanceService` |
 | Position précise | Découverte locale demandée par l’utilisateur | Fraîche pendant 1 h, supprimée après 24 h ; immédiatement supprimée au retrait du consentement de localisation | `PrivacyMaintenanceService` et transaction de retrait |
-| Décisions de swipe (`like`/`pass`) | Exclure les profils déjà évalués et détecter un intérêt réciproque | 1 an fixe (`default_time_to_live = 31536000`) ou effacement immédiat du compte | TTL uniforme sur les deux vues ScyllaDB, avec TWCS par fenêtres de 14 jours ; suppression croisée des partitions acteur/cible lors de l’effacement |
+| Décisions de swipe (`like`/`pass`) | Exclure les profils déjà évalués et détecter un intérêt réciproque | 365 jours fixes (`expires_at = swiped_at + 365 jours`) ou effacement immédiat du compte | Une ligne PostgreSQL canonique par paire acteur/cible ; purge quotidienne et effacement croisé bornés par lots |
 | OTP et suivi SMS | Authentification et diagnostic des issues d’envoi | Jusqu’à `expires_at` ; un code consommé reste inutilisable, ses métadonnées suivent la même purge | Suppression par lots après expiration et à l’effacement du compte. HMAC, états, références fournisseur et dates locales seulement ; aucun payload webhook, téléphone, code en clair ni journal d’événements séparé |
 | Refresh tokens et familles mobiles | Session et détection du rejeu | Hash et filiation de chaque token conservés jusqu'à son `expires_at` initial, même après rotation/révocation ; famille jusqu'à l'expiration de son dernier token puis purge de ses tokens ; effacement immédiat du compte | Les ancêtres expirés sont purgés par lots sans effacer leurs enfants. Les familles expirées sont purgées seulement une fois vides. L'export contient les métadonnées de famille et le motif normalisé de révocation, jamais les hashes. Aucun secret brut, IP ou user-agent n'est ajouté |
 | Challenges et jetons d’enrôlement WebAuthn admin | Authentification forte du dashboard | Challenge : 5 minutes ; enrôlement initial : 15 minutes par défaut ; consommation unique | Seuls les hashes SHA-256 des secrets sont conservés. Suppression bornée dès consommation ou expiration |
@@ -36,12 +36,11 @@ Cette matrice décrit ce que le code applique aujourd’hui. Elle ne constitue p
 
 La durée d’un an des swipes est une valeur produit et technique initiale : elle empêche la réapparition rapide
 d’un profil déjà évalué et laisse le temps de détecter un like réciproque. Elle doit être incluse dans la
-validation juridique/DPO. Le code échoue en mode fermé : si ScyllaDB n’est pas joignable, un export complet ou
-un effacement complet n’est pas déclaré réussi.
+validation juridique/DPO. Une erreur PostgreSQL empêche l’export ou l’effacement d’être déclaré réussi.
 
 L’acceptation de l’effacement désactive immédiatement le compte, mais répond `202`, pas « terminé ».
-Les nouvelles mutations et projections publiques sont bloquées ; les suppressions Stripe, photos, Scylla puis
-PostgreSQL se poursuivent avec checkpoints et reprises. Les positions peuvent toujours être rendues inactives
+Les nouvelles mutations et projections publiques sont bloquées ; les suppressions Stripe, photos, swipes puis
+l’anonymisation PostgreSQL se poursuivent avec checkpoints et reprises. Les positions peuvent toujours être rendues inactives
 ou purgées par la maintenance. Les règles de conservation du tableau restent inchangées : « effacement du
 compte » désigne le workflow complet, pas un délai garanti de réponse HTTP. Les anciennes URL photo déjà
 signées restent limitées par leur expiration de 300 secondes ou la suppression de l’objet ; les copies déjà
@@ -58,9 +57,9 @@ watchdog durable remplace tout nouveau `POST` par des lectures de réconciliatio
 tant qu’elle n’est pas résolue. Voir le [protocole Stripe](stripe-reconciliation.md) et le
 [protocole d’effacement](account-erasure.md).
 
-La vue Scylla orientée cible conserve les références entrantes afin de détecter la réciprocité et de supprimer
-toutes les références croisées lors d’un effacement. Elle reste strictement interne : l’export utilisateur ne
-communique que les décisions prises par cet utilisateur, jamais l’identité ni le choix des autres membres.
+L’index PostgreSQL orienté cible sert l’effacement des références entrantes. Il reste strictement interne :
+l’export utilisateur ne communique que les décisions prises par cet utilisateur, jamais l’identité ni le choix
+des autres membres.
 
 ## Fondements à faire approuver
 

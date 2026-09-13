@@ -26,24 +26,23 @@ Si le code et la documentation divergent, vérifier le comportement par les test
 - `Dockerfile` produit une image commune non-root pour l’API, les migrations, l’outbox et la maintenance.
   `compose.dev.yaml` est uniquement une pile mono-machine de développement ; `compose.production.yaml` ne doit
   réintroduire ni stockage mono-nœud, ni port hôte public.
-- PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, questions/réponses de profil, consentements, abonnements, matchs, messages, signalements et workflows RGPD.
-- ScyllaDB conserve uniquement les décisions de découverte à fort volume et leurs vues par acteur/cible.
+- PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, questions/réponses de profil, consentements, abonnements, décisions de découverte, matchs, messages, signalements et workflows RGPD.
 - Redis fournit le rate limiting distribué et le relais Pub/Sub SSE entre instances.
 - Le stockage objet compatible S3 conserve les photos privées. SeaweedFS `weed mini` est uniquement le choix local ; le code ne doit importer aucun type ou comportement propre à SeaweedFS.
 - Sweego livre les OTP par SMS, Firebase Cloud Messaging fournit le push optionnel et Stripe gère la facturation Premium.
 
-Ne dupliquer ni profils ni autres données personnelles de référence dans ScyllaDB. Les opérations d'export ou d'effacement doivent préserver la séparation PostgreSQL/Scylla et l'ordre des effets externes documenté.
+Les opérations d'export et d'effacement des swipes restent transactionnelles et bornées dans PostgreSQL.
 
 ## Organisation du code
 
-Le code est organisé par domaines dans `src/` : `admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `operations`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis`, `scylla` et `storage`.
+Le code est organisé par domaines dans `src/` : `admin`, `admin-auth`, `auth`, `billing`, `discovery`, `matches`, `mobile`, `moderation`, `operations`, `outbox`, `photos`, `plans`, `privacy`, `profile-questions`, `reports`, `traits`, `users`, ainsi que les briques partagées `common`, `config`, `crypto`, `database`, `ratelimit`, `redis` et `storage`.
 
 Respecter autant que possible la séparation suivante :
 
 - contrôleur : contrat HTTP, guards, DTO et statut de réponse ;
 - DTO : validation stricte des entrées HTTP ;
 - service : règles métier et traduction en erreurs API stables ;
-- repository/store : SQL/CQL, transactions, verrous et accès aux données ;
+- repository/store : SQL, transactions, verrous et accès aux données ;
 - mapper/model : types métier fermés et représentation publique.
 
 Dans les matchs, la messagerie appartient à `MatchMessageRepository` et les tâches de fond à
@@ -105,10 +104,10 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
   de `OBJECT_STORAGE_ENDPOINT` : les URLs signées doivent être résolubles sans réécriture depuis Docker et depuis
   le navigateur. Toute autre cible doit préserver cette propriété avec un nom HTTPS stable.
 - Conserver une limite dédiée à l’upload photo en plus de la limite globale, car le décodage HEIC et la conversion sont coûteux.
-- Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers. Les collections PostgreSQL sont paginées sous un instantané `REPEATABLE READ`; Scylla reste une lecture partitionnée datée, sans promesse d’instantané inter-stockages.
+- Les exports ne révèlent que les swipes sortants de l'utilisateur, jamais les décisions entrantes de tiers. Toutes les collections PostgreSQL sont paginées sous un même instantané `REPEATABLE READ`.
 - Construire l’export dans un fichier temporaire privé et borné, jamais dans un grand objet en RAM. Ne commencer la réponse qu’après préparation complète, supprimer le fichier à la fermeture du flux et normaliser tout échec avant envoi.
-- La suppression de compte est protégée par un jeton dédié à usage unique et doit nettoyer Stripe/Scylla/PostgreSQL dans l'ordre documenté.
-- L’effacement est asynchrone : consommer le jeton, créer DSR/checkpoint/outbox `account.erase` et désactiver le compte dans une seule transaction, puis répondre `202`. `ErasureService` reprend Stripe → photos → Scylla → PostgreSQL hors transaction réseau. Ne terminer la DSR qu’avec l’anonymisation locale ; ne jamais autoriser l’abandon d’un `account.erase`.
+- La suppression de compte est protégée par un jeton dédié à usage unique et doit nettoyer Stripe, les photos, les swipes puis les autres données PostgreSQL dans l'ordre documenté.
+- L’effacement est asynchrone : consommer le jeton, créer DSR/checkpoint/outbox `account.erase` et désactiver le compte dans une seule transaction, puis répondre `202`. `ErasureService` reprend Stripe → photos → swipes PostgreSQL bornés → anonymisation PostgreSQL. Ne terminer la DSR qu’avec l’anonymisation locale ; ne jamais autoriser l’abandon d’un `account.erase`.
 - Préserver les guards SQL contre les écritures tardives et les verrous de session `AccountActivityService` des uploads, Checkout et swipes. Normaliser/trier les UUID ; ce pool dédié ajoute quatre connexions maximum et exige un pooling de session. Les lots d’effacement sont bornés et les checkpoints vérifient la propriété du worker. Les intentions Stripe inconnues de plus de 23 heures exigent une réconciliation, jamais un nouveau POST aveugle. Voir `docs/account-erasure.md`.
 - Ne pas modifier les durées de rétention sans mettre à jour la politique, les migrations, la maintenance et les tests correspondants.
 - Ne pas exposer de secret, `.env`, clé fournisseur, token FCM, téléphone ou justification sensible dans les logs ou les réponses.
@@ -121,21 +120,18 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 
 ## Base de données et migrations
 
-- PostgreSQL utilise la baseline `001_baseline_20260905` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 016 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. Il n’existe actuellement aucune migration incrémentale exécutable. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
-- Le schéma Scylla est dans `scylla/001_discovery.cql` et utilise deux vues orientées requêtes, sans index secondaire.
-- Les fichiers 002 à 016 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. La baseline reconstruite en développement est désormais figée ; la prochaine migration persistante doit être `017_<description>`.
+- PostgreSQL utilise la baseline `001_baseline_20260905` : `db/schema_postgres.sql` définit directement l’état final jusqu’à 016 ; `db/insert_postgres.sql` conserve les catalogues et les fixtures optionnelles. La migration incrémentale `017_postgres_discovery` ajoute les swipes PostgreSQL et retire l'ancien checkpoint externe. Le moteur courant n’adopte plus les anciennes chaînes. Voir `docs/postgres-migrations.md`.
+- Les fichiers 002 à 016 sont fusionnés et retirés. Un schéma non vide sans historique courant, une version inconnue ou un checksum divergent est refusé. Ne jamais fabriquer un historique pour contourner ce contrôle. La baseline reconstruite en développement est figée ; toute évolution suit `017_postgres_discovery` dans une nouvelle migration incrémentale.
 - La baseline définit ses contraintes et colonnes auto-incrémentées dans les `CREATE TABLE`, parents avant dépendants ; les index suivent leur table, les fonctions/triggers terminent le fichier. Ne pas y concaténer de nouveaux `ALTER TABLE` : les évolutions déployées vont dans une migration incrémentale.
-- Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`; `db:reset-scylla` doit rester limité au keyspace local `histae_discovery`.
-- Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests Scylla doivent utiliser des UUID temporaires et un nettoyage ciblé.
-- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Scylla local, Redis local (base logique 15) et le bucket S3 local. Les tests de résilience créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
-- Conserver `patches/cassandra-driver@4.9.0.patch`, `pnpm-workspace.yaml` et `pnpm-lock.yaml` ensemble : le correctif ferme le pool d’un hôte remplacé après coupure. Rejouer le test réseau et vérifier l’arrêt naturel du processus lors d’une évolution du pilote ; ne pas masquer une fuite par `forceExit`.
+- Les resets sont destructifs et réservés au développement local. `db:reset` doit rester limité à PostgreSQL local `histae-dev`.
+- Ne jamais lancer `DROP`, `TRUNCATE`, `ALTER TABLE` destructif ou un reset contre une cible non vérifiée. Les tests PostgreSQL créent des schémas isolés et utilisent un nettoyage ciblé.
+- Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Redis local (base logique 15) et le bucket S3 local. Les tests de résilience créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
 
 ## Commandes de travail
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm run db:migrate
-pnpm run scylla:migrate
 pnpm run start:dev
 pnpm run outbox:work
 ```
@@ -152,18 +148,18 @@ pnpm run test:e2e
 pnpm test
 ```
 
-Validation réelle, avec PostgreSQL, ScyllaDB, Redis et S3 locaux préparés :
+Validation réelle, avec PostgreSQL, Redis et S3 locaux préparés :
 
 ```powershell
 pnpm run test:integration
 ```
 
-Des commandes ciblées existent : `test:integration:postgres`, `test:integration:scylla` et `test:integration:redis`. Commencer par les tests les plus proches du changement, puis élargir selon le risque. Ne pas annoncer que la suite est verte sans l'avoir exécutée dans l'état courant du dépôt.
+Des commandes ciblées existent : `test:integration:postgres`, `test:integration:redis` et `test:integration:network`. Commencer par les tests les plus proches du changement, puis élargir selon le risque. Ne pas annoncer que la suite est verte sans l'avoir exécutée dans l'état courant du dépôt.
 
 ## État de référence
 
-La chaîne PostgreSQL courante contient uniquement `001_baseline_20260905`, qui consolide l’état jusqu’à 016 ;
-toute nouvelle évolution persistante commence à `017_<description>`. Les capacités livrées
+La chaîne PostgreSQL courante contient `001_baseline_20260905`, qui consolide l’état jusqu’à 016, puis
+`017_postgres_discovery`. Les capacités livrées
 et la dernière validation connue sont résumées dans `resume.md`. Les
 travaux ouverts, leur ordre et leurs critères de fin vivent uniquement dans `docs/roadmap.md`.
 
@@ -177,7 +173,7 @@ sauvegarde ne sont pas des décisions à inventer dans le code. Les signaler com
 ## Discipline de modification
 
 - Préserver les changements utilisateur déjà présents dans le worktree et ne jamais écraser un fichier modifié sans avoir inspecté son diff.
-- Ajouter ou adapter les tests au niveau approprié : unitaire pour les règles isolées, e2e pour le contrat Fastify, intégration pour le SQL/CQL et la concurrence réels.
+- Ajouter ou adapter les tests au niveau approprié : unitaire pour les règles isolées, e2e pour le contrat Fastify, intégration pour le SQL et la concurrence réels.
 - Toute nouvelle route doit avoir validation DTO, erreurs stables, authentification/autorisation explicite, rate limit adapté, documentation dans `routes.md` et tests de contrat.
 - Les tableaux de `routes.md` portent les chemins complets (`/api` inclus), une seule ligne par méthode/chemin. Le test `routes-documentation.contract.spec.ts` compare cet inventaire au graphe Nest/Fastify réel ; ne pas le remplacer par une liste de contrôleurs maintenue à la main. Il ne vérifie pas les schémas JSON ni les autorisations.
 - Toute mutation pouvant être rejouée par le mobile ou un fournisseur doit définir son comportement d'idempotence.

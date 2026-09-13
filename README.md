@@ -2,7 +2,7 @@
 
 Backend TypeScript de l’application de rencontres Histae, construit avec NestJS 11 et Fastify 5.
 
-Ce guide installe l’environnement de développement complet sur une Debian neuve. L’API, PostgreSQL, ScyllaDB,
+Ce guide installe l’environnement de développement complet sur une Debian neuve. L’API, PostgreSQL,
 Redis, SeaweedFS et la modération photo s’exécutent dans Docker. Aucun Node.js ni PostgreSQL installé sur l’hôte
 n’est nécessaire pour lancer l’application.
 
@@ -14,10 +14,9 @@ Les choix mono-nœud, HTTP local et fournisseurs désactivés restent réservés
 | Service | Rôle | Accès depuis l’hôte |
 | --- | --- | --- |
 | `api` | API HTTP Nest/Fastify | `127.0.0.1:8080` |
-| `migrate` | migrations PostgreSQL puis ScyllaDB | aucune ; se termine avec le code 0 |
+| `migrate` | migrations PostgreSQL | aucune ; se termine avec le code 0 |
 | `outbox-worker` | effets externes et reprises durables | aucun |
-| `postgres` | source de vérité transactionnelle | `127.0.0.1:5432` |
-| `scylla` | décisions de découverte | `127.0.0.1:9042` |
+| `postgres` | source de vérité transactionnelle | `127.0.0.1:${POSTGRES_HOST_PORT}` (`5433` dans `.env.example`) |
 | `redis` | rate limiting distribué et SSE | `127.0.0.1:6379` |
 | `object-storage` | photos privées S3-compatibles | `127.0.0.1:8333` |
 | `photo-moderation` | visage, netteté et contenu interdit | `127.0.0.1:8090` |
@@ -112,10 +111,11 @@ docker compose --env-file .env \
 ```
 
 Le premier démarrage télécharge et construit les images, initialise un nouveau volume PostgreSQL, attend les
-healthchecks, applique les migrations PostgreSQL/ScyllaDB puis démarre l’API et le worker outbox.
+healthchecks, applique les migrations PostgreSQL puis démarre l’API et le worker outbox.
 
-Une installation PostgreSQL déjà présente sur l’hôte peut occuper le port 5432. Dans ce cas, l’arrêter ou modifier
-`POSTGRES_HOST_PORT` dans `.env`. La base native existante n’est jamais importée ou supprimée automatiquement.
+L’exemple publie PostgreSQL Docker sur le port 5433 afin de ne pas entrer en conflit avec une installation native
+sur 5432. `POSTGRES_HOST_PORT` et `POSTGRES_PORT` doivent rester identiques pour les commandes lancées depuis
+l’hôte. La base native existante n’est jamais importée ou supprimée automatiquement.
 
 Vérifier l’état :
 
@@ -136,7 +136,7 @@ Suivre les logs sans exposer les variables d’environnement :
 docker compose --env-file .env -f compose.yaml -f compose.dev.yaml logs -f api outbox-worker
 ```
 
-Les dossiers `src/`, `scripts/`, `db/` et `scylla/` sont montés de façon ciblée ; `start:dev` recharge les sources
+Les dossiers `src/`, `scripts/` et `db/` sont montés de façon ciblée ; `start:dev` recharge les sources
 sans masquer les dépendances de l’image. Après une modification des dépendances, du Dockerfile ou de la
 configuration TypeScript :
 
@@ -163,7 +163,7 @@ Arrêter les conteneurs sans effacer les données :
 docker compose --env-file .env -f compose.yaml -f compose.dev.yaml down
 ```
 
-Ne pas ajouter `--volumes` sauf si la suppression de PostgreSQL, ScyllaDB et SeaweedFS est
+Ne pas ajouter `--volumes` sauf si la suppression de PostgreSQL et SeaweedFS est
 volontaire.
 
 ## Dashboard et WebAuthn

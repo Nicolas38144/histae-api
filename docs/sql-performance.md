@@ -5,9 +5,8 @@ mesures locales datées, pas des objectifs de production ; les travaux de capaci
 
 ## Portée et méthode
 
-L’audit couvre les requêtes PostgreSQL des 18 repositories/stores de `src`, les accès de santé et d’authentification,
-les scripts d’exploitation, les fonctions du schéma et les requêtes de rétention. Les requêtes CQL de découverte
-ScyllaDB ne sont pas des requêtes SQL et restent régies par leurs deux tables orientées requêtes.
+L’audit couvre les requêtes PostgreSQL des repositories/stores de `src`, les accès de santé et d’authentification,
+les scripts d’exploitation, les fonctions du schéma et les requêtes de rétention, y compris les décisions de découverte.
 
 Chaque prédicat a été rapproché des contraintes, index partiels, ordres de tri et limites réelles. Les chemins
 critiques ont ensuite été exécutés avec `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` sur PostgreSQL 18.4 local. Les
@@ -70,6 +69,19 @@ les deux agrégats message seulement pour les 21 résultats demandés.
   de blocages et journaux d’accès suivent leur ordre de restitution.
 - L’estimation de revenu filtre les abonnements par plan et date via un index composite.
 
+### Décisions de découverte
+
+- La clé primaire `(actor_id, target_id)` garantit l’unicité, sert la lecture réciproque et permet l’exclusion
+  groupée du feed avec `ANY(uuid[])`, sans requête par candidat.
+- L’export sortant parcourt `(actor_id, swiped_at, target_id)` par curseur et son index inclut la décision et
+  l’expiration. La purge de rétention suit `(expires_at, actor_id, target_id)`.
+- L’effacement entrant utilise `(target_id, actor_id)`. Ses branches sortante et entrante sont limitées séparément
+  puis réunies en un lot de 1 000, afin d’éviter de parcourir et trier tout l’historique d’un compte.
+
+Sur le petit jeu d’intégration, un scan séquentiel peut rester le choix rationnel. Le test PostgreSQL force seulement
+ce choix hors compétition et vérifie avec `EXPLAIN (FORMAT JSON)` que les cinq chemins ci-dessus sont bien éligibles
+à leurs index dédiés. Il ne constitue pas un benchmark de charge.
+
 ## Requêtes volontairement conservées
 
 Les lectures par clé primaire ou contrainte unique, les écritures `ON CONFLICT`, les vérifications de token, les
@@ -77,8 +89,8 @@ transitions Stripe et photo, ainsi que les agrégats sur les catalogues très pe
 Elles n’ont pas été condensées au prix d’une perte d’atomicité ou d’un index supplémentaire à chaque écriture.
 
 Les exports RGPD restent séquentiels sur un même client PostgreSQL, mais leurs collections sont désormais paginées
-sous un instantané `REPEATABLE READ, READ ONLY` et écrites dans un fichier temporaire borné. La lecture Scylla est
-explicitement séparée de cet instantané. Les tableaux dont la cardinalité métier est strictement faible — trois
+sous un instantané `REPEATABLE READ, READ ONLY` et écrites dans un fichier temporaire borné. Les décisions de swipe
+font partie du même instantané. Les tableaux dont la cardinalité métier est strictement faible — trois
 réponses de profil et le catalogue de traits — conservent leurs requêtes simples. Voir
 [volumes et export](volume-and-export.md).
 

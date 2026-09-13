@@ -23,7 +23,7 @@ describe('OperationalStatusService', () => {
       last_error_code: null,
     }]) };
     const config = {
-      rateLimit: { store: 'memory' }, scylla: { enabled: false },
+      rateLimit: { store: 'memory' },
       sms: { provider: 'disabled' }, billing: { provider: 'disabled' },
     };
     const service = new OperationalStatusService(

@@ -64,6 +64,7 @@ describe('PostgreSQL schema contract', () => {
       'admin_webauthn_bootstrap', 'admin_webauthn_credential',
       'admin_webauthn_challenge', 'admin_session', 'admin_auth_event',
       'outbox_operator_action', 'maintenance_job_status', 'refresh_token_family', 'account_erasure',
+      'swipe_decision',
     ]]);
 
     expect(result.rows.map((row) => row.name)).not.toContain(null);
@@ -872,6 +873,7 @@ describe('PostgreSQL schema contract', () => {
       await expect(repository.runMaintenance({ query: client.query.bind(client) } as never, new Date(), 100)).resolves.toEqual({
         stale_presences: expect.any(Number),
         expired_presences: expect.any(Number),
+        expired_swipes: expect.any(Number),
         expired_otps: expect.any(Number),
         expired_refresh_tokens: expect.any(Number),
         expired_mobile_sessions: expect.any(Number),
@@ -1452,7 +1454,7 @@ describe('PostgreSQL schema contract', () => {
       // This case validates final SQL redaction; the isolated erasure suite tests
       // external stages and their checkpoints. This fixture has no real S3 object.
       await pool.query('DELETE FROM user_photo WHERE id = $1', [photoId]);
-      await pool.query("UPDATE account_erasure SET step = 'postgres', scylla_partition = 64 WHERE request_id = $1", [request!.id]);
+      await pool.query("UPDATE account_erasure SET step = 'postgres' WHERE request_id = $1", [request!.id]);
       const event = (await pool.query(`UPDATE outbox_event SET status = 'processing', locked_at = now(), locked_by = $2
         WHERE event_type = 'account.erase' AND aggregate_id = $1 RETURNING id`, [request!.id, randomUUID()])).rows[0];
       const erasures = new ErasureRepository(databaseFor(pool) as never);

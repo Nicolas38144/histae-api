@@ -42,9 +42,8 @@ Le dashboard cumule ces pages et affiche aussi l’état, le nombre de lots et l
 
 Le téléchargement reste un document JSON unique, mais il n’est plus assemblé intégralement en mémoire :
 
-- les collections PostgreSQL sont lues par pages de `DATA_EXPORT_PAGE_SIZE` ;
-- une transaction `REPEATABLE READ, READ ONLY` fournit un instantané cohérent pour toutes les données PostgreSQL ;
-- les 32 partitions Scylla de décisions sortantes sont lues successivement avec pagination native ;
+- les collections PostgreSQL, décisions de swipe sortantes comprises, sont lues par pages de `DATA_EXPORT_PAGE_SIZE` ;
+- une transaction `REPEATABLE READ, READ ONLY` fournit un instantané cohérent pour toutes ces données ;
 - le document est préparé dans un répertoire aléatoire du stockage temporaire de l’hôte, avec un fichier privé,
   puis transmis comme flux et supprimé dès la fermeture de ce flux ;
 - aucune réponse partielle n’est envoyée si la préparation échoue ;
@@ -53,11 +52,10 @@ Le téléchargement reste un document JSON unique, mais il n’est plus assembl�
 - `DATA_EXPORT_MAX_CONCURRENCY` borne par processus le nombre de fichiers en préparation ou en cours de réponse.
   Lorsque toutes les places sont occupées, `503 data_export_busy` demande au client de réessayer plus tard.
 
-Il n’existe pas d’instantané atomique commun à PostgreSQL et ScyllaDB. Le bloc `consistency` du document expose donc
-la date de l’instantané PostgreSQL et la fenêtre de lecture Scylla. `partitioned_live_read` signifie qu’un swipe
-concurrent peut apparaître dans une partition et pas dans une autre. Cette limite est explicite ; l’export ne
-communique toujours aucune décision entrante d’un tiers. Un arrêt brutal peut laisser un fichier orphelin : la
-politique du répertoire temporaire de l’hôte doit le nettoyer au redémarrage ou périodiquement.
+Le bloc `consistency` expose le même niveau `repeatable_read` et le même `snapshot_at` pour les données générales
+et les décisions de découverte. Un swipe concurrent postérieur à cet instantané n’apparaît pas dans le document ;
+l’export ne communique toujours aucune décision entrante d’un tiers. Un arrêt brutal peut laisser un fichier
+orphelin : la politique du répertoire temporaire de l’hôte doit le nettoyer au redémarrage ou périodiquement.
 
 ## Calibration
 

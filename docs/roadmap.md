@@ -1,6 +1,6 @@
 # Histae API — feuille de route
 
-État au 7 septembre 2026.
+État au 13 septembre 2026.
 
 Ce document contient uniquement les travaux encore ouverts et leurs critères de fin. L’état fonctionnel courant
 est dans [resume.md](../resume.md), les contrats dans [routes.md](../routes.md) et les procédures de validation
@@ -12,21 +12,20 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | --- | --- |
 | R01 | Notifications et tâches push durables, reprises par appareil et éligibilité contrôlée |
 | R02 | Effacement de compte asynchrone, reprenable et visible dans le dashboard |
-| R03 | Tests de concurrence et de coupure locale, plus correctif du pool Scylla |
+| R03 | Tests de concurrence, de coupure locale et de reprise des workers |
 | R04 | Suivi Sweego, callbacks signés et traitement des issues incertaines |
 | R05 (implémentation) | Réconciliation Stripe durable, protection optimiste, watchdog Customer anti-doublon et file opérateur minimale |
 | R06 | Maintenances bornées et reprenables, purge outbox configurable, listes admin par curseur et export paginé sur fichier privé |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
 | R08 (implémentation) | Export Prometheus privé, règles Alertmanager, dashboard Grafana et runbooks opérationnels |
 | Conteneurs | Image API/worker/migrations non-root, pile de développement complète et topologie de production sans stockage mono-nœud |
-| PostgreSQL | Baseline unique `001_baseline_20260905` de 44 tables, consolidée jusqu’aux travaux R06 |
+| PostgreSQL | Baseline `001_baseline_20260905` de 44 tables, puis `017_postgres_discovery` pour la 45e table et les swipes |
 
-Dernière validation : lint, typecheck, builds Nest et conteneur, 600 tests autonomes et 194 intégrations locales,
-soit 794 tests dans 99 suites. L’image de production est construite en utilisateur `node`; les compositions
-développement, production et supervision conteneurisée sont valides. Les règles `promtool` et le smoke test vivant
-des nouvelles compositions attendent leur démarrage volontaire. Le dashboard passe typecheck, lint, build, 37
-tests unitaires et 2 parcours Playwright. Ce résultat ne couvre ni fournisseur réel, ni restauration, ni charge,
-ni pentest indépendant.
+Dernière validation : lint, typecheck, builds Nest et conteneur, 597 tests autonomes et 190 intégrations locales,
+soit 787 tests dans 98 suites. La pile locale PostgreSQL/Redis/S3 et la composition de développement sans service
+de découverte externe ont servi aux intégrations. Le dashboard conserve sa dernière validation connue : typecheck,
+lint, build, 37 tests unitaires et 2 parcours Playwright. Ce résultat ne couvre ni fournisseur réel, ni restauration,
+ni charge, ni pentest indépendant.
 
 ## Priorités
 
@@ -61,7 +60,7 @@ procédure opérateur a été répétée depuis le dashboard.
 ## R08 — Alertes et supervision
 
 - [x] Exporter les agrégats existants vers Prometheus sur un listener privé, sans cardinalité utilisateur.
-- [x] Définir les seuils initiaux pour HTTP, Sweego, Stripe, S3, Scylla, Redis, pool PostgreSQL et event loop.
+- [x] Définir les seuils initiaux pour HTTP, Sweego, Stripe, S3, Redis, pool PostgreSQL et event loop.
 - [x] Alerter sur dead letters, ancienneté outbox, maintenance absente ou bloquée et retard de réconciliation.
 - [x] Écrire les runbooks, l’escalade générique et les tests synthétiques des alertes.
 - [ ] Après lancement local par l’opérateur, injecter une coupure du seul processus API, observer l’alerte puis sa
@@ -90,7 +89,6 @@ Terminé lorsque les limites sont mesurées, les décisions contestables et tout
 - [ ] Fixer les objectifs acceptables de perte de données et de délai de reprise.
 - [ ] Restaurer réellement une sauvegarde PostgreSQL dans un environnement isolé.
 - [ ] Choisir puis tester une cible objet privée, durable, sauvegardée et supervisée.
-- [ ] Définir réparation, réplication, sauvegarde et montée de version de ScyllaDB.
 - [ ] Documenter l’effacement de données réapparues après restauration.
 - [ ] Vérifier TLS, ports, proxies de confiance, rotation des secrets et procédure d’incident.
 

@@ -30,7 +30,7 @@ describe('container deployment assets', () => {
     const development = fixture('compose.dev.yaml');
     const production = fixture('compose.production.yaml');
 
-    for (const port of ['5432', '6379', '9042', '8333', '8090', '8080']) {
+    for (const port of ['5432', '6379', '8333', '8090', '8080']) {
       expect(development).toMatch(new RegExp(`127\\.0\\.0\\.1:[^\\n]*${port}`));
     }
     expect(development).toContain('storage.histae.localhost');
@@ -44,7 +44,6 @@ describe('container deployment assets', () => {
       'docker-compose-redis.yaml',
       'docker-compose.object-storage.yml',
       'docker-compose.photo-moderation.yml',
-      'docker-compose.scylla.yml',
     ]) expect(existsSync(resolve(process.cwd(), legacy))).toBe(false);
   });
 });

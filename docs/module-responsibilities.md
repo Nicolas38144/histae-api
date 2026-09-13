@@ -19,8 +19,8 @@ Ce document fixe les frontières internes à préserver lors d’un refactor. Il
 | Facturation | `StripeWebhookService` | Vérification du webhook, mapping fournisseur, projection et notifications transactionnelles ; SSE après commit. |
 | Facturation | `BillingReconciliationService` / `BillingReconciliationRepository` | Lecture Stripe bornée et sélection métier / planification, projection optimiste et file admin minimale. |
 | RGPD | `erasure-enqueue.ts` | Acceptation durable et désactivation dans la transaction de l’appelant, sans réseau. |
-| RGPD | `ErasureRepository` / `ErasureService` | Checkpoints/finalisation transactionnels / enchaînement Stripe, photos, Scylla, PostgreSQL via l’outbox. |
-| RGPD | `DataExportRepository` / `DataExportService` | Pages PostgreSQL sous instantané / orchestration du fichier privé, lecture Scylla, limite de taille, réponse en flux et nettoyage. |
+| RGPD | `ErasureRepository` / `ErasureService` | Checkpoints/finalisation transactionnels / enchaînement Stripe, photos, swipes PostgreSQL bornés et anonymisation via l’outbox. |
+| RGPD | `DataExportRepository` / `DataExportService` | Pages PostgreSQL sous instantané / orchestration du fichier privé, limite de taille, réponse en flux et nettoyage. |
 | Concurrence | `AccountActivityService` | Verrous de session sur les écrivains externes et l’effacement, dans un pool dédié borné ; aucune transaction longue. |
 | Mobile | `notification-outbox.ts` | Notifications et tâches par appareil dans la transaction métier de l’appelant. |
 | Mobile | `NotificationPushRepository` / `NotificationPushService` | Éligibilité courante et métadonnées minimales avant envoi FCM. |
@@ -60,8 +60,8 @@ leur progression et les reprises, sans piloter directement les étapes internes.
   effectue un lot externe, puis enregistre sa progression avec contrôle du propriétaire outbox. Les écrivains
   locaux sont coordonnés par les triggers de la baseline ; les webhooks ignorent un compte désactivé en
   conservant la sérialisation de la relation Customer. Voir [effacement reprenable](account-erasure.md).
-- L’export garde la transaction PostgreSQL `REPEATABLE READ, READ ONLY` dans `DataExportRepository`; aucune signature
-  photo ni lecture Scylla n’est effectuée sous cette transaction. `DataExportService` ne transmet le fichier qu’après
+- L’export garde la transaction PostgreSQL `REPEATABLE READ, READ ONLY` dans `DataExportRepository`; les swipes
+  sortants y sont paginés, sans signature photo sous cette transaction. `DataExportService` ne transmet le fichier qu’après
   sa préparation complète et publie explicitement les deux niveaux de cohérence. Voir [volumes et export](volume-and-export.md).
 - Les requêtes, index, paramètres, curseurs et ordre des effets existants sont préservés. Un découpage de fichiers
   ne doit pas transformer un verrou local à une transaction en plusieurs appels indépendants.

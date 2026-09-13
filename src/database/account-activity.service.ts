@@ -87,7 +87,7 @@ export class AccountActivityService implements OnModuleDestroy {
 }
 
 function canonicalIds(ids: string[]): string[] {
-  // PostgreSQL/Scylla UUID values are case-insensitive; their advisory-lock keys
+  // PostgreSQL UUID values are case-insensitive; their advisory-lock keys
   // must have exactly the same identity semantics as the protected records.
   return [...new Set(ids.map((id) => id.toLowerCase()))].sort();
 }

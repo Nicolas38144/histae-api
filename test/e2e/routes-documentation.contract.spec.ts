@@ -6,7 +6,6 @@ import { AppModule } from '../../src/app.module';
 import { ConfigService } from '../../src/config/config.service';
 import { DatabaseService } from '../../src/database/database.service';
 import { AccountActivityService } from '../../src/database/account-activity.service';
-import { ScyllaService } from '../../src/scylla/scylla.service';
 import { RedisService } from '../../src/redis/redis.service';
 import { ObjectStorageService } from '../../src/storage/object-storage.service';
 
@@ -21,12 +20,12 @@ describe('Documented HTTP route inventory', () => {
       process.env = {
         ENV: 'test', JWT_SECRET: 'j'.repeat(32), PHONE_ENCRYPTION_KEY: 'e'.repeat(32), PHONE_HASH_KEY: 'h'.repeat(32),
         POSTGRES_HOST: 'localhost', POSTGRES_USER: 'fixture', POSTGRES_PASSWORD: 'fixture', POSTGRES_DB: 'histae-test',
-        RATE_LIMIT_STORE: 'memory', MAINTENANCE_MODE: 'disabled', SCYLLA_ENABLED: 'false',
+        RATE_LIMIT_STORE: 'memory', MAINTENANCE_MODE: 'disabled',
         SMS_PROVIDER: 'disabled', BILLING_PROVIDER: 'disabled', PUSH_PROVIDER: 'disabled', PHOTO_MODERATION_PROVIDER: 'disabled',
       };
       const builder = Test.createTestingModule({ imports: [AppModule] })
         .overrideProvider(ConfigService).useValue(new ConfigService());
-      for (const provider of [DatabaseService, AccountActivityService, ScyllaService, RedisService, ObjectStorageService]) {
+      for (const provider of [DatabaseService, AccountActivityService, RedisService, ObjectStorageService]) {
         builder.overrideProvider(provider).useValue({ enabled: false });
       }
       const module = await builder.compile();

@@ -18,19 +18,18 @@ describe('Real worker termination and activity connection loss', () => {
   const erasures = new ErasureRepository(fixture.database);
   const service = new ErasureService(erasures, activity,
     { deleteCustomerForAccount: async () => true } as never,
-    { deleteForAccount: async () => true } as never,
-    { deleteUserDataBatch: async () => true } as never);
+    { deleteForAccount: async () => true } as never);
 
   beforeAll(() => fixture.start());
   afterEach(() => fixture.reset());
   afterAll(async () => { await activity.onModuleDestroy(); await fixture.stop(); });
 
-  it.each(['stripe', 'photos', 'scylla', 'postgres', 'completed'])('resumes after killing a real process at %s', async step => {
+  it.each(['stripe', 'photos', 'swipes', 'postgres', 'completed'])('resumes after killing a real process at %s', async step => {
     const owner = await fixture.account(), token = randomUUID();
     await users.replaceDeletionToken(owner, token, 'fixture-token', new Date(Date.now() + 60_000));
     const accepted = await users.acceptErasure(owner, token, 'fixture-token', new Date());
-    await fixture.pool.query(`UPDATE account_erasure SET step=$2, scylla_partition=$3 WHERE request_id=$1`,
-      [accepted!.request_id, step === 'completed' ? 'postgres' : step, ['postgres', 'completed'].includes(step) ? 64 : 0]);
+    await fixture.pool.query('UPDATE account_erasure SET step=$2 WHERE request_id=$1',
+      [accepted!.request_id, step === 'completed' ? 'postgres' : step]);
     const child = spawn(process.execPath, ['-r', require.resolve('ts-node/register/transpile-only'), join(__dirname, '../helpers/erasure-crash-child.ts')], {
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
     });
@@ -43,7 +42,7 @@ describe('Real worker termination and activity connection loss', () => {
       expect(saved).toBe(step);
       await fixture.pool.query("UPDATE outbox_event SET locked_at=now()-interval '10 minutes'");
       const workerId = randomUUID();
-      for (let pass = 0; pass < 70; pass++) {
+      for (let pass = 0; pass < 10; pass++) {
         await fixture.pool.query("UPDATE outbox_event SET available_at=now()-interval '1 second' WHERE status='pending'");
         const [event] = await outbox.claimBatch(workerId, new Date(), new Date(Date.now() - 60_000), 1);
         if (!event) break;

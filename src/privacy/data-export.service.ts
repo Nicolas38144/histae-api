@@ -6,7 +6,6 @@ import { join } from 'node:path';
 
 import { apiError } from '../common/api-error';
 import { ConfigService } from '../config/config.service';
-import { DiscoveryStore } from '../discovery/discovery.store';
 import { PhotosService } from '../photos/photos.service';
 import { DataExportRepository } from './data-export.repository';
 import { DataExportTooLargeError, JsonExportWriter } from './json-export.writer';
@@ -21,7 +20,6 @@ export class DataExportService {
   constructor(
     private readonly exports: DataExportRepository,
     private readonly privacy: PrivacyRepository,
-    private readonly discovery: DiscoveryStore,
     private readonly photos: PhotosService,
     private readonly config: ConfigService,
   ) {}
@@ -38,27 +36,19 @@ export class DataExportService {
       const writer = new JsonExportWriter(file, this.config.workloads.dataExportMaxBytes);
       await writer.startObject();
 
+      const discoveryStartedAt = new Date();
       const postgres = await this.exports.writeSnapshot(
         userId,
         writer,
         this.config.workloads.dataExportPageSize,
       );
+      const discoveryCompletedAt = new Date();
       const photo = await this.photos.urlForKey(postgres.photoKey);
       await writer.property('account', postgres.account);
       await writer.property('profile', postgres.profile ? { ...postgres.profile, photo } : null);
       await writer.property('preferences', postgres.preferences);
       await writer.property('subscription', postgres.subscription);
 
-      const discoveryStartedAt = new Date();
-      await writer.startObject('discovery_actions');
-      await writer.startArray('outgoing');
-      const discoveryRows = await this.discovery.forEachOwnAction(
-        userId,
-        (action) => writer.item(action),
-        this.config.workloads.dataExportPageSize,
-      );
-      await writer.endArray();
-      await writer.endObject();
       const completedAt = new Date();
 
       await writer.property('exported_at', completedAt.toISOString());
@@ -68,10 +58,11 @@ export class DataExportService {
           snapshot_at: postgres.snapshotAt.toISOString(),
         },
         discovery: {
-          level: this.discovery.available ? 'partitioned_live_read' : 'not_configured',
+          level: 'repeatable_read',
+          snapshot_at: postgres.snapshotAt.toISOString(),
           started_at: discoveryStartedAt.toISOString(),
-          completed_at: completedAt.toISOString(),
-          rows: discoveryRows,
+          completed_at: discoveryCompletedAt.toISOString(),
+          rows: postgres.discoveryRows,
         },
       });
       await writer.endObject();

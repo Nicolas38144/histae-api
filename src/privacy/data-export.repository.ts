@@ -14,6 +14,7 @@ export type PostgresExportSnapshot = {
   photoKey: string | null;
   preferences: ExportObject | null;
   subscription: ExportObject | null;
+  discoveryRows: number;
 };
 
 @Injectable()
@@ -62,6 +63,7 @@ export class DataExportRepository {
       await this.writeBlocks(client, writer, userId, pageSize);
       await this.writeInvoices(client, writer, userId, pageSize);
       await this.writeMobileSessions(client, writer, userId, pageSize);
+      const discoveryRows = await this.writeDiscoveryActions(client, writer, userId, pageSize);
 
       const { photo_key: photoKey, ...profile } = storedProfile ?? { photo_key: null };
       return {
@@ -71,8 +73,41 @@ export class DataExportRepository {
         photoKey,
         preferences,
         subscription,
+        discoveryRows,
       };
     });
+  }
+
+  private async writeDiscoveryActions(
+    client: PoolClient,
+    writer: JsonExportWriter,
+    userId: string,
+    pageSize: number,
+  ): Promise<number> {
+    let count = 0;
+    await writer.startObject('discovery_actions');
+    await writer.startArray('outgoing');
+    let cursor: TimestampCursor | undefined;
+    while (true) {
+      const rows = (await client.query<ExportObject & { target_id: string; cursor_at: string }>(`
+        SELECT actor_id, target_id, decision, swiped_at,
+          to_char(swiped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
+        FROM swipe_decision
+        WHERE actor_id = $1 AND expires_at > transaction_timestamp()
+          AND ($2::timestamptz IS NULL OR (swiped_at, target_id) > ($2::timestamptz, $3::uuid))
+        ORDER BY swiped_at, target_id LIMIT $4
+      `, [userId, cursor?.at ?? null, cursor?.id ?? null, pageSize])).rows;
+      for (const row of rows) {
+        await writer.item(withoutCursorAt(row));
+        count += 1;
+      }
+      if (rows.length < pageSize) break;
+      const last = rows.at(-1)!;
+      cursor = { at: last.cursor_at, id: last.target_id };
+    }
+    await writer.endArray();
+    await writer.endObject();
+    return count;
   }
 
   private writeTraits(

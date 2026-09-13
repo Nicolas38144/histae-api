@@ -3,7 +3,7 @@ import * as dotenv from 'dotenv';
 import { parsePhoneKey } from '../crypto/phone-crypto';
 import { jwtKeys } from './jwt-keys';
 import {
-  billingProvider, commaSeparated, duration, envOr, httpsUrl, identifier, integer,
+  billingProvider, duration, envOr, httpsUrl, integer,
   internalHttpOrigin, legalUrl, limit, maintenanceMode, numberInRange,
   objectStorageBucket, objectStorageEndpoint, objectStorageRegion, optionalBoolean,
   parseEnvironment, photoModerationProvider, required, smsProvider,
@@ -85,21 +85,6 @@ export type AdminAuthConfig = {
   secureCookie: boolean;
 };
 
-export type ScyllaConfig = {
-  enabled: boolean;
-  contactPoints: string[];
-  port: number;
-  localDataCenter: string;
-  keyspace: string;
-  username: string;
-  password: string;
-  tls: boolean;
-  tlsCaPath: string;
-  replicationFactor: number;
-  connectTimeoutMillis: number;
-  requestTimeoutMillis: number;
-};
-
 export type WorkloadConfig = {
   matchMaintenanceBatchSize: number;
   matchMaintenanceMaxBatches: number;
@@ -148,7 +133,6 @@ export class ConfigService {
     otpTtlMillis: number;
     webhookSecret: string;
   };
-  readonly scylla: ScyllaConfig;
   readonly redis: RedisConfig;
   readonly push: PushConfig;
   readonly billing: BillingConfig;
@@ -319,30 +303,6 @@ export class ConfigService {
         1,
       ),
     };
-    const scyllaUsername = envOr('SCYLLA_USERNAME', '');
-    const scyllaPassword = process.env.SCYLLA_PASSWORD ?? '';
-    if (!!scyllaUsername !== !!scyllaPassword) throw new Error('config: SCYLLA_USERNAME and SCYLLA_PASSWORD must be set together');
-    this.scylla = {
-      enabled: optionalBoolean('SCYLLA_ENABLED', false),
-      contactPoints: commaSeparated(envOr('SCYLLA_CONTACT_POINTS', '127.0.0.1'), 'SCYLLA_CONTACT_POINTS'),
-      port: integer(envOr('SCYLLA_PORT', '9042'), 'SCYLLA_PORT', 1, 65535),
-      localDataCenter: identifier(envOr('SCYLLA_LOCAL_DATACENTER', 'datacenter1'), 'SCYLLA_LOCAL_DATACENTER'),
-      keyspace: identifier(envOr('SCYLLA_KEYSPACE', 'histae_discovery'), 'SCYLLA_KEYSPACE'),
-      username: scyllaUsername,
-      password: scyllaPassword,
-      tls: optionalBoolean('SCYLLA_TLS', false),
-      tlsCaPath: envOr('SCYLLA_TLS_CA_PATH', ''),
-      replicationFactor: integer(envOr('SCYLLA_REPLICATION_FACTOR', this.env === 'production' ? '3' : '1'), 'SCYLLA_REPLICATION_FACTOR', 1, 9),
-      connectTimeoutMillis: duration(envOr('SCYLLA_CONNECT_TIMEOUT', '10s'), 'SCYLLA_CONNECT_TIMEOUT'),
-      requestTimeoutMillis: duration(envOr('SCYLLA_REQUEST_TIMEOUT', '5s'), 'SCYLLA_REQUEST_TIMEOUT'),
-    };
-    if (this.env === 'production' && !this.scylla.enabled) throw new Error('config: production requires SCYLLA_ENABLED=true');
-    if (this.env === 'production' && (!this.scylla.tls || !this.scylla.username)) {
-      throw new Error('config: production ScyllaDB requires TLS and username/password authentication');
-    }
-    if (this.env === 'production' && this.scylla.replicationFactor < 3) {
-      throw new Error('config: production ScyllaDB requires SCYLLA_REPLICATION_FACTOR >= 3');
-    }
     const accessTtlMs = duration(envOr('JWT_ACCESS_TTL', '15m'), 'JWT_ACCESS_TTL');
     const refreshTtlMs = duration(envOr('JWT_REFRESH_TTL', '4320h'), 'JWT_REFRESH_TTL');
     if (accessTtlMs < 60_000 || accessTtlMs > 60 * 60_000) {

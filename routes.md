@@ -154,7 +154,7 @@ Configuration et limites fournisseur : [suivi OTP Sweego](docs/sweego-delivery.m
 | GET | `/health/live` | `200 { status: "ok" }` si le processus répond. |
 | GET | `/health/ready` | `200 { status: "ready" }` si les dépendances requises répondent ; sinon `503`. |
 
-La readiness vérifie PostgreSQL, le bucket objet, Scylla lorsqu’activé et Redis lorsqu’il est requis. Ces routes n’exigent pas d’authentification.
+La readiness vérifie PostgreSQL, le bucket objet et Redis lorsqu’il est requis. Ces routes n’exigent pas d’authentification.
 
 <a id="client-mobile"></a>
 ## Client mobile
@@ -332,7 +332,7 @@ Onboarding incomplet accepté pour les jetons/effacement, demandes RGPD et expor
 
 Le `202` désactive immédiatement le compte ; fermer la session mobile. **Ne pas afficher que toutes les données ont déjà été supprimées.** Le nettoyage continue en arrière-plan malgré une panne externe. Jeton invalide/expiré : `401 invalid_or_expired_deletion_token`. Si la réponse est perdue après acceptation, le Bearer devient invalide : un retry n’est pas une route publique de suivi et ne rend pas forcément le même `202`. Voir [effacement et limites de reprise](docs/account-erasure.md).
 
-**Droits.** Types de demande : `access | erasure | portability | rectification | restriction | objection` ; une seule demande ouverte par type/utilisateur. L’export contient profil/réponses, abonnement/factures liés, métadonnées des sessions sans secrets et uniquement les décisions de swipe sortantes. Il n’expose jamais les décisions entrantes d’autrui. Le JSON est préparé par pages dans un fichier temporaire privé, transmis comme flux puis supprimé. Ses données PostgreSQL partagent un instantané `REPEATABLE READ` ; le bloc `consistency` documente séparément la fenêtre de lecture des partitions Scylla, sans prétendre à un instantané inter-stockages. Limite 5/h/utilisateur : `429 data_export_rate_limit_exceeded` ; export au-delà de la borne configurée : `413 data_export_too_large` ; toutes les places de préparation occupées : `503 data_export_busy` avec `Retry-After` ; source indisponible avant envoi : `503 data_export_unavailable`. L’accès réussi est journalisé.
+**Droits.** Types de demande : `access | erasure | portability | rectification | restriction | objection` ; une seule demande ouverte par type/utilisateur. L’export contient profil/réponses, abonnement/factures liés, métadonnées des sessions sans secrets et uniquement les décisions de swipe sortantes. Il n’expose jamais les décisions entrantes d’autrui. Le JSON est préparé par pages dans un fichier temporaire privé, transmis comme flux puis supprimé. Toutes ses données PostgreSQL, swipes compris, partagent un instantané `REPEATABLE READ`. Limite 5/h/utilisateur : `429 data_export_rate_limit_exceeded` ; export au-delà de la borne configurée : `413 data_export_too_large` ; toutes les places de préparation occupées : `503 data_export_busy` avec `Retry-After` ; source indisponible avant envoi : `503 data_export_unavailable`. L’accès réussi est journalisé.
 
 **Signalements.** `reason = inappropriate_content | fake_profile | harassment | spam | other` ; description au plus 2 000 octets ; `match_id` et description peuvent être nuls. Auto-signalement interdit, cible existante et match éventuel reliant les deux comptes. Limite 5/h/utilisateur.
 
@@ -398,7 +398,7 @@ Un bannissement invalide les sessions mobiles. Un admin n’agit que sur un rôl
 
 Pour une demande RGPD, la mutation accepte `in_progress | completed | rejected`. Sur un effacement en cours, demander `completed` **programme** le workflow et répond `200 { "message": "account erasure scheduled" }` ; la demande reste `in_progress` jusqu’à réussite réelle. Le rejeu ne duplique pas le travail. Rejet d’un effacement commencé : `409 invalid_data_request_transition`. Autres transitions : `200 { "message": "data subject request updated" }`.
 
-`erasure` peut être nul ; sinon il expose `step, scylla_partition` (0–64), `updated_at, event_id, status, attempts, last_error_code`. Après purge d’un événement résolu, `event_id/status` peuvent être nuls. Aucun payload, identifiant Stripe, clé objet ou URL.
+`erasure` peut être nul ; sinon il expose `step, updated_at, event_id, status, attempts, last_error_code`. Les étapes sont `stripe | photos | swipes | postgres | completed`. Après purge d’un événement résolu, `event_id/status` peuvent être nuls. Aucun payload, identifiant Stripe, clé objet ou URL.
 
 ### Catalogue et modération
 

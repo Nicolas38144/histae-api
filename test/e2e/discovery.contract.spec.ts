@@ -102,7 +102,7 @@ describe('Discovery HTTP contract', () => {
     expect(discovery.feed).toHaveBeenCalledWith(USER_ID, 12, 'opaque-cursor');
   });
 
-  it('returns the stable 503 envelope when ScyllaDB is unavailable', async () => {
+  it('returns the stable 503 envelope when discovery persistence is unavailable', async () => {
     discovery.swipe.mockRejectedValueOnce(apiError(503, 'discovery_unavailable', 'Discovery is temporarily unavailable.'));
 
     const response = await app.getHttpAdapter().getInstance().inject({

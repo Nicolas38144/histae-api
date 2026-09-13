@@ -57,7 +57,7 @@ function snapshot() {
     runtime: { uptime_seconds: 600, memory_rss_bytes: 1_000, heap_used_bytes: 500, event_loop_delay_p95_ms: 2 },
     http: { requests: 2, errors: 2, status_401: 1, status_403: 0, status_429: 0, status_5xx: 1, routes: [] },
     dependencies: {
-      postgres: dependency('ok'), redis: dependency('ok'), scylla: dependency('disabled', false),
+      postgres: dependency('ok'), redis: dependency('ok'),
       object_storage: dependency('unknown'), sweego: dependency('disabled', false), stripe: dependency('disabled', false),
     },
     postgres_pool: { total: 4, idle: 2, waiting: 0 },

@@ -4,7 +4,6 @@ import { DatabaseService } from './database/database.service';
 import { AccountActivityService } from './database/account-activity.service';
 import { RateLimitService } from './ratelimit/rate-limit.service';
 import { HealthController } from './health.controller';
-import { ScyllaService } from './scylla/scylla.service';
 import { RedisService } from './redis/redis.service';
 import { ObjectStorageService } from './storage/object-storage.service';
 import { PhotoProcessorService } from './photos/photo-processor.service';
@@ -32,7 +31,6 @@ import { MetricsServerService } from './operations/metrics-server.service';
     { provide: ConfigService, useFactory: applicationConfig },
     DatabaseService,
     AccountActivityService,
-    ScyllaService,
     RedisService,
     RateLimitService,
     ObjectStorageService,
@@ -55,7 +53,7 @@ import { MetricsServerService } from './operations/metrics-server.service';
     MetricsServerService,
   ],
   exports: [
-    ConfigService, DatabaseService, AccountActivityService, ScyllaService, RedisService, RateLimitService,
+    ConfigService, DatabaseService, AccountActivityService, RedisService, RateLimitService,
     ObjectStorageService, PhotoProcessorService, PhotosRepository, PhotosService,
     PhotosMaintenanceService,
     OutboxRepository, OutboxWorkerService,
