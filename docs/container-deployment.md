@@ -1,8 +1,9 @@
 # Conteneurisation et déploiement
 
 Ce guide décrit l’image Histae API et les compositions Docker. Il sépare volontairement le développement local
-d’un futur déploiement : le premier fournit PostgreSQL, Redis, SeaweedFS et la modération sur une machine ;
-le second ne prétend pas transformer ces services mono-nœud en infrastructure de production.
+d’un déploiement sur un serveur de 16 Gio : le premier fournit PostgreSQL, Redis, SeaweedFS et la modération ;
+le second héberge aussi PostgreSQL TLS, Redis TLS, SeaweedFS server, sa passerelle HTTPS et la modération. Cette topologie de production
+mono-nœud accepte un point de panne unique ; elle exige des sauvegardes hors machine et une restauration testée.
 
 ## Fichiers et responsabilités
 
@@ -12,7 +13,9 @@ le second ne prétend pas transformer ces services mono-nœud en infrastructure 
 | `.dockerignore` | exclusion des secrets, sorties et fichiers inutiles du contexte de build |
 | `compose.yaml` | API, migration PostgreSQL, worker outbox et tâche de maintenance |
 | `compose.dev.yaml` | stockages locaux, code monté, ports loopback et endpoints Docker |
-| `compose.production.yaml` | environnement strict, réseaux externes et absence de port hôte |
+| `compose.production.yaml` | PostgreSQL TLS à 7 Gio, environnement strict, réseaux externes et aucun port hôte |
+| `docker/postgres/` | configuration mémoire et règles TLS/SCRAM du serveur PostgreSQL de production |
+| `docker/redis/`, `docker/seaweedfs/`, `docker/storage-gateway/` | Redis TLS, métadonnées S3 persistantes et proxy HTTPS S3 |
 | `compose.observability-container.yaml` | raccordement de Prometheus au listener interne `api:9091` |
 
 L’image finale contient les dépendances de production, le JavaScript compilé et les schémas SQL nécessaires aux
@@ -20,6 +23,15 @@ migrations. Elle ne contient ni `.env`, ni `.secrets`, ni sources TypeScript, ni
 commandes d’exploitation utilisent tous cette même image.
 
 ## Développement complet
+
+Sur le PC Windows, exécuter Docker et les tests d'infrastructure via WSL, depuis ce dépôt. Par exemple :
+
+```powershell
+wsl docker compose --env-file .env -f compose.yaml -f compose.dev.yaml up -d --build --wait
+```
+
+Les commandes Bash ci-dessous s'exécutent directement dans WSL ou sur Debian. Le PC de développement reste
+distinct du serveur de production : PostgreSQL y conserve son plafond de 1 Gio.
 
 ### Préparer les valeurs locales
 
@@ -159,10 +171,17 @@ immuable ou, de préférence, la référencer par digest. Ne pas utiliser `lates
 
 ## Déploiement mono-machine
 
+Le projet Docker de production s'appelle `histae-api-production`, celui de développement `histae-api`.
+Ne jamais combiner les deux overrides. Le volume `histae-postgres-production-data` est distinct du volume local.
+
 La composition de production ne publie aucun port. Elle suppose deux réseaux Docker déjà contrôlés :
 
 - `histae-backend`, partagé uniquement avec les stockages TLS et la supervision ;
-- `histae-edge`, partagé uniquement avec l’API et le reverse proxy ou tunnel Cloudflare.
+- `histae-edge`, partagé uniquement avec l’API, la passerelle S3 HTTPS et le reverse proxy ou tunnel Cloudflare.
+
+Le réseau `storage`, interne au projet, relie uniquement SeaweedFS à sa passerelle HTTPS. Les ports master,
+volume et filer ne sont accessibles ni à l'API ni au tunnel. Tout s'exécute sur le même serveur ; les réseaux
+Docker assurent la séparation des interfaces.
 
 Les créer une fois si l’orchestrateur du tunnel ne les a pas déjà créés :
 
@@ -175,6 +194,105 @@ Créer `.env.production` avec `ENV=production`, `HISTAE_ENV_FILE=.env.production
 `HISTAE_API_IMAGE` et toutes les valeurs exigées par `ConfigService`. Les contrôles de production refusent notamment
 PostgreSQL sans TLS, Redis sans TLS/mot de passe, un endpoint S3
 HTTP, Sweego ou Stripe incomplets et un proxy globalement approuvé.
+
+### PostgreSQL local et certificats
+
+Compose impose aux quatre processus applicatifs `POSTGRES_HOST=postgres`, `POSTGRES_PORT=5432`,
+`POSTGRES_SSLMODE=verify-full` et `NODE_EXTRA_CA_CERTS=/run/secrets/postgres_ca`.
+Le client `pg` reçoit `ssl: true` et valide la chaîne de confiance et le nom serveur avec Node TLS.
+Le serveur refuse les connexions TCP non chiffrées et exige SCRAM sur les connexions TLS.
+
+Avant le premier démarrage, préparer dans `.secrets/postgres/` :
+
+- `server.crt` : certificat serveur PEM avec SAN `DNS:postgres`, suivi des intermédiaires éventuels ;
+- `server.key` : clé privée correspondante, sans passphrase pour le démarrage non interactif ;
+- `ca.crt` : certificat public PEM de l'autorité de confiance, fourni aux clients Node.
+
+Utiliser une autorité privée administrée et conserver sa clé privée hors du serveur et du dépôt. Aucun certificat
+de production n'est généré automatiquement. Sur Debian, `server.key` doit appartenir à l'UID PostgreSQL de
+l'image et être en mode `0600` (ou root, groupe PostgreSQL, mode `0640`). Vérifier les UID/GID avec
+`docker run --rm --entrypoint id postgres:18.6-bookworm postgres` ; les répertoires parents doivent être traversables
+par cet utilisateur. `ca.crt` doit aussi être lisible par l'UID 1000 des conteneurs applicatifs.
+Les montages refusent de créer silencieusement un dossier manquant.
+
+`POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` proviennent du même `.env.production` pour PostgreSQL et
+l'application. Sur un volume existant, changer ces variables ne change ni les rôles ni leurs mots de passe :
+effectuer une rotation SQL coordonnée. L'utilisateur créé par l'image est administrateur PostgreSQL ; la séparation
+future du rôle de migration et du rôle applicatif demande des droits dédiés.
+
+Après renouvellement du certificat, recharger PostgreSQL avec `SELECT pg_reload_conf()` via une session
+administrative et vérifier la nouvelle connexion TLS. Si la CA change, recréer aussi API, migrations et workers :
+Node charge `NODE_EXTRA_CA_CERTS` au démarrage. Voir les règles de
+[TLS PostgreSQL](https://www.postgresql.org/docs/18/ssl-tcp.html).
+
+### Budget mémoire du serveur de 16 Gio
+
+| Service | Plafond mémoire |
+| --- | --- |
+| PostgreSQL | 7 Gio, sans swap |
+| API | 1 Gio |
+| Outbox | 768 Mio |
+| Redis | 256 Mio (données bornées à 128 Mio) |
+| SeaweedFS server | 1 Gio |
+| Passerelle HTTPS S3 | 128 Mio |
+| Modération photo | 384 Mio |
+| Maintenance ponctuelle | 1 Gio |
+| Migration ponctuelle | 1 Gio |
+| Initialisation S3 ponctuelle | 256 Mio |
+| Prometheus + Alertmanager + Grafana, si installés | 1,5 Gio au total |
+
+La pile permanente avec supervision représente 12 Gio de plafonds cumulés. En comptant même les trois jobs
+simultanément, elle atteint 14,25 Gio. Il reste alors 1,75 Gio sur 16 Gio pour Linux, Docker, le tunnel/proxy et
+les autres processus ; en régime permanent, la marge est de 4 Gio. Éviter builds et gros traitements de sauvegarde
+pendant les pics. Les sauvegardes doivent disposer d'une destination hors serveur malgré cette colocalisation.
+Les plafonds ne réservent pas toute cette mémoire. Docker utilise ici des unités binaires (`7g` = 7 Gio) ;
+vérifier la RAM réellement disponible sur le serveur et dans la VM Docker Desktop/WSL en local.
+
+Le plafond PostgreSQL couvre buffers, connexions, mémoire partagée et cache de fichiers imputé au conteneur.
+`memswap_limit: 7g`, égal à `mem_limit`, interdit de dépasser le budget via le swap.
+Les réglages initiaux de `docker/postgres/postgresql.conf` sont `shared_buffers=1792MB`, `work_mem=4MB`,
+`maintenance_work_mem=128MB`, `autovacuum_work_mem=64MB` et `max_connections=100`.
+`effective_cache_size=4GB` est une estimation pour le planificateur, pas une allocation.
+`work_mem` se multiplie par les opérations et workers actifs ; ces valeurs ne garantissent pas l'absence d'OOM.
+Chaque processus applicatif peut ouvrir `POSTGRES_POOL_MAX + 4` connexions : recalculer avant toute réplication.
+Sur le PC de développement, PostgreSQL reste limité à 1 Gio et conserve les réglages SQL de l'image.
+Le budget de 7 Gio et le fichier SQL de configuration concernent uniquement le serveur de production.
+Références : [limites Compose](https://docs.docker.com/reference/compose-file/services/#memswap_limit) et
+[mémoire PostgreSQL](https://www.postgresql.org/docs/18/runtime-config-resource.html).
+
+### Valider et démarrer
+
+Préparer également les services colocalisés :
+
+- Redis : `.secrets/redis/server.crt` et `server.key`, SAN `DNS:redis`, signés par la même CA que PostgreSQL.
+  La clé doit être lisible par l'UID Redis de l'image et inaccessible aux autres utilisateurs. Renseigner
+  `REDIS_PASSWORD` ; le port non TLS est désactivé. Redis ne persiste que des compteurs éphémères.
+- S3 : `.secrets/seaweedfs/s3.json` contient une identité avec les mêmes clés que `OBJECT_STORAGE_ACCESS_KEY`
+  et `OBJECT_STORAGE_SECRET_KEY`. Le schéma minimal est ci-dessous ; ne jamais placer de vraies clés dans Git.
+- Passerelle S3 : `.secrets/storage-gateway/server.crt` (chaîne publique complète) et `server.key`, pour le
+  domaine public `HISTAE_STORAGE_HOST` sans schéma ni port. La clé doit être lisible par l'UID 101 du proxy,
+  par exemple root:groupe 101 et `0640`. Utiliser un certificat reconnu par les navigateurs.
+- Modération : renseigner `PHOTO_MODERATION_TOKEN`, puis construire l'image avec
+  `docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml build photo-moderation`.
+  Pour une livraison reproductible, définir `HISTAE_PHOTO_MODERATION_IMAGE` avec une étiquette immuable.
+
+```json
+{"identities":[{"name":"histae","credentials":[{"accessKey":"REPLACE_ACCESS_KEY","secretKey":"REPLACE_SECRET_KEY"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+```
+
+Cette identité admin S3 permet l'initialisation du bucket. Elle est réservée aux processus serveur et ne doit
+jamais être fournie au client mobile. `storage-init` vérifie/crée le bucket via S3 sans ajouter de politique
+publique, puis se termine avec le code 0 ; l'API attend sa réussite. `OBJECT_STORAGE_BUCKET` et les clés doivent
+correspondre au fichier d'identité. Un échec d'authentification bloque le démarrage, sans création alternative.
+SeaweedFS utilise `server` et persiste objets et métadonnées filer dans `histae-object-storage-production-data`.
+Cela fournit une persistance mono-machine, pas de haute disponibilité ni de sauvegarde automatique.
+
+Compose donne `HISTAE_STORAGE_HOST` comme alias privé à la passerelle et impose
+`OBJECT_STORAGE_ENDPOINT=https://<HISTAE_STORAGE_HOST>` aux clients serveur. Le même nom doit être publié via
+le tunnel/reverse proxy pour les navigateurs et mobiles, en conservant exactement le Host et le chemin des
+requêtes signées. Router ce domaine vers `https://storage-gateway:443`, avec le nom TLS d'origine réglé sur
+`HISTAE_STORAGE_HOST` et vérification du certificat activée. L'API reste routée vers `http://api:8080`.
+Ne publier aucune interface SeaweedFS brute. Les SMS, le push et Stripe restent des fournisseurs externes.
 
 Valider sans afficher la configuration résolue :
 
@@ -194,7 +312,7 @@ docker compose --env-file .env.production \
   up -d --wait
 ```
 
-Le tunnel doit cibler `http://api:8080` depuis `histae-edge`. PostgreSQL, Redis, SeaweedFS et le listener
+Le tunnel doit cibler `http://api:8080` depuis `histae-edge` et la passerelle HTTPS pour le domaine S3. PostgreSQL, Redis, SeaweedFS et le listener
 9091 ne doivent pas rejoindre ce réseau. Un tunnel ne remplace ni WebAuthn, ni les guards, ni la configuration
 précise de `TRUST_PROXY`.
 
@@ -216,7 +334,8 @@ les métriques de retard avant d’activer le timer.
 
 ## PostgreSQL : persistance, sauvegarde et mise à niveau
 
-Le volume `histae-postgres-data` protège seulement contre la recréation d’un conteneur. Il ne protège pas contre
+Les volumes `histae-postgres-data` (développement) et `histae-postgres-production-data` (production) protègent
+seulement contre la recréation d’un conteneur. Ils ne protègent pas contre
 une panne de disque, une suppression de volume, une corruption, un chiffrement malveillant ou la perte de la
 machine.
 

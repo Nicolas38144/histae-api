@@ -1,2 +1,3 @@
-# Keep the versioned pnpm patch byte-stable across Windows and Linux checkouts.
-patches/*.patch text eol=lf
+# Scripts Linux et configuration PostgreSQL identiques depuis Windows/WSL et Debian.
+*.sh text eol=lf
+docker/postgres/*.conf text eol=lf

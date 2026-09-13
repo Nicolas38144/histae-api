@@ -1,3 +1,4 @@
+# Prometheus seul rejoint le backend de l'API, sans publier son listener 9091.
 services:
   prometheus:
     volumes:

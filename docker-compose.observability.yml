@@ -1,6 +1,9 @@
+# Supervision privée, projet indépendant ; 1,5 Gio de plafonds mémoire cumulés.
+# Ajouter compose.observability-container.yaml quand l'API tourne dans Docker.
 name: histae-observability
 
 services:
+  # Séries temporelles persistantes ; limiter aussi la rétention sur disque.
   prometheus:
     image: prom/prometheus:v3.14.0
     restart: unless-stopped
@@ -39,6 +42,7 @@ services:
       alertmanager:
         condition: service_healthy
 
+  # Groupe les alertes ; le canal de notification est configuré par l'exploitation.
   alertmanager:
     image: prom/alertmanager:v0.32.1
     restart: unless-stopped
@@ -65,6 +69,7 @@ services:
       retries: 10
       start_period: 10s
 
+  # Dashboard privé, authentification obligatoire et mot de passe monté comme secret.
   grafana:
     image: grafana/grafana:13.2.1
     restart: unless-stopped

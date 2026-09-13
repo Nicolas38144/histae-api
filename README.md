@@ -6,7 +6,7 @@ Ce guide installe l’environnement de développement complet sur une Debian neu
 Redis, SeaweedFS et la modération photo s’exécutent dans Docker. Aucun Node.js ni PostgreSQL installé sur l’hôte
 n’est nécessaire pour lancer l’application.
 
-Les choix mono-nœud, HTTP local et fournisseurs désactivés restent réservés au développement. Voir
+HTTP local, SeaweedFS mini et fournisseurs désactivés restent réservés au développement. Voir
 [le guide de conteneurisation](docs/container-deployment.md) avant toute utilisation sur un serveur.
 
 ## Architecture locale
@@ -245,8 +245,10 @@ Construire l’image finale :
 docker build --pull --target production -t histae-api:local .
 ```
 
-`compose.production.yaml` ne contient volontairement ni PostgreSQL mono-nœud ni port publié. Il attend des réseaux
-externes, des stockages durables/TLS et toute la configuration stricte de production. Le tunnel ou reverse proxy ne
+`compose.production.yaml` inclut PostgreSQL sur le serveur de 16 Gio, limité à 7 Gio sans swap ni port publié.
+Redis TLS, SeaweedFS server, sa passerelle HTTPS et la modération sont également hébergés sur ce serveur.
+Il exige les certificats et secrets décrits dans le guide de déploiement, les réseaux du proxy et la
+configuration stricte de production. Le tunnel ou reverse proxy ne
 rejoint que `histae-edge` et cible `http://api:8080`; les données restent sur `histae-backend`.
 
 Cette composition facilite un déploiement reproductible sur une machine, mais n’apporte aucune haute disponibilité.

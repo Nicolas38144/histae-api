@@ -54,6 +54,26 @@ et purge) du routage des effets idempotents par le dispatcher (photo, push, effa
 Les assets de supervision sont contrôlés statiquement sans démarrer Docker ; la syntaxe et le comportement des
 règles sont ensuite vérifiés avec le `promtool` de l’image Prometheus épinglée.
 
+Les budgets mémoire, l'isolation des volumes et le raccordement TLS de production sont couverts par
+`container-assets.spec.ts`. Après construction de l'image `histae-api:development`, le smoke test suivant vérifie
+la configuration PostgreSQL de production sur Docker local (Bash sous Linux ou WSL) :
+
+```powershell
+wsl bash test/helpers/postgres-container-smoke.sh
+```
+
+Sous Linux, omettre `wsl`. Le test crée une CA éphémère, un réseau et un conteneur uniques, sans port publié,
+avec des données en tmpfs ; il vérifie TLS via `psql` et le client Node `pg`, puis le refus du TCP non chiffré,
+d'un mauvais mot de passe et d'un nom serveur incorrect. Ses ressources sont nettoyées à la sortie.
+Son plafond de 512 Mio et ses buffers réduits à 128 Mio permettent une exécution sur le PC de développement :
+il ne valide ni le budget de charge de 7 Gio ni les certificats du serveur de production.
+
+Après `pnpm run build:container`, `wsl bash test/helpers/production-services-smoke.sh` vérifie Redis TLS avec
+authentification, la création idempotente du bucket S3, le refus d'un accès anonyme et une URL HTTPS signée via
+la passerelle Nginx. Il utilise les images de production et l'image cliente `histae-api:development`, un réseau
+et un volume étiquetés uniques, une identité S3 factice et des certificats temporaires. Les données et conteneurs
+de test sont supprimés à la sortie. Le serveur SeaweedFS est limité à 512 Mio pour ce test fonctionnel local.
+
 ## Validation avec les stockages locaux
 
 Préparer les services décrits dans le [README](README.md), puis vérifier la cible de `.env` avant les migrations.

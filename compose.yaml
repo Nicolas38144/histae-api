@@ -1,12 +1,16 @@
+# Socle applicatif commun. Ajouter compose.dev.yaml OU compose.production.yaml.
 name: histae-api
 
+# Même image pour HTTP, migrations et workers ; secrets injectés à l'exécution.
 x-runtime-service: &runtime-service
   image: ${HISTAE_API_IMAGE:-histae-api:local}
   env_file:
     - ${HISTAE_ENV_FILE:-.env}
+  # Récolte les processus enfants et transmet les signaux d'arrêt.
   init: true
   user: "1000:1000"
   read_only: true
+  # Seul espace temporaire inscriptible en production ; compte dans mem_limit.
   tmpfs:
     - /tmp:size=128m,noexec,nosuid,nodev,mode=1777
   cap_drop:
@@ -16,6 +20,7 @@ x-runtime-service: &runtime-service
   stop_grace_period: 30s
   networks:
     - backend
+  # Rotation en taille ; la rétention en jours relève de l'exploitation.
   logging:
     driver: json-file
     options:
@@ -23,6 +28,7 @@ x-runtime-service: &runtime-service
       max-file: "5"
 
 services:
+  # Job ponctuel : une erreur de migration bloque le démarrage applicatif.
   migrate:
     <<: *runtime-service
     command:
@@ -37,6 +43,7 @@ services:
     mem_limit: 1g
     cpus: 2.0
 
+  # HTTP uniquement ; maintenance et outbox s'exécutent dans leurs workers.
   api:
     <<: *runtime-service
     command: [pnpm, run, container:start]
@@ -51,9 +58,11 @@ services:
     pids_limit: 256
     mem_limit: 1g
     cpus: 2.0
+    # Visibles sur les réseaux Docker ; aucune publication hôte dans ce socle.
     expose:
       - "8080"
       - "9091"
+    # Liveness du processus. /health/ready contrôle séparément les dépendances.
     healthcheck:
       test:
         - CMD
@@ -65,6 +74,7 @@ services:
       retries: 10
       start_period: 20s
 
+  # Boucle persistante de revendication/reprise des événements transactionnels.
   outbox-worker:
     <<: *runtime-service
     command: [pnpm, run, container:outbox:work]
@@ -79,6 +89,7 @@ services:
     mem_limit: 768m
     cpus: 1.5
 
+  # Passe ponctuelle, uniquement avec --profile jobs ; à planifier en production.
   maintenance:
     <<: *runtime-service
     profiles: [jobs]

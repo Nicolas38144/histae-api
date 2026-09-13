@@ -1,6 +1,6 @@
 # Histae API — feuille de route
 
-État au 13 septembre 2026.
+État au 14 septembre 2026.
 
 Ce document contient uniquement les travaux encore ouverts et leurs critères de fin. L’état fonctionnel courant
 est dans [resume.md](../resume.md), les contrats dans [routes.md](../routes.md) et les procédures de validation
@@ -18,7 +18,7 @@ dans [test.md](../test.md). Une case ouverte exprime un besoin identifié, pas n
 | R06 | Maintenances bornées et reprenables, purge outbox configurable, listes admin par curseur et export paginé sur fichier privé |
 | R07 | Logs normalisés, exceptions et chemins minimisés, politique de rétention et tests anti-régression |
 | R08 (implémentation) | Export Prometheus privé, règles Alertmanager, dashboard Grafana et runbooks opérationnels |
-| Conteneurs | Image API/worker/migrations non-root, pile de développement complète et topologie de production sans stockage mono-nœud |
+| Conteneurs | Image API/worker/migrations non-root, pile locale complète et production sans port publié avec PostgreSQL TLS mono-nœud plafonné à 7 Gio sur un serveur de 16 Gio |
 | PostgreSQL | Baseline `001_baseline_20260905` de 44 tables, puis `017_postgres_discovery` pour la 45e table et les swipes |
 
 Dernière validation : lint, typecheck, builds Nest et conteneur, 597 tests autonomes et 190 intégrations locales,
@@ -26,6 +26,12 @@ soit 787 tests dans 98 suites. La pile locale PostgreSQL/Redis/S3 et la composit
 de découverte externe ont servi aux intégrations. Le dashboard conserve sa dernière validation connue : typecheck,
 lint, build, 37 tests unitaires et 2 parcours Playwright. Ce résultat ne couvre ni fournisseur réel, ni restauration,
 ni charge, ni pentest indépendant.
+
+Validation ciblée du 14 septembre pour la pile mono-machine : lint, typecheck, compilation conteneur,
+15 tests dans 3 suites ciblées et compositions Docker valides. Les smoke tests isolés sous WSL valident TLS
+PostgreSQL avec psql/Node, Redis TLS et authentification, initialisation S3 idempotente, refus anonyme et URL
+HTTPS signée via Nginx. Les ressources temporaires ont été supprimées. Aucun déploiement sur le serveur réel,
+test de charge ou validation de ses certificats n'a été effectué.
 
 ## Priorités
 
@@ -85,7 +91,7 @@ Terminé lorsque les limites sont mesurées, les décisions contestables et tout
 
 - [x] Construire une image reproductible commune à l’API, aux migrations, à l’outbox et à la maintenance.
 - [x] Fournir une pile Debian de développement avec PostgreSQL persistant et tous les services liés au loopback.
-- [x] Séparer une topologie de production sans stockage mono-nœud ni port hôte publié.
+- [x] Préparer la pile de production mono-machine sans port hôte publié : PostgreSQL TLS à 7 Gio, Redis TLS, SeaweedFS server, passerelle S3 HTTPS et modération ; certificats à fournir par l'exploitation.
 - [ ] Fixer les objectifs acceptables de perte de données et de délai de reprise.
 - [ ] Restaurer réellement une sauvegarde PostgreSQL dans un environnement isolé.
 - [ ] Choisir puis tester une cible objet privée, durable, sauvegardée et supervisée.

@@ -1,13 +1,23 @@
+# Pile locale mono-machine. Ne pas superposer ce fichier à compose.production.yaml.
+# Les plafonds mémoire sont des maximums, pas de la RAM réservée au démarrage.
+x-infrastructure-logging: &infrastructure-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
 x-development-service: &development-service
   image: histae-api:development
   build:
     context: .
     target: development
+  # Nest doit pouvoir écrire sa compilation incrémentale en développement.
   read_only: false
   volumes:
     - ./src:/app/src
     - ./scripts:/app/scripts
     - ./db:/app/db:ro
+  # Les adresses Docker remplacent les valeurs loopback du .env de l'hôte.
   environment: &development-environment
     ENV: development
     PORT: "8080"
@@ -21,13 +31,16 @@ x-development-service: &development-service
     METRICS_HOST: 0.0.0.0
 
 services:
+  # Source de vérité métier ; le volume survit à la recréation du conteneur.
   postgres:
     image: postgres:18.6-bookworm
+    logging: *infrastructure-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-histae-dev}
       POSTGRES_USER: ${POSTGRES_USER:-histae}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}
       POSTGRES_INITDB_ARGS: --data-checksums --auth-host=scram-sha-256
+      # Disposition des données propre à PostgreSQL 18 dans l'image officielle.
       PGDATA: /var/lib/postgresql/18/docker
     ports:
       - 127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432
@@ -41,24 +54,31 @@ services:
       start_period: 10s
     restart: unless-stopped
     stop_grace_period: 1m
+    # /dev/shm : mémoire partagée dynamique, incluse dans le plafond total.
     shm_size: 256m
     pids_limit: 256
+    # Budget local : 1 Gio ; les 7 Gio sont réservés à compose.production.yaml.
+    # Cette limite Docker ne règle pas shared_buffers ni work_mem dans PostgreSQL.
     mem_limit: 1g
     cpus: 2.0
     networks:
       - backend
 
+  # État éphémère : compteurs et Pub/Sub. Aucune donnée métier durable.
   redis:
     image: redis:7.4.2-alpine
+    logging: *infrastructure-logging
     command:
       - redis-server
       - --save
       - ""
       - --appendonly
       - "no"
+      # Garder 64 Mio de marge dans le conteneur pour les buffers et le processus.
       - --maxmemory
       - 128mb
       - --maxmemory-policy
+      # Ne pas évincer silencieusement les compteurs de protection HTTP.
       - noeviction
     ports:
       - 127.0.0.1:6379:6379
@@ -75,8 +95,10 @@ services:
     networks:
       - backend
 
+  # S3 local pour les photos privées ; weed mini est réservé au développement.
   object-storage:
     image: chrislusf/seaweedfs:4.45
+    logging: *infrastructure-logging
     command: [mini, -dir=/data]
     environment:
       AWS_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY:-histae-dev}
@@ -99,10 +121,14 @@ services:
     cpus: 1.0
     networks:
       backend:
+        # Même nom dans Docker et le navigateur pour préserver les signatures S3.
         aliases:
           - storage.histae.localhost
 
+  # Analyse locale sans état persistant ; un seul worker pour borner la RAM.
   photo-moderation:
+    logging: *infrastructure-logging
+    init: true
     build:
       context: ./services/photo-moderation
     environment:
@@ -129,6 +155,7 @@ services:
     networks:
       - backend
 
+  # PostgreSQL sain -> migrations réussies -> API et outbox.
   migrate:
     <<: *development-service
     command:
@@ -198,5 +225,6 @@ services:
         condition: service_completed_successfully
 
 volumes:
+  # Stockages persistants : down les conserve, down --volumes les efface.
   histae-postgres-data:
   histae-object-storage-data:

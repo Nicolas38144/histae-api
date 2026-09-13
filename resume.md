@@ -1,6 +1,6 @@
 # Histae API — état du projet
 
-Mise à jour : 13 septembre 2026.
+Mise à jour : 14 septembre 2026.
 
 Ce document permet de reprendre rapidement le contexte technique et métier. Il ne duplique ni les routes
 ([routes.md](routes.md)), ni les procédures de test ([test.md](test.md)), ni le backlog
@@ -165,8 +165,10 @@ ajoute la table des swipes et la prochaine évolution persistante utilisera `018
 `/health/live` vérifie le processus ; `/health/ready` vérifie les dépendances configurées. Une image Docker
 multi-stage non-root contient l’API compilée, les workers et les migrations, sans sources, tests ou secrets. La
 composition de développement fournit PostgreSQL, Redis, SeaweedFS et l’analyseur photo sur un réseau
-privé, avec uniquement des ports loopback ; la composition de production n’embarque volontairement aucun stockage
-mono-nœud et ne publie aucun port hôte. PostgreSQL conserve ses données dans un volume, mais ce volume ne remplace
+privé, avec uniquement des ports loopback ; la composition de production inclut PostgreSQL mono-nœud avec TLS,
+plafonné à 7 Gio sur le serveur de 16 Gio, et ne publie aucun port hôte. Redis TLS, SeaweedFS server, sa passerelle
+HTTPS et la modération sont colocalisés ; la supervision peut être lancée sur le même serveur.
+PostgreSQL conserve ses données dans un volume distinct du développement, mais ce volume ne remplace
 jamais une sauvegarde hors machine testée. Voir [docs/container-deployment.md](docs/container-deployment.md).
 
 L’outbox et la maintenance peuvent tourner dans l’API en développement ou dans des workers séparés. Les métriques exposées au
@@ -184,6 +186,9 @@ découverte externe est valide et ses dépendances PostgreSQL, Redis et S3 ont �
 Ces résultats ne valent ni pentest, ni test de charge, ni validation d’un fournisseur réel.
 
 ## Références
+
+La validation ciblée de la pile Docker du 14 septembre (15 tests, smoke tests TLS/S3 sous WSL) est détaillée dans
+la roadmap ; elle ne remplace pas la validation complète ci-dessus ni les essais sur le serveur de production.
 
 - [README.md](README.md) : installation et commandes ;
 - [routes.md](routes.md) : contrat HTTP ;

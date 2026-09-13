@@ -24,8 +24,11 @@ Si le code et la documentation divergent, vérifier le comportement par les test
 
 - Node.js 22+, pnpm 11.22.0, TypeScript strict.
 - `Dockerfile` produit une image commune non-root pour l’API, les migrations, l’outbox et la maintenance.
-  `compose.dev.yaml` est uniquement une pile mono-machine de développement ; `compose.production.yaml` ne doit
-  réintroduire ni stockage mono-nœud, ni port hôte public.
+  `compose.dev.yaml` est uniquement une pile de développement. Le choix de production est un serveur de 16 Gio
+  avec PostgreSQL Docker mono-nœud plafonné à 7 Gio, TLS obligatoire et volume distinct ; aucun port hôte public.
+  Redis TLS, SeaweedFS server et la modération sont colocalisés au démarrage. SeaweedFS mini reste réservé au
+  développement. Seule la passerelle S3 HTTPS rejoint le réseau du proxy ; le stockage brut est isolé sur `storage`.
+  Préserver la distinction des projets et les sauvegardes hors machine.
 - PostgreSQL est la source de vérité transactionnelle pour les comptes, profils, questions/réponses de profil, consentements, abonnements, décisions de découverte, matchs, messages, signalements et workflows RGPD.
 - Redis fournit le rate limiting distribué et le relais Pub/Sub SSE entre instances.
 - Le stockage objet compatible S3 conserve les photos privées. SeaweedFS `weed mini` est uniquement le choix local ; le code ne doit importer aucun type ou comportement propre à SeaweedFS.
@@ -128,6 +131,9 @@ l'appelant et ne doivent pas en ouvrir une autre. Voir `docs/module-responsibili
 - Les tests d'intégration réels attendent PostgreSQL `histae-dev`, Redis local (base logique 15) et le bucket S3 local. Les tests de résilience créent leurs schémas, UUID, objets et relais TCP ; ne jamais arrêter les conteneurs partagés pour injecter une panne. Voir `docs/resilience-tests.md`.
 
 ## Commandes de travail
+
+Sur le PC Windows de développement, exécuter Docker et les tests d'infrastructure via WSL. Le serveur de
+production est une autre machine ; ne pas appliquer son budget PostgreSQL de 7 Gio à la pile locale de 1 Gio.
 
 ```powershell
 pnpm install --frozen-lockfile

@@ -1,3 +1,4 @@
+# Service sans état : les modèles et bibliothèques sont embarqués dans l'image.
 FROM python:3.12.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,6 +17,8 @@ COPY requirements.txt ./
 RUN pip install --requirement requirements.txt
 COPY --chown=moderation:moderation app.py ./
 
+# UID dédié, cohérent avec le système de fichiers en lecture seule dans Compose.
 USER 10001:10001
 EXPOSE 8080
+# Un processus évite de dupliquer les modèles en RAM ; aucun log d'accès HTTP.
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--no-access-log"]
